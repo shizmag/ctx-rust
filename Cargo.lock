@@ -138,12 +138,15 @@ version = "0.1.0"
 name = "ctx-render"
 version = "0.1.0"
 dependencies = [
- "ctx-core",
+ "ctx-models",
 ]
 
 [[package]]
 name = "ctx-stats"
 version = "0.1.0"
+dependencies = [
+ "ctx-models",
+]
 
 [[package]]
 name = "ctx-tui"

@@ -48,6 +48,21 @@ pub struct NodeStats {
     pub bytes: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileStats {
+    pub lines: usize,
+    pub bytes: u64,
+    pub is_text: bool,
+    pub skipped_reason: Option<StatsSkipReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatsSkipReason {
+    TooLarge,
+    NonUtf8,
+    NotAFile,
+}
+
 #[derive(Debug, Clone)]
 pub struct TreeNode {
     pub childrens: Vec<TreeNode>,
