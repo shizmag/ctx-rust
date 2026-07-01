@@ -29,8 +29,9 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
         )?;
         writeln!(writer, "5. Set max file size (current: {} KB)", max_file_size / 1024)?;
         writeln!(writer, "6. Run scan and print context to stdout")?;
-        writeln!(writer, "7. Exit")?;
-        write!(writer, "Choose option (1-7): ")?;
+        writeln!(writer, "7. Run scan and copy context to clipboard")?;
+        writeln!(writer, "8. Exit")?;
+        write!(writer, "Choose option (1-8): ")?;
         writer.flush()?;
 
         let mut input = String::new();
@@ -161,7 +162,60 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
                     Err(e) => writeln!(writer, "Scanning error: {}", e)?,
                 }
             }
-            "7" | "exit" | "quit" => {
+            "7" => {
+                writeln!(writer, "\n--- Running scan and copying to clipboard... ---")?;
+                let parsed_mode = match mode.as_str() {
+                    "smart" => ctx_models::Mode::Smart,
+                    "all" => ctx_models::Mode::All,
+                    "code" => ctx_models::Mode::Code,
+                    "docs" => ctx_models::Mode::Docs,
+                    "llm" => ctx_models::Mode::Llm,
+                    _ => ctx_models::Mode::Smart,
+                };
+
+                let parsed_format = match format.as_str() {
+                    "markdown" => ctx_render::Format::Markdown,
+                    "xml" => ctx_render::Format::Xml,
+                    "plain" => ctx_render::Format::Plain,
+                    _ => ctx_render::Format::Markdown,
+                };
+
+                let scan_options = ctx_models::ScanOptions {
+                    max_depth,
+                    max_file_size,
+                    mode: parsed_mode,
+                };
+                match ctx_core::scan(&path, scan_options) {
+                    Ok(scan_result) => {
+                        let render_options = ctx_render::RenderOptions {
+                            format: parsed_format,
+                            include_stats: true,
+                            max_file_size,
+                        };
+                        match ctx_render::render(&scan_result, &render_options) {
+                            Ok(rendered) => {
+                                match arboard::Clipboard::new() {
+                                    Ok(mut ctx_clipboard) => {
+                                        if let Err(e) = ctx_clipboard.set_text(rendered) {
+                                            writeln!(writer, "Clipboard error: {}", e)?;
+                                        } else {
+                                            writeln!(
+                                                writer,
+                                                "Context successfully copied to clipboard! ({} files, {} tokens)",
+                                                scan_result.summary.files, scan_result.summary.tokens
+                                            )?;
+                                        }
+                                    }
+                                    Err(e) => writeln!(writer, "Clipboard initialization error: {}", e)?,
+                                }
+                            }
+                            Err(e) => writeln!(writer, "Rendering error: {}", e)?,
+                        }
+                    }
+                    Err(e) => writeln!(writer, "Scanning error: {}", e)?,
+                }
+            }
+            "8" | "exit" | "quit" => {
                 writeln!(writer, "Goodbye!")?;
                 break;
             }

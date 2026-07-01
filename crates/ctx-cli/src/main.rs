@@ -38,6 +38,10 @@ struct Args {
     /// Print lists of skipped/hidden files to stderr
     #[arg(long)]
     list_hidden: bool,
+
+    /// Copy the output to the system clipboard
+    #[arg(short, long)]
+    clipboard: bool,
 }
 
 fn parse_mode(s: &str) -> Result<Mode, String> {
@@ -95,7 +99,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let rendered = ctx_render::render(&scan_result, &render_options)?;
 
-    if let Some(output_path) = args.output {
+    if args.clipboard {
+        let mut ctx_clipboard = arboard::Clipboard::new()?;
+        ctx_clipboard.set_text(rendered)?;
+        println!(
+            "Context copied to clipboard! ({} files, {} tokens)",
+            scan_result.summary.files, scan_result.summary.tokens
+        );
+    } else if let Some(output_path) = args.output {
         fs::write(&output_path, rendered)?;
         println!("Context saved to {}", output_path.display());
     } else {

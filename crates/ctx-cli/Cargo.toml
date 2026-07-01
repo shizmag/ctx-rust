@@ -12,3 +12,4 @@ clap = { version = "4", features = ["derive"] }
 ctx-core = { path = "../ctx-core" }
 ctx-render = { path = "../ctx-render" }
 ctx-models = { path = "../ctx-models" }
+arboard = { version = "3.6.1", default-features = false }

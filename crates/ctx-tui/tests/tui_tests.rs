@@ -3,7 +3,7 @@ use ctx_tui::run_interactive_menu;
 
 #[test]
 fn test_tui_exit_immediately() {
-    let input = b"7\n";
+    let input = b"8\n";
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
@@ -16,7 +16,7 @@ fn test_tui_exit_immediately() {
 
 #[test]
 fn test_tui_change_path_and_exit() {
-    let input = b"1\n/my/custom/path\n7\n";
+    let input = b"1\n/my/custom/path\n8\n";
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
@@ -30,7 +30,7 @@ fn test_tui_change_path_and_exit() {
 
 #[test]
 fn test_tui_change_mode_and_exit() {
-    let input = b"2\n3\n7\n"; // 2 (Set mode) -> 3 (Code) -> 7 (Exit)
+    let input = b"2\n3\n8\n"; // 2 (Set mode) -> 3 (Code) -> 8 (Exit)
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
@@ -44,7 +44,7 @@ fn test_tui_change_mode_and_exit() {
 
 #[test]
 fn test_tui_change_format_and_exit() {
-    let input = b"3\n2\n7\n"; // 3 (Set format) -> 2 (XML) -> 7 (Exit)
+    let input = b"3\n2\n8\n"; // 3 (Set format) -> 2 (XML) -> 8 (Exit)
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
@@ -58,7 +58,7 @@ fn test_tui_change_format_and_exit() {
 
 #[test]
 fn test_tui_change_depth_and_exit() {
-    let input = b"4\n12\n7\n"; // 4 (Set depth) -> 12 -> 7 (Exit)
+    let input = b"4\n12\n8\n"; // 4 (Set depth) -> 12 -> 8 (Exit)
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
@@ -72,7 +72,7 @@ fn test_tui_change_depth_and_exit() {
 
 #[test]
 fn test_tui_change_size_and_exit() {
-    let input = b"5\n1024\n7\n"; // 5 (Set file size) -> 1024 (KB) -> 7 (Exit)
+    let input = b"5\n1024\n8\n"; // 5 (Set file size) -> 1024 (KB) -> 8 (Exit)
     let mut reader = Cursor::new(input);
     let mut writer = Vec::new();
 
