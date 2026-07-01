@@ -87,6 +87,7 @@ pub enum HiddenReason {
     Generated,
     LargeFile,
     Binary,
+    Gitignored,
 }
 
 impl HiddenReason {
@@ -101,6 +102,7 @@ impl HiddenReason {
             HiddenReason::Generated => "generated file",
             HiddenReason::LargeFile => "large file",
             HiddenReason::Binary => "binary file",
+            HiddenReason::Gitignored => "gitignored",
         }
     }
 }
