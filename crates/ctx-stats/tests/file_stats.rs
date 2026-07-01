@@ -14,6 +14,7 @@ fn counts_lines_and_bytes_for_text_file() {
 
     assert_eq!(stats.lines, 3);
     assert!(stats.bytes > 0);
+    assert_eq!(stats.tokens, 4); // "one\ntwo\nthree\n" has 14 chars -> (14+3)/4 = 4
     assert!(stats.is_text);
     assert_eq!(stats.skipped_reason, None);
 

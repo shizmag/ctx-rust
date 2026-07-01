@@ -108,6 +108,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     dirs: 1,
                     lines: 0,
                     bytes: 0,
+                    tokens: 0,
                 };
 
                 summary.dirs += 1;
@@ -122,11 +123,13 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     dirs: 0,
                     lines: file_stats.lines,
                     bytes: file_stats.bytes,
+                    tokens: file_stats.tokens,
                 };
 
                 summary.files += 1;
                 summary.lines += file_stats.lines;
                 summary.bytes += file_stats.bytes;
+                summary.tokens += file_stats.tokens;
 
                 tree.add_node(entry_path, kind, stats);
             }
@@ -137,6 +140,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     dirs: 0,
                     lines: 0,
                     bytes: bytes.unwrap_or(0),
+                    tokens: 0,
                 };
 
                 tree.add_node(entry_path, kind, stats);
@@ -148,6 +152,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     dirs: 0,
                     lines: 0,
                     bytes: bytes.unwrap_or(0),
+                    tokens: 0,
                 };
 
                 tree.add_node(entry_path, kind, stats);

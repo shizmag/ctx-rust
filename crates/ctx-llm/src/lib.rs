@@ -1,194 +1,97 @@
-use serde::{Deserialize, Serialize};
+use std::path::Path;
+use ctx_models::ScanResult;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
-    Gemini,
-    OpenAi,
-    Anthropic,
+/// Estimates the number of tokens in a string.
+/// A standard approximation is ~4 characters per token.
+pub fn estimate_tokens(content: &str) -> usize {
+    if content.is_empty() {
+        0
+    } else {
+        (content.chars().count() + 3) / 4
+    }
 }
 
-pub struct LlmClient {
-    provider: Provider,
-    api_key: String,
-    model: String,
-    base_url: Option<String>,
+/// Forms the context string containing directory structure and all file contents,
+/// annotated with token counts.
+pub fn build_context(result: &ScanResult, max_file_size: u64) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Project Context: {}\n", result.root.name));
+    out.push_str(&format!("Total files: {} | Total tokens: {}\n\n", result.summary.files, result.summary.tokens));
+
+    out.push_str("=== DIRECTORY STRUCTURE ===\n");
+    out.push_str(&render_tree(&result.root));
+    out.push_str("\n");
+
+    out.push_str("=== FILE CONTENTS ===\n\n");
+    append_files_content(&result.root, max_file_size, &result.root.path, &mut out);
+
+    out
 }
 
-impl LlmClient {
-    pub fn new(provider: Provider, api_key: String, model: String) -> Self {
-        Self {
-            provider,
-            api_key,
-            model,
-            base_url: None,
-        }
+fn render_tree(node: &ctx_models::TreeNode) -> String {
+    let mut out = String::new();
+    render_tree_node(node, "", true, true, &mut out);
+    out
+}
+
+fn render_tree_node(node: &ctx_models::TreeNode, prefix: &str, is_last: bool, is_root: bool, out: &mut String) {
+    let tokens_str = if node.stats.tokens > 0 {
+        format!(" ({} tokens)", node.stats.tokens)
+    } else {
+        "".to_string()
+    };
+
+    if is_root {
+        out.push_str(&format!("{}{}\n", node.name, tokens_str));
+    } else {
+        let connector = if is_last { "└── " } else { "├── " };
+        out.push_str(prefix);
+        out.push_str(connector);
+        out.push_str(&format!("{}{}\n", node.name, tokens_str));
     }
 
-    pub fn with_base_url(mut self, base_url: String) -> Self {
-        self.base_url = Some(base_url);
-        self
+    let next_prefix = if is_root {
+        "".to_string()
+    } else {
+        format!("{}{}", prefix, if is_last { "    " } else { "│   " })
+    };
+
+    let count = node.children.len();
+    for (i, child) in node.children.iter().enumerate() {
+        let child_is_last = i == count - 1;
+        render_tree_node(child, &next_prefix, child_is_last, false, out);
     }
+}
 
-    pub fn generate_response(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-        match self.provider {
-            Provider::OpenAi => self.call_openai(prompt),
-            Provider::Anthropic => self.call_anthropic(prompt),
-            Provider::Gemini => self.call_gemini(prompt),
-        }
-    }
-
-    fn call_openai(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: String,
-        }
-        #[derive(Serialize)]
-        struct Request {
-            model: String,
-            messages: Vec<Message>,
-        }
-        #[derive(Deserialize)]
-        struct ResponseMessage {
-            content: String,
-        }
-        #[derive(Deserialize)]
-        struct Choice {
-            message: ResponseMessage,
-        }
-        #[derive(Deserialize)]
-        struct Response {
-            choices: Vec<Choice>,
-        }
-
-        let body = Request {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            }],
+fn append_files_content(node: &ctx_models::TreeNode, max_file_size: u64, root_path: &Path, out: &mut String) {
+    if node.kind == ctx_models::NodeKind::File {
+        let rel_path = match node.path.strip_prefix(root_path) {
+            Ok(rel) => rel.to_string_lossy().to_string(),
+            Err(_) => node.path.to_string_lossy().to_string(),
         };
 
-        let url = self.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
+        out.push_str(&format!("--- FILE: {} ({} tokens) ---\n", rel_path, node.stats.tokens));
+        
+        if node.stats.bytes > max_file_size {
+            out.push_str(&format!("[File skipped: Too large ({} KB)]\n\n", node.stats.bytes / 1024));
+            return;
+        }
 
-        let resp: Response = ureq::post(&url)
-            .set("Authorization", &format!("Bearer {}", self.api_key))
-            .set("Content-Type", "application/json")
-            .send_json(&body)?
-            .into_json()?;
-
-        let content = resp
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .ok_or("OpenAI response was empty")?;
-
-        Ok(content)
+        match std::fs::read_to_string(&node.path) {
+            Ok(content) => {
+                out.push_str(&content);
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push('\n');
+            }
+            Err(_) => {
+                out.push_str("[File skipped: Binary or read error]\n\n");
+            }
+        }
     }
 
-    fn call_anthropic(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: String,
-        }
-        #[derive(Serialize)]
-        struct Request {
-            model: String,
-            max_tokens: u32,
-            messages: Vec<Message>,
-        }
-        #[derive(Deserialize)]
-        struct ContentPart {
-            text: String,
-        }
-        #[derive(Deserialize)]
-        struct Response {
-            content: Vec<ContentPart>,
-        }
-
-        let body = Request {
-            model: self.model.clone(),
-            max_tokens: 4096,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            }],
-        };
-
-        let url = self.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
-
-        let resp: Response = ureq::post(&url)
-            .set("x-api-key", &self.api_key)
-            .set("anthropic-version", "2023-06-01")
-            .set("Content-Type", "application/json")
-            .send_json(&body)?
-            .into_json()?;
-
-        let content = resp
-            .content
-            .first()
-            .map(|c| c.text.clone())
-            .ok_or("Anthropic response was empty")?;
-
-        Ok(content)
-    }
-
-    fn call_gemini(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-        #[derive(Serialize)]
-        struct Part {
-            text: String,
-        }
-        #[derive(Serialize)]
-        struct Content {
-            parts: Vec<Part>,
-        }
-        #[derive(Serialize)]
-        struct Request {
-            contents: Vec<Content>,
-        }
-        #[derive(Deserialize)]
-        struct ResponsePart {
-            text: String,
-        }
-        #[derive(Deserialize)]
-        struct ResponseContent {
-            parts: Vec<ResponsePart>,
-        }
-        #[derive(Deserialize)]
-        struct Candidate {
-            content: ResponseContent,
-        }
-        #[derive(Deserialize)]
-        struct Response {
-            candidates: Vec<Candidate>,
-        }
-
-        let body = Request {
-            contents: vec![Content {
-                parts: vec![Part {
-                    text: prompt.to_string(),
-                }],
-            }],
-        };
-
-        let url = match &self.base_url {
-            Some(base) => format!("{}/{}:generateContent?key={}", base, self.model, self.api_key),
-            None => format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", self.model, self.api_key),
-        };
-
-        let resp: Response = ureq::post(&url)
-            .set("Content-Type", "application/json")
-            .send_json(&body)?
-            .into_json()?;
-
-        let content = resp
-            .candidates
-            .first()
-            .and_then(|c| c.content.parts.first())
-            .map(|p| p.text.clone())
-            .ok_or("Gemini response was empty")?;
-
-        Ok(content)
+    for child in &node.children {
+        append_files_content(child, max_file_size, root_path, out);
     }
 }

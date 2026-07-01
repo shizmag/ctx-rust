@@ -1,127 +1,69 @@
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::thread;
-use ctx_llm::{LlmClient, Provider};
+use std::fs;
+use ctx_llm::{estimate_tokens, build_context};
+use ctx_models::{ScanResult, TreeNode, NodeKind, NodeStats, ProjectSummary};
 
-fn start_mock_server(response_body: &'static str) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    
-    thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let mut request = Vec::new();
-            let mut temp_buf = [0; 1024];
-            let mut content_length = None;
-            
-            while let Ok(n) = stream.read(&mut temp_buf) {
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&temp_buf[..n]);
-                
-                if content_length.is_none() {
-                    if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let headers_str = String::from_utf8_lossy(&request[..pos]);
-                        for line in headers_str.lines() {
-                            if line.to_lowercase().starts_with("content-length:") {
-                                if let Some((_, val)) = line.split_once(':') {
-                                    if let Ok(len) = val.trim().parse::<usize>() {
-                                        content_length = Some(len);
-                                    }
-                                }
-                            }
-                        }
-                        if content_length.is_none() {
-                            break;
-                        }
-                    }
-                }
-                
-                if let Some(len) = content_length {
-                    if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let total_expected = pos + 4 + len;
-                        if request.len() >= total_expected {
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            let http_response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            
-            let _ = stream.write_all(http_response.as_bytes());
-            let _ = stream.flush();
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-        }
-    });
-
-    format!("http://127.0.0.1:{}", port)
+#[test]
+fn test_estimate_tokens() {
+    assert_eq!(estimate_tokens(""), 0);
+    assert_eq!(estimate_tokens("hello"), 2); // (5 + 3) / 4 = 2
+    assert_eq!(estimate_tokens("hello world"), 3); // (11 + 3) / 4 = 3
 }
 
 #[test]
-fn test_openai_provider() {
-    let mock_response = r#"{
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello from mock OpenAI!"
-                }
+fn test_build_context() {
+    let temp_dir = std::env::temp_dir().join("ctx_llm_test_build_context");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("hello.txt");
+    fs::write(&file_path, "hello world").unwrap();
+
+    let root = TreeNode {
+        name: "test".to_string(),
+        path: temp_dir.clone(),
+        kind: NodeKind::Directory,
+        stats: NodeStats {
+            files: 1,
+            dirs: 1,
+            lines: 1,
+            bytes: 11,
+            tokens: 3,
+        },
+        children: vec![
+            TreeNode {
+                name: "hello.txt".to_string(),
+                path: file_path,
+                kind: NodeKind::File,
+                stats: NodeStats {
+                    files: 1,
+                    dirs: 0,
+                    lines: 1,
+                    bytes: 11,
+                    tokens: 3,
+                },
+                children: vec![],
             }
-        ]
-    }"#;
+        ],
+    };
 
-    let base_url = start_mock_server(mock_response);
-    let client = LlmClient::new(Provider::OpenAi, "mock_key".to_string(), "gpt-4".to_string())
-        .with_base_url(base_url);
+    let result = ScanResult {
+        root,
+        summary: ProjectSummary {
+            files: 1,
+            dirs: 1,
+            lines: 1,
+            bytes: 11,
+            tokens: 3,
+            hidden_files: 0,
+            hidden_dirs: 0,
+        },
+        hidden: vec![],
+    };
 
-    let res = client.generate_response("hello").unwrap();
-    assert_eq!(res, "Hello from mock OpenAI!");
-}
+    let context = build_context(&result, 1024);
+    assert!(context.contains("hello world"));
+    assert!(context.contains("hello.txt"));
+    assert!(context.contains("Total files: 1"));
 
-#[test]
-fn test_anthropic_provider() {
-    let mock_response = r#"{
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello from mock Anthropic!"
-            }
-        ]
-    }"#;
-
-    let base_url = start_mock_server(mock_response);
-    let client = LlmClient::new(Provider::Anthropic, "mock_key".to_string(), "claude-3".to_string())
-        .with_base_url(base_url);
-
-    let res = client.generate_response("hello").unwrap();
-    assert_eq!(res, "Hello from mock Anthropic!");
-}
-
-#[test]
-fn test_gemini_provider() {
-    let mock_response = r#"{
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {
-                            "text": "Hello from mock Gemini!"
-                        }
-                    ]
-                }
-            }
-        ]
-    }"#;
-
-    let base_url = start_mock_server(mock_response);
-    let client = LlmClient::new(Provider::Gemini, "mock_key".to_string(), "gemini-1.5-flash".to_string())
-        .with_base_url(base_url);
-
-    let res = client.generate_response("hello").unwrap();
-    assert_eq!(res, "Hello from mock Gemini!");
+    let _ = fs::remove_dir_all(&temp_dir);
 }

@@ -40,12 +40,14 @@ pub struct NodeStats {
     pub dirs: usize,
     pub lines: usize,
     pub bytes: u64,
+    pub tokens: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileStats {
     pub lines: usize,
     pub bytes: u64,
+    pub tokens: usize,
     pub is_text: bool,
     pub skipped_reason: Option<StatsSkipReason>,
 }
@@ -72,6 +74,7 @@ pub struct ProjectSummary {
     pub dirs: usize,
     pub lines: usize,
     pub bytes: u64,
+    pub tokens: usize,
     pub hidden_files: usize,
     pub hidden_dirs: usize,
 }

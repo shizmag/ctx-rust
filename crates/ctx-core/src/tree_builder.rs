@@ -116,6 +116,7 @@ fn recompute_stats(node: &mut TreeNode) -> NodeStats {
             dirs: 1,
             lines: 0,
             bytes: 0,
+            tokens: 0,
         },
         NodeKind::Symlink | NodeKind::Other => node.stats.clone(),
     };
@@ -127,6 +128,7 @@ fn recompute_stats(node: &mut TreeNode) -> NodeStats {
         stats.dirs += child_stats.dirs;
         stats.lines += child_stats.lines;
         stats.bytes += child_stats.bytes;
+        stats.tokens += child_stats.tokens;
     }
 
     node.stats = stats.clone();

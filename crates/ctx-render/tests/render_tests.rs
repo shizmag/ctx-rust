@@ -23,6 +23,7 @@ fn test_render_formats() {
             dirs: 1,
             lines: 2,
             bytes: 28,
+            tokens: 7,
         },
         children: vec![
             TreeNode {
@@ -34,6 +35,7 @@ fn test_render_formats() {
                     dirs: 0,
                     lines: 1,
                     bytes: 15,
+                    tokens: 4,
                 },
                 children: Vec::new(),
             },
@@ -46,6 +48,7 @@ fn test_render_formats() {
                     dirs: 0,
                     lines: 1,
                     bytes: 13,
+                    tokens: 3,
                 },
                 children: Vec::new(),
             },
@@ -59,6 +62,7 @@ fn test_render_formats() {
             dirs: 1,
             lines: 2,
             bytes: 28,
+            tokens: 7,
             hidden_files: 0,
             hidden_dirs: 0,
         },

@@ -13,6 +13,7 @@ pub fn collect_file_stats(path: &Path, max_file_size: u64) -> io::Result<FileSta
         return Ok(FileStats {
             lines: 0,
             bytes: metadata.len(),
+            tokens: 0,
             is_text: false,
             skipped_reason: Some(StatsSkipReason::NotAFile),
         });
@@ -23,6 +24,7 @@ pub fn collect_file_stats(path: &Path, max_file_size: u64) -> io::Result<FileSta
         return Ok(FileStats {
             lines: 0,
             bytes,
+            tokens: 0,
             is_text: false,
             skipped_reason: Some(StatsSkipReason::TooLarge),
         });
@@ -34,6 +36,7 @@ pub fn collect_file_stats(path: &Path, max_file_size: u64) -> io::Result<FileSta
             return Ok(FileStats {
                 bytes,
                 lines: 0,
+                tokens: 0,
                 is_text: false,
                 skipped_reason: Some(StatsSkipReason::NonUtf8),
             });
@@ -43,9 +46,12 @@ pub fn collect_file_stats(path: &Path, max_file_size: u64) -> io::Result<FileSta
         }
     };
 
+    let tokens = ctx_llm::estimate_tokens(&content);
+
     Ok(FileStats {
         lines: count_lines(&content),
         bytes,
+        tokens,
         is_text: true,
         skipped_reason: None,
     })
