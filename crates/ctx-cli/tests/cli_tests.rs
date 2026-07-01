@@ -10,7 +10,7 @@ fn test_cli_help() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Context gatherer for LLMs"));
+    assert!(stdout.contains("directory tree visualizer"));
 }
 
 #[test]
@@ -20,7 +20,27 @@ fn test_cli_scan() {
     fs::create_dir_all(&temp_dir).unwrap();
     fs::write(temp_dir.join("a.rs"), "fn main() {}\n").unwrap();
 
+    // 1. Test ordinary call: should print colored tree and summary
     let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--bin",
+            "ctx",
+            "--",
+            temp_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to execute cargo run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Verify tree/summary containing folder and file details (with Tokyo Night ANSI blue \x1b[1;38;2;122;162;247m)
+    assert!(stdout.contains("ctx_cli_test"));
+    assert!(stdout.contains("a.rs"));
+    assert!(stdout.contains("Project Summary:"));
+
+    // 2. Test call with -C (code): should print the full code content
+    let output_code = Command::new("cargo")
         .args(&[
             "run",
             "--bin",
@@ -29,14 +49,15 @@ fn test_cli_scan() {
             temp_dir.to_str().unwrap(),
             "--format",
             "plain",
+            "-C",
         ])
         .output()
         .expect("failed to execute cargo run");
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("File: a.rs"));
-    assert!(stdout.contains("fn main() {}"));
+    assert!(output_code.status.success());
+    let stdout_code = String::from_utf8(output_code.stdout).unwrap();
+    assert!(stdout_code.contains("File: a.rs"));
+    assert!(stdout_code.contains("fn main() {}"));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
