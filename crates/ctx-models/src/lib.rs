@@ -34,12 +34,6 @@ pub enum NodeKind {
     Other = 3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryKind {
-    Directory,
-    File,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct NodeStats {
     pub files: usize,
@@ -65,7 +59,7 @@ pub enum StatsSkipReason {
 
 #[derive(Debug, Clone)]
 pub struct TreeNode {
-    pub childrens: Vec<TreeNode>,
+    pub children: Vec<TreeNode>,
     pub kind: NodeKind,
     pub name: String,
     pub path: PathBuf,

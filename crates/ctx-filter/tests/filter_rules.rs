@@ -1,4 +1,4 @@
-use std::{collections::btree_set, fs::OpenOptions, path::PathBuf};
+use std::path::PathBuf;
 
 use ctx_filter::{FilterEntry, classify};
 use ctx_models::{HiddenReason, Mode, NodeKind, ScanOptions, Visibility};
