@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod engine;
+mod entry;
+mod rule;
+pub mod rules;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use engine::{FilterContext, FilterEngine};
+pub use entry::FilterEntry;
+pub use rule::{FilterRule, RuleDecision};
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+use ctx_models::{ScanOptions, Visibility};
+
+pub fn classify(entry: &FilterEntry, options: &ScanOptions) -> Visibility {
+    let context = FilterContext { options };
+    FilterEngine::default_smart().check(entry, &context)
 }

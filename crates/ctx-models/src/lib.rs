@@ -10,13 +10,13 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone)]
-pub struct ScanOptiont {
-    pub mode: Mode,
+pub struct ScanOptions {
     pub max_depth: Option<usize>,
     pub max_file_size: u64,
+    pub mode: Mode,
 }
 
-impl Default for ScanOptiont {
+impl Default for ScanOptions {
     fn default() -> Self {
         Self {
             mode: Mode::Smart,
@@ -28,6 +28,14 @@ impl Default for ScanOptiont {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    Directory = 0,
+    File = 1,
+    Symlink = 2,
+    Other = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
     Directory,
     File,
 }
@@ -42,11 +50,11 @@ pub struct NodeStats {
 
 #[derive(Debug, Clone)]
 pub struct TreeNode {
+    pub childrens: Vec<TreeNode>,
+    pub kind: NodeKind,
     pub name: String,
     pub path: PathBuf,
-    pub kind: NodeKind,
     pub stats: NodeStats,
-    pub childrens: Vec<TreeNode>,
 }
 
 #[derive(Debug, Clone, Default)]

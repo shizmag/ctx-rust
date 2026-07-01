@@ -122,6 +122,9 @@ dependencies = [
 [[package]]
 name = "ctx-filter"
 version = "0.1.0"
+dependencies = [
+ "ctx-models",
+]
 
 [[package]]
 name = "ctx-llm"
