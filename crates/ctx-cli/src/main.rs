@@ -42,6 +42,10 @@ struct Args {
     /// Copy the output to the system clipboard
     #[arg(short, long)]
     clipboard: bool,
+
+    /// Run in interactive mode (TUI)
+    #[arg(short, long)]
+    interactive: bool,
 }
 
 fn parse_mode(s: &str) -> Result<Mode, String> {
@@ -79,6 +83,10 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    if args.interactive {
+        return ctx_tui::run_default_interactive_menu();
+    }
 
     let mode = parse_mode(&args.mode)?;
     let format = parse_format(&args.format)?;
