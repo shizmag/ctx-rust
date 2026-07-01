@@ -11,3 +11,4 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 ctx-core = { path = "../ctx-core" }
 ctx-render = { path = "../ctx-render" }
+ctx-models = { path = "../ctx-models" }
