@@ -1,0 +1,7 @@
+[package]
+name = "ctx-filter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ctx-models = { path = "../ctx-models" }

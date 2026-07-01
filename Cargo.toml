@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/ctx-cli",
+    "crates/ctx-core",
+    "crates/ctx-filter",
+    "crates/ctx-stats",
+    "crates/ctx-render",
+    "crates/ctx-config",
+    "crates/ctx-tui",
+    "crates/ctx-llm",
+    "crates/ctx-models",
+]
+resolver = "2"

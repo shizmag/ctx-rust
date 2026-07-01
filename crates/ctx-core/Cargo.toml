@@ -1,0 +1,8 @@
+[package]
+name = "ctx-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ctx-filter = { path = "../ctx-filter" }
+ctx-stats = { path = "../ctx-stats" }
