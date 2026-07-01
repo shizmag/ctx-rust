@@ -214,14 +214,14 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                         }
-                        KeyCode::Down => {
+                        KeyCode::Down | KeyCode::Char('j') => {
                             if !app.files.is_empty() {
                                 let selected = app.list_state.selected().unwrap_or(0);
                                 let next = (selected + 1) % app.files.len();
                                 app.list_state.select(Some(next));
                             }
                         }
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('k') => {
                             if !app.files.is_empty() {
                                 let selected = app.list_state.selected().unwrap_or(0);
                                 let prev = if selected == 0 {
@@ -230,6 +230,16 @@ fn run_app<B: ratatui::backend::Backend>(
                                     selected - 1
                                 };
                                 app.list_state.select(Some(prev));
+                            }
+                        }
+                        KeyCode::Char('g') => {
+                            if !app.files.is_empty() {
+                                app.list_state.select(Some(0));
+                            }
+                        }
+                        KeyCode::Char('G') => {
+                            if !app.files.is_empty() {
+                                app.list_state.select(Some(app.files.len() - 1));
                             }
                         }
                         _ => {}
@@ -378,7 +388,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
     f.render_widget(preview_paragraph, right_chunks[1]);
 
     let help_spans = vec![
-        Span::styled("▲▼", Style::default().fg(Color::Yellow)),
+        Span::styled("j/k / ▲▼", Style::default().fg(Color::Yellow)),
         Span::raw(" Move | "),
         Span::styled("Space", Style::default().fg(Color::Yellow)),
         Span::raw(" Toggle | "),
