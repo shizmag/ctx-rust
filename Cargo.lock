@@ -241,6 +241,11 @@ dependencies = [
 [[package]]
 name = "ctx-tui"
 version = "0.1.0"
+dependencies = [
+ "ctx-core",
+ "ctx-models",
+ "ctx-render",
+]
 
 [[package]]
 name = "find-msvc-tools"
