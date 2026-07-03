@@ -58,20 +58,20 @@ struct Args {
     path: PathBuf,
 
     /// Format for the full context output. Choose from: 'markdown' (or 'md'), 'xml', 'plain' (or 'text', 'txt').
-    #[arg(short, long, default_value = "markdown")]
-    format: CliFormat,
+    #[arg(short, long)]
+    format: Option<CliFormat>,
 
     /// Gathering strategy mode: 'smart' (respects gitignore + sensible skips), 'all' (scans all files), 'code' (prioritizes code files), 'docs' (prioritizes docs/markdown), 'llm' (structures with token counts).
-    #[arg(short, long, default_value = "smart")]
-    mode: CliMode,
+    #[arg(short, long)]
+    mode: Option<CliMode>,
 
     /// Restrict directory traversal to the specified maximum depth.
     #[arg(long)]
     max_depth: Option<usize>,
 
     /// Exclude files exceeding this size limit in bytes from the final context contents.
-    #[arg(long, default_value_t = 512 * 1024)]
-    max_file_size: u64,
+    #[arg(long)]
+    max_file_size: Option<u64>,
 
     /// Save the compiled context output directly to the specified file path instead of printing to stdout.
     #[arg(short, long)]
@@ -112,13 +112,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return ctx_tui::run_default_interactive_menu();
     }
 
-    let mode = Mode::from(args.mode);
-    let format = Format::from(args.format);
+    let config = ctx_config::find_and_load_config(&args.path).unwrap_or_default();
+
+    let mode = args.mode
+        .map(Mode::from)
+        .or(config.mode)
+        .unwrap_or(Mode::Smart);
+
+    let format = args.format
+        .map(Format::from)
+        .unwrap_or(Format::Markdown);
+
+    let max_depth = args.max_depth.or(config.max_depth);
+
+    let max_file_size = args.max_file_size
+        .or(config.max_file_size)
+        .unwrap_or(512 * 1024);
+
+    let exclude = config.exclude;
 
     let scan_options = ScanOptions {
-        max_depth: args.max_depth,
-        max_file_size: args.max_file_size,
+        max_depth,
+        max_file_size,
         mode,
+        exclude,
     };
 
     let scan_result = ctx_core::scan(&args.path, scan_options)?;
@@ -132,7 +149,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let render_options = RenderOptions {
             format,
             include_stats: !args.no_stats,
-            max_file_size: args.max_file_size,
+            max_file_size,
         };
 
         let rendered = ctx_render::render(&scan_result, &render_options)?;

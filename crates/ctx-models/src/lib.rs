@@ -14,6 +14,7 @@ pub struct ScanOptions {
     pub max_depth: Option<usize>,
     pub max_file_size: u64,
     pub mode: Mode,
+    pub exclude: Vec<String>,
 }
 
 impl Default for ScanOptions {
@@ -22,6 +23,7 @@ impl Default for ScanOptions {
             mode: Mode::Smart,
             max_depth: None,
             max_file_size: 512 * 1024,
+            exclude: Vec::new(),
         }
     }
 }

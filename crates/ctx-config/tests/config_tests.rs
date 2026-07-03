@@ -1,5 +1,6 @@
 use std::fs;
 use ctx_config::{find_and_load_config, find_config, load_config};
+use ctx_models::Mode;
 
 #[test]
 fn test_load_config() {
@@ -22,7 +23,7 @@ exclude = target, node_modules, temp_file.txt
 
     let config = load_config(&config_path).unwrap();
 
-    assert_eq!(config.mode, Some("code".to_string()));
+    assert_eq!(config.mode, Some(Mode::Code));
     assert_eq!(config.max_depth, Some(8));
     assert_eq!(config.max_file_size, Some(1048576));
     assert_eq!(
@@ -54,7 +55,7 @@ fn test_find_config() {
 
     // Verify find_and_load_config loads it correctly
     let config = find_and_load_config(&sub_dir).unwrap();
-    assert_eq!(config.mode, Some("smart".to_string()));
+    assert_eq!(config.mode, Some(Mode::Smart));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

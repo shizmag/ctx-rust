@@ -245,6 +245,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "clap",
+ "ctx-config",
  "ctx-core",
  "ctx-models",
  "ctx-render",
@@ -254,6 +255,9 @@ dependencies = [
 [[package]]
 name = "ctx-config"
 version = "0.1.0"
+dependencies = [
+ "ctx-models",
+]
 
 [[package]]
 name = "ctx-core"

@@ -97,3 +97,84 @@ fn test_cli_mode_and_format_parsing() {
         .expect("failed to execute cargo run");
     assert!(!status_invalid_format.success());
 }
+
+#[test]
+fn test_cli_config_priority() {
+    let temp_dir = std::env::temp_dir().join("ctx_cli_config_test");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Create a code file and a text doc file
+    fs::write(temp_dir.join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(temp_dir.join("doc.txt"), "some documentation\n").unwrap();
+
+    // 1. CLI использует .ctxconfig (mode = docs), если аргументы не переданы
+    fs::write(
+        temp_dir.join(".ctxconfig"),
+        "mode = docs\nexclude = excluded.txt\n",
+    )
+    .unwrap();
+
+    let output_config_only = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "ctx",
+            "--",
+            temp_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run ctx");
+    
+    assert!(output_config_only.status.success());
+    let stdout_config_only = String::from_utf8(output_config_only.stdout).unwrap();
+    // Under docs mode, doc.txt should be visible, but main.rs should be hidden
+    assert!(stdout_config_only.contains("doc.txt"));
+    assert!(!stdout_config_only.contains("main.rs"));
+
+    // 2. CLI arguments переопределяют .ctxconfig (docs -> code)
+    let output_override = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "ctx",
+            "--",
+            temp_dir.to_str().unwrap(),
+            "-m",
+            "code",
+        ])
+        .output()
+        .expect("failed to run ctx");
+    
+    assert!(output_override.status.success());
+    let stdout_override = String::from_utf8(output_override.stdout).unwrap();
+    // Under code mode, main.rs should be visible, but doc.txt should be hidden
+    assert!(stdout_override.contains("main.rs"));
+    assert!(!stdout_override.contains("doc.txt"));
+
+    // 3. некорректные значения в .ctxconfig обрабатываются предсказуемо (игнорируются, fallback к default = smart)
+    fs::write(
+        temp_dir.join(".ctxconfig"),
+        "mode = invalid_mode_val\n",
+    )
+    .unwrap();
+
+    let output_invalid = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "ctx",
+            "--",
+            temp_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run ctx");
+    
+    assert!(output_invalid.status.success());
+    let stdout_invalid = String::from_utf8(output_invalid.stdout).unwrap();
+    // Default smart mode should keep both main.rs and doc.txt
+    assert!(stdout_invalid.contains("main.rs"));
+    assert!(stdout_invalid.contains("doc.txt"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

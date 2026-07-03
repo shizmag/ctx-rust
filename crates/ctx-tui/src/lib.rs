@@ -1326,6 +1326,7 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
                     max_depth,
                     max_file_size,
                     mode: parsed_mode,
+                    exclude: Vec::new(),
                 };
                 match ctx_core::scan(&path, scan_options) {
                     Ok(scan_result) => {
@@ -1366,6 +1367,7 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
                     max_depth,
                     max_file_size,
                     mode: parsed_mode,
+                    exclude: Vec::new(),
                 };
                 match ctx_core::scan(&path, scan_options) {
                     Ok(scan_result) => {

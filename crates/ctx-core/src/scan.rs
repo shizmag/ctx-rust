@@ -12,7 +12,7 @@ use crate::tree_builder::TreeBuilder;
 
 pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> {
     let root_path = path.canonicalize()?;
-    let gitignore = load_gitignore(&root_path);
+    let gitignore = load_gitignore(&root_path, &options.exclude);
 
     let walker = WalkBuilder::new(&root_path)
         .hidden(false)
@@ -173,19 +173,31 @@ fn is_inside_pruned_dir(path: &Path, pruned_dirs: &[PathBuf]) -> bool {
         .any(|dir| path != dir && path.starts_with(dir))
 }
 
-fn load_gitignore(root_path: &Path) -> Option<ignore::gitignore::Gitignore> {
+fn load_gitignore(root_path: &Path, exclude_patterns: &[String]) -> Option<ignore::gitignore::Gitignore> {
     let gitignore_path = root_path.join(".gitignore");
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(root_path);
+
+    for pattern in exclude_patterns {
+        let _ = builder.add_line(None, pattern);
+    }
+
     if !gitignore_path.exists() {
+        if !exclude_patterns.is_empty() {
+            return builder.build().ok();
+        }
         return None;
     }
 
     let content = match std::fs::read_to_string(&gitignore_path) {
         Ok(c) => c,
-        Err(_) => return None,
+        Err(_) => {
+            if !exclude_patterns.is_empty() {
+                return builder.build().ok();
+            }
+            return None;
+        }
     };
 
-    let mut builder = ignore::gitignore::GitignoreBuilder::new(root_path);
-    
     let mut current_block: Vec<String> = Vec::new();
     let mut has_ctx = false;
 

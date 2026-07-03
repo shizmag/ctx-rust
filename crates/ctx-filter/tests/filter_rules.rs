@@ -8,6 +8,7 @@ fn options() -> ScanOptions {
         max_depth: None,
         max_file_size: 512 * 1024,
         mode: Mode::Smart,
+        exclude: Vec::new(),
     }
 }
 
@@ -57,6 +58,7 @@ fn all_mode_disables_builtin_hiding() {
         mode: Mode::All,
         max_depth: None,
         max_file_size: 512 * 1024,
+        exclude: Vec::new(),
     };
 
     let item = entry("node_modules", NodeKind::Directory);
@@ -81,6 +83,7 @@ fn code_mode_keeps_code_config_and_readme() {
         mode: Mode::Code,
         max_depth: None,
         max_file_size: 512 * 1024,
+        exclude: Vec::new(),
     };
 
     // Keep code
@@ -107,6 +110,7 @@ fn docs_mode_keeps_docs_and_text() {
         mode: Mode::Docs,
         max_depth: None,
         max_file_size: 512 * 1024,
+        exclude: Vec::new(),
     };
 
     // Keep docs
@@ -125,6 +129,7 @@ fn llm_mode_ignores_media_and_binaries() {
         mode: Mode::Llm,
         max_depth: None,
         max_file_size: 512 * 1024,
+        exclude: Vec::new(),
     };
 
     // Keep code and docs

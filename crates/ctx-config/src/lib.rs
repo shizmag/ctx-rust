@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use ctx_models::Mode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
-    pub mode: Option<String>,
+    pub mode: Option<Mode>,
     pub max_depth: Option<usize>,
     pub max_file_size: Option<u64>,
     pub exclude: Vec<String>,
@@ -31,7 +32,19 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         let value = value.trim();
 
         match key.as_str() {
-            "mode" => config.mode = Some(value.to_string()),
+            "mode" => {
+                let m = match value.to_lowercase().as_str() {
+                    "smart" => Some(Mode::Smart),
+                    "all" => Some(Mode::All),
+                    "code" => Some(Mode::Code),
+                    "docs" => Some(Mode::Docs),
+                    "llm" => Some(Mode::Llm),
+                    _ => None,
+                };
+                if m.is_some() {
+                    config.mode = m;
+                }
+            }
             "max_depth" => {
                 if let Ok(depth) = value.parse::<usize>() {
                     config.max_depth = Some(depth);

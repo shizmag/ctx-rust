@@ -26,6 +26,7 @@ fn scan_builds_tree_and_skips_hidden_directories() {
             mode: Mode::Smart,
             max_depth: None,
             max_file_size: 1024,
+            exclude: Vec::new(),
         },
     )
     .unwrap();
@@ -92,6 +93,7 @@ bypass_ignored.txt
             mode: Mode::Smart,
             max_depth: None,
             max_file_size: 1024,
+            exclude: Vec::new(),
         },
     )
     .unwrap();
