@@ -5,9 +5,8 @@ use ctx_models::{Mode, NodeKind, ScanOptions};
 
 #[test]
 fn scan_builds_tree_and_skips_hidden_directories() {
-    let root = std::env::temp_dir().join("ctx_core_scan_builds_tree_and_skips_hidden_directories");
-
-    let _ = fs::remove_dir_all(&root);
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path().to_path_buf();
 
     fs::create_dir_all(root.join("src/bin")).unwrap();
     fs::create_dir_all(root.join(".git/objects")).unwrap();
@@ -39,8 +38,18 @@ fn scan_builds_tree_and_skips_hidden_directories() {
     assert!(result.summary.tokens > 0);
 
     // Verify hidden directories are in the hidden list
-    assert!(result.hidden.iter().any(|item| item.path.ends_with(".git") && item.is_dir));
-    assert!(result.hidden.iter().any(|item| item.path.ends_with("target") && item.is_dir));
+    assert!(
+        result
+            .hidden
+            .iter()
+            .any(|item| item.path.ends_with(".git") && item.is_dir)
+    );
+    assert!(
+        result
+            .hidden
+            .iter()
+            .any(|item| item.path.ends_with("target") && item.is_dir)
+    );
 
     let root_children: Vec<_> = result
         .root
@@ -64,14 +73,12 @@ fn scan_builds_tree_and_skips_hidden_directories() {
     assert_eq!(src.kind, NodeKind::Directory);
     assert_eq!(src.stats.files, 2);
     assert_eq!(src.stats.lines, 2);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn scan_respects_max_depth() {
-    let root = std::env::temp_dir().join("ctx_core_scan_respects_max_depth");
-    let _ = fs::remove_dir_all(&root);
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path().to_path_buf();
 
     fs::create_dir_all(root.join("depth1/depth2/depth3")).unwrap();
     fs::write(root.join("depth1/file1.rs"), "fn main() {}\n").unwrap();
@@ -97,25 +104,36 @@ fn scan_respects_max_depth() {
     // - depth1/depth2/file2.rs (depth 2)
     // - depth1/depth2/depth3 (depth 2)
     // - depth1/depth2/depth3/file3.rs (depth 3)
-    
+
     assert_eq!(result.summary.files, 1);
     assert_eq!(result.summary.dirs, 2);
 
-    let depth1 = result.root.children.iter().find(|node| node.name == "depth1").unwrap();
-    let depth1_children: Vec<_> = depth1.children.iter().map(|node| node.name.as_str()).collect();
+    let depth1 = result
+        .root
+        .children
+        .iter()
+        .find(|node| node.name == "depth1")
+        .unwrap();
+    let depth1_children: Vec<_> = depth1
+        .children
+        .iter()
+        .map(|node| node.name.as_str())
+        .collect();
     assert!(depth1_children.contains(&"file1.rs"));
     assert!(depth1_children.contains(&"depth2"));
-    
-    let depth2 = depth1.children.iter().find(|node| node.name == "depth2").unwrap();
-    assert!(depth2.children.is_empty());
 
-    fs::remove_dir_all(root).unwrap();
+    let depth2 = depth1
+        .children
+        .iter()
+        .find(|node| node.name == "depth2")
+        .unwrap();
+    assert!(depth2.children.is_empty());
 }
 
 #[test]
 fn scan_respects_custom_gitignore_with_ctx_block() {
-    let root = std::env::temp_dir().join("ctx_core_scan_gitignore_ctx_block");
-    let _ = fs::remove_dir_all(&root);
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path().to_path_buf();
 
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("ignored_dir")).unwrap();
@@ -157,7 +175,7 @@ bypass_ignored.txt
     // Total files = 4
     assert_eq!(result.summary.files, 4);
     assert_eq!(result.summary.hidden_files, 1); // normal_ignored.txt
-    assert_eq!(result.summary.hidden_dirs, 1);  // ignored_dir/
+    assert_eq!(result.summary.hidden_dirs, 1); // ignored_dir/
 
     let root_children: Vec<_> = result
         .root
@@ -171,14 +189,12 @@ bypass_ignored.txt
     assert!(root_children.contains(&"bypass_ignored.txt"));
     assert!(!root_children.contains(&"ignored_dir"));
     assert!(!root_children.contains(&"normal_ignored.txt"));
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn scan_respects_nested_gitignore_and_pruning() {
-    let root = std::env::temp_dir().join("ctx_core_scan_respects_nested_gitignore");
-    let _ = fs::remove_dir_all(&root);
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path().to_path_buf();
 
     fs::create_dir_all(root.join("src/ignored_nested")).unwrap();
     fs::create_dir_all(root.join("logs")).unwrap();
@@ -252,8 +268,16 @@ ignored_nested/
     assert!(!src_children.contains(&"ignored_nested")); // ignored by nested gitignore
 
     // Check hidden items (pruned directories are in the hidden list):
-    assert!(result.hidden.iter().any(|item| item.path.ends_with("logs") && item.is_dir));
-    assert!(result.hidden.iter().any(|item| item.path.ends_with("src/ignored_nested") && item.is_dir));
-
-    fs::remove_dir_all(root).unwrap();
+    assert!(
+        result
+            .hidden
+            .iter()
+            .any(|item| item.path.ends_with("logs") && item.is_dir)
+    );
+    assert!(
+        result
+            .hidden
+            .iter()
+            .any(|item| item.path.ends_with("src/ignored_nested") && item.is_dir)
+    );
 }

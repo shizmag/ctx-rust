@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use ctx_filter::{FilterContext, FilterEngine, FilterEntry};
 use ctx_models::{
-    HiddenItem, HiddenReason, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult, Visibility,
+    HiddenItem, HiddenReason, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult,
+    Visibility,
 };
 
 use crate::error::ScanError;

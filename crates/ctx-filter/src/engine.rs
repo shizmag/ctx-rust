@@ -1,4 +1,4 @@
-use ctx_models::{Mode, ScanOptions, Visibility, HiddenReason};
+use ctx_models::{HiddenReason, Mode, ScanOptions, Visibility};
 
 use crate::FilterEntry;
 use crate::rule::FilterRule;
@@ -64,15 +64,15 @@ impl FilterEngine {
 
 fn is_code_or_config_or_readme(entry: &FilterEntry) -> bool {
     let name_lower = entry.name.to_lowercase();
-    
+
     // Check specific file names
-    if name_lower == "readme.md" 
-        || name_lower == "readme.txt" 
+    if name_lower == "readme.md"
+        || name_lower == "readme.txt"
         || name_lower == "readme"
-        || name_lower == "license" 
-        || name_lower == "license.md" 
+        || name_lower == "license"
+        || name_lower == "license.md"
         || name_lower == "license.txt"
-        || name_lower == "contributing.md" 
+        || name_lower == "contributing.md"
         || name_lower == "changelog.md"
         || name_lower == "architecture.md"
         || name_lower == "security.md"
@@ -119,17 +119,17 @@ fn is_code_or_config_or_readme(entry: &FilterEntry) -> bool {
 
 fn is_docs_or_text(entry: &FilterEntry) -> bool {
     let name_lower = entry.name.to_lowercase();
-    
+
     // Check specific file names
-    if name_lower == "readme" 
-        || name_lower == "license" 
+    if name_lower == "readme"
+        || name_lower == "license"
         || name_lower == "changelog"
         || name_lower == "contributing"
-        || name_lower == "readme.md" 
-        || name_lower == "readme.txt" 
-        || name_lower == "license.md" 
+        || name_lower == "readme.md"
+        || name_lower == "readme.txt"
+        || name_lower == "license.md"
         || name_lower == "license.txt"
-        || name_lower == "contributing.md" 
+        || name_lower == "contributing.md"
         || name_lower == "changelog.md"
         || name_lower == "architecture.md"
         || name_lower == "security.md"

@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn test_get_relative_path() {
         let root = Path::new("/workspace/project");
-        
+
         // relative path inside root
         let path1 = Path::new("/workspace/project/src/lib.rs");
         assert_eq!(get_relative_path(path1, root), "src/lib.rs");

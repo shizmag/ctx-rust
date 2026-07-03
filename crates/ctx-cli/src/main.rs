@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::PathBuf;
 use clap::Parser;
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
@@ -48,8 +48,8 @@ impl From<CliFormat> for Format {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "ctx", 
-    version, 
+    name = "ctx",
+    version,
     about = "✨ ctx: A highly informative, interactive directory tree visualizer and LLM context gatherer.\n\nRuns a beautiful, interactive TUI or outputs detailed markdown/plain/xml context for your files."
 )]
 struct Args {
@@ -110,28 +110,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     run_with_args(args, ctx_tui::run_interactive)
 }
 
-fn run_with_args<F>(args: Args, run_tui: F) -> Result<(), Box<dyn std::error::Error>>
+fn run_with_args<F, E>(args: Args, run_tui: F) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: FnOnce(PathBuf) -> Result<(), Box<dyn std::error::Error>>,
+    F: FnOnce(PathBuf) -> Result<(), E>,
+    E: Into<Box<dyn std::error::Error>>,
 {
     if args.interactive {
-        return run_tui(args.path);
+        return run_tui(args.path).map_err(Into::into);
     }
 
     let config = ctx_config::find_and_load_config(&args.path).unwrap_or_default();
 
-    let mode = args.mode
+    let mode = args
+        .mode
         .map(Mode::from)
         .or(config.mode)
         .unwrap_or(Mode::Smart);
 
-    let format = args.format
-        .map(Format::from)
-        .unwrap_or(Format::Markdown);
+    let format = args.format.map(Format::from).unwrap_or(Format::Markdown);
 
     let max_depth = args.max_depth.or(config.max_depth);
 
-    let max_file_size = args.max_file_size
+    let max_file_size = args
+        .max_file_size
         .or(config.max_file_size)
         .unwrap_or(512 * 1024);
 
@@ -211,7 +212,7 @@ mod tests {
         };
 
         let mut path_called = None;
-        let mock_run_tui = |path: PathBuf| {
+        let mock_run_tui = |path: PathBuf| -> Result<(), Box<dyn std::error::Error>> {
             path_called = Some(path);
             Ok(())
         };

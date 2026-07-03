@@ -1,12 +1,12 @@
-use std::io;
 use crossterm::event::{self, Event, KeyCode};
-use ratatui::Terminal;
 use ctx_models::NodeKind;
+use ratatui::Terminal;
+use std::io;
 
 use crate::app::{TuiApp, find_node, set_checked_recursive};
-use crate::ui::ui;
 use crate::clipboard::copy_selection_to_clipboard;
 use crate::terminal::open_file;
+use crate::ui::ui;
 
 pub(crate) fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
@@ -69,16 +69,15 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                     return Ok(());
                                 }
                             }
-                            KeyCode::Char('c') => {
-                                match copy_selection_to_clipboard(app) {
-                                    Ok(success_msg) => {
-                                        app.message = Some((success_msg, std::time::Instant::now()));
-                                    }
-                                    Err(e) => {
-                                        app.message = Some((format!("Error: {}", e), std::time::Instant::now()));
-                                    }
+                            KeyCode::Char('c') => match copy_selection_to_clipboard(app) {
+                                Ok(success_msg) => {
+                                    app.message = Some((success_msg, std::time::Instant::now()));
                                 }
-                            }
+                                Err(e) => {
+                                    app.message =
+                                        Some((format!("Error: {}", e), std::time::Instant::now()));
+                                }
+                            },
                             KeyCode::Char('C') => {
                                 if let Some(selected) = app.list_state.selected() {
                                     if let Some(item) = app.visible_items.get(selected) {
@@ -89,13 +88,18 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                 .map(|cwd| cwd.join(&item.path))
                                                 .unwrap_or_else(|_| item.path.clone())
                                         };
-                                        let clean_path = std::fs::canonicalize(&abs_path)
-                                            .unwrap_or(abs_path);
+                                        let clean_path =
+                                            std::fs::canonicalize(&abs_path).unwrap_or(abs_path);
                                         let path_str = clean_path.to_string_lossy().to_string();
-                                        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(path_str.clone())) {
+                                        match arboard::Clipboard::new()
+                                            .and_then(|mut cb| cb.set_text(path_str.clone()))
+                                        {
                                             Ok(_) => {
                                                 app.message = Some((
-                                                    format!("Copied path to clipboard: {}", path_str),
+                                                    format!(
+                                                        "Copied path to clipboard: {}",
+                                                        path_str
+                                                    ),
                                                     std::time::Instant::now(),
                                                 ));
                                             }
@@ -123,8 +127,13 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                 app.expanded_dirs.insert(path);
                                             }
                                             app.update_visible_items();
-                                        } else if let Err(e) = open_file(terminal, &item.path, item.is_text) {
-                                            app.message = Some((format!("Error opening file: {}", e), std::time::Instant::now()));
+                                        } else if let Err(e) =
+                                            open_file(terminal, &item.path, item.is_text)
+                                        {
+                                            app.message = Some((
+                                                format!("Error opening file: {}", e),
+                                                std::time::Instant::now(),
+                                            ));
                                         }
                                     }
                                 }
@@ -132,8 +141,15 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('o') => {
                                 if let Some(selected) = app.list_state.selected() {
                                     if let Some(item) = app.visible_items.get(selected) {
-                                        if let Err(e) = open_file(terminal, &item.path, item.is_text && item.kind == NodeKind::File) {
-                                            app.message = Some((format!("Error opening: {}", e), std::time::Instant::now()));
+                                        if let Err(e) = open_file(
+                                            terminal,
+                                            &item.path,
+                                            item.is_text && item.kind == NodeKind::File,
+                                        ) {
+                                            app.message = Some((
+                                                format!("Error opening: {}", e),
+                                                std::time::Instant::now(),
+                                            ));
                                         }
                                     }
                                 }
@@ -166,7 +182,8 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                             }
                             KeyCode::Char('r') => {
                                 if let Err(e) = app.rescan() {
-                                    app.message = Some((format!("Error: {}", e), std::time::Instant::now()));
+                                    app.message =
+                                        Some((format!("Error: {}", e), std::time::Instant::now()));
                                 }
                             }
                             KeyCode::Char(' ') | KeyCode::Char('x') => {
@@ -174,11 +191,16 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                     if let Some(item) = app.visible_items.get(selected) {
                                         let path = item.path.clone();
                                         let new_checked = !item.checked;
-                                        
-                                        if let Some(node) = find_node(&app.scan_result.root, &path) {
-                                            set_checked_recursive(node, new_checked, &mut app.checked_paths);
+
+                                        if let Some(node) = find_node(&app.scan_result.root, &path)
+                                        {
+                                            set_checked_recursive(
+                                                node,
+                                                new_checked,
+                                                &mut app.checked_paths,
+                                            );
                                         }
-                                        
+
                                         app.update_visible_items();
                                     }
                                 }

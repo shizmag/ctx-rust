@@ -1,16 +1,15 @@
-use std::fs;
 use ctx_models::{NodeKind, NodeStats, ProjectSummary, ScanResult, TreeNode};
-use ctx_render::{render, Format, RenderOptions};
+use ctx_render::{Format, RenderOptions, render};
+use std::fs;
 
 #[test]
 fn test_render_formats() {
-    let temp_root = std::env::temp_dir().join("ctx_render_test_project");
-    let _ = fs::remove_dir_all(&temp_root);
-    fs::create_dir_all(&temp_root).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_root = temp_dir.path().to_path_buf();
 
     let file1_path = temp_root.join("hello.py");
     let file2_path = temp_root.join("main.rs");
-    
+
     fs::write(&file1_path, "print('hello')\n").unwrap();
     fs::write(&file2_path, "fn main() {}\n").unwrap();
 
@@ -109,15 +108,12 @@ fn test_render_formats() {
     assert!(plain_out.contains("print('hello')"));
     assert!(plain_out.contains("File: main.rs"));
     assert!(plain_out.contains("fn main() {}"));
-
-    let _ = fs::remove_dir_all(&temp_root);
 }
 
 #[test]
 fn test_render_edge_cases() {
-    let temp_root = std::env::temp_dir().join("ctx_render_edge_cases");
-    let _ = fs::remove_dir_all(&temp_root);
-    fs::create_dir_all(&temp_root).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_root = temp_dir.path().to_path_buf();
 
     let file_special = temp_root.join("special.xml");
     let file_multiline = temp_root.join("multiline.txt");
@@ -129,7 +125,11 @@ fn test_render_edge_cases() {
     fs::write(&file_multiline, "line 1\n  line 2 with spaces\nline 3\n").unwrap();
     fs::write(&file_empty, "").unwrap();
     fs::write(&file_no_newline, "no trailing newline").unwrap();
-    fs::write(&file_fences, "Some text\n```rust\nfn main() {}\n```\nMore text\n````javascript\nconsole.log(1);\n````\n").unwrap();
+    fs::write(
+        &file_fences,
+        "Some text\n```rust\nfn main() {}\n```\nMore text\n````javascript\nconsole.log(1);\n````\n",
+    )
+    .unwrap();
 
     let root = TreeNode {
         name: "ctx_render_edge_cases".to_string(),
@@ -190,7 +190,10 @@ fn test_render_edge_cases() {
     let xml_out = render(&result, &xml_options).unwrap();
 
     // Verify XML Special Chars escaping
-    assert!(xml_out.contains("&lt;hello name=&quot;world&quot;&gt; &amp; &apos;rust&apos;&lt;/hello&gt;"));
+    assert!(
+        xml_out
+            .contains("&lt;hello name=&quot;world&quot;&gt; &amp; &apos;rust&apos;&lt;/hello&gt;")
+    );
 
     // Verify Multiline content preserves exact leading spaces and structure without extra prefixing spaces
     assert!(xml_out.contains("<content>line 1\n  line 2 with spaces\nline 3\n</content>"));
@@ -199,7 +202,11 @@ fn test_render_edge_cases() {
     assert!(xml_out.contains("<file path=\"empty.txt\">\n      <content></content>"));
 
     // Verify File without trailing newline is preserved exactly
-    assert!(xml_out.contains("<file path=\"no_newline.txt\">\n      <content>no trailing newline</content>"));
+    assert!(
+        xml_out.contains(
+            "<file path=\"no_newline.txt\">\n      <content>no trailing newline</content>"
+        )
+    );
 
     // 2. Test Markdown Renderer dynamic fence
     let md_options = RenderOptions {
@@ -220,6 +227,115 @@ fn test_render_edge_cases() {
 
     // Verify no trailing newline markdown has a trailing newline added before closing fence
     assert!(md_out.contains("### `no_newline.txt`\n```text\nno trailing newline\n```\n"));
+}
 
-    let _ = fs::remove_dir_all(&temp_root);
+#[test]
+fn test_render_golden_snapshot() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_root = temp_dir.path().to_path_buf();
+
+    let a_py = temp_root.join("a.py");
+    let b_rs = temp_root.join("b.rs");
+
+    fs::write(&a_py, "print(\"hello\")\n").unwrap();
+    fs::write(&b_rs, "fn main() {\n    println!(\"world\");\n}\n").unwrap();
+
+    let root = TreeNode {
+        name: "golden_project".to_string(),
+        path: temp_root.clone(),
+        kind: NodeKind::Directory,
+        stats: NodeStats {
+            files: 2,
+            dirs: 1,
+            lines: 5,
+            bytes: 52,
+            tokens: 15,
+        },
+        children: vec![
+            TreeNode {
+                name: "a.py".to_string(),
+                path: a_py,
+                kind: NodeKind::File,
+                stats: NodeStats {
+                    files: 1,
+                    dirs: 0,
+                    lines: 1,
+                    bytes: 15,
+                    tokens: 5,
+                },
+                children: Vec::new(),
+            },
+            TreeNode {
+                name: "b.rs".to_string(),
+                path: b_rs,
+                kind: NodeKind::File,
+                stats: NodeStats {
+                    files: 1,
+                    dirs: 0,
+                    lines: 4,
+                    bytes: 37,
+                    tokens: 10,
+                },
+                children: Vec::new(),
+            },
+        ],
+    };
+
+    let result = ScanResult {
+        root,
+        summary: ProjectSummary {
+            files: 2,
+            dirs: 1,
+            lines: 5,
+            bytes: 52,
+            tokens: 15,
+            hidden_files: 0,
+            hidden_dirs: 0,
+        },
+        hidden: Vec::new(),
+    };
+
+    let md_options = RenderOptions {
+        format: Format::Markdown,
+        include_stats: true,
+        max_file_size: 1024,
+    };
+    let md_out = render(&result, &md_options).unwrap();
+
+    // Replace the dynamically-generated temp directory name in the output with a fixed string "golden_project"
+    let temp_name = temp_root.file_name().unwrap().to_str().unwrap();
+    let normalized_md_out = md_out.replace(temp_name, "golden_project");
+
+    let expected_markdown_golden = r#"# Project: golden_project
+
+## Project Summary
+- **Files**: 2
+- **Directories**: 1
+- **Total Lines**: 5
+- **Total Size**: 52 B
+
+## Directory Structure
+```text
+golden_project
+├── a.py
+└── b.rs
+```
+
+## Repository Files
+
+### `a.py`
+```python
+print("hello")
+```
+
+### `b.rs`
+```rust
+fn main() {
+    println!("world");
+}
+```
+
+"#;
+
+    assert_eq!(normalized_md_out, expected_markdown_golden);
 }

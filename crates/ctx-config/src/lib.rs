@@ -1,6 +1,6 @@
+use ctx_models::Mode;
 use std::fs;
 use std::path::{Path, PathBuf};
-use ctx_models::Mode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {

@@ -1,19 +1,17 @@
-use std::fs;
 use ctx_llm::build_context;
-use ctx_models::{ScanResult, TreeNode, NodeKind, NodeStats, ProjectSummary};
+use ctx_models::{NodeKind, NodeStats, ProjectSummary, ScanResult, TreeNode};
+use std::fs;
 
 #[test]
 fn test_build_context() {
-    let temp_dir = std::env::temp_dir().join("ctx_llm_test_build_context");
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
 
-    let file_path = temp_dir.join("hello.txt");
+    let file_path = temp_dir.path().join("hello.txt");
     fs::write(&file_path, "hello world").unwrap();
 
     let root = TreeNode {
         name: "test".to_string(),
-        path: temp_dir.clone(),
+        path: temp_dir.path().to_path_buf(),
         kind: NodeKind::Directory,
         stats: NodeStats {
             files: 1,
@@ -22,21 +20,19 @@ fn test_build_context() {
             bytes: 11,
             tokens: 3,
         },
-        children: vec![
-            TreeNode {
-                name: "hello.txt".to_string(),
-                path: file_path,
-                kind: NodeKind::File,
-                stats: NodeStats {
-                    files: 1,
-                    dirs: 0,
-                    lines: 1,
-                    bytes: 11,
-                    tokens: 3,
-                },
-                children: vec![],
-            }
-        ],
+        children: vec![TreeNode {
+            name: "hello.txt".to_string(),
+            path: file_path,
+            kind: NodeKind::File,
+            stats: NodeStats {
+                files: 1,
+                dirs: 0,
+                lines: 1,
+                bytes: 11,
+                tokens: 3,
+            },
+            children: vec![],
+        }],
     };
 
     let result = ScanResult {
@@ -57,6 +53,4 @@ fn test_build_context() {
     assert!(context.contains("hello world"));
     assert!(context.contains("hello.txt"));
     assert!(context.contains("Total files: 1"));
-
-    let _ = fs::remove_dir_all(&temp_dir);
 }

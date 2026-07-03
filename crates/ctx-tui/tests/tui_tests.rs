@@ -1,5 +1,5 @@
-use std::io::Cursor;
 use ctx_tui::run_interactive_menu;
+use std::io::Cursor;
 
 #[test]
 fn test_tui_exit_immediately() {
@@ -82,4 +82,11 @@ fn test_tui_change_size_and_exit() {
     assert!(output.contains("Enter max file size in KB:"));
     assert!(output.contains("5. Set max file size (current: 1024 KB)"));
     assert!(output.contains("Goodbye!"));
+}
+
+#[test]
+fn test_tui_error_type() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+    let tui_err = ctx_tui::TuiError::Io(io_err);
+    assert!(tui_err.to_string().contains("IO error"));
 }

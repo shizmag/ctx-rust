@@ -5,8 +5,8 @@ use ctx_stats::collect_file_stats;
 
 #[test]
 fn counts_lines_and_bytes_for_text_file() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("ctx_stats_text_file.txt");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_text_file.txt");
 
     fs::write(&path, "one\ntwo\nthree\n").unwrap();
 
@@ -17,14 +17,12 @@ fn counts_lines_and_bytes_for_text_file() {
     assert_eq!(stats.tokens, 4); // "one\ntwo\nthree\n" has 14 chars -> (14+3)/4 = 4
     assert!(stats.is_text);
     assert_eq!(stats.skipped_reason, None);
-
-    fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn empty_file_has_zero_lines() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("ctx_stats_empty_file.txt");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_empty_file.txt");
 
     fs::write(&path, "").unwrap();
 
@@ -33,14 +31,12 @@ fn empty_file_has_zero_lines() {
     assert_eq!(stats.lines, 0);
     assert_eq!(stats.bytes, 0);
     assert!(stats.is_text);
-
-    fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn skips_line_count_for_large_file() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("ctx_stats_large_file.txt");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_large_file.txt");
 
     fs::write(&path, "hello world").unwrap();
 
@@ -48,14 +44,12 @@ fn skips_line_count_for_large_file() {
 
     assert_eq!(stats.lines, 0);
     assert_eq!(stats.skipped_reason, Some(StatsSkipReason::TooLarge));
-
-    fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn skips_line_count_for_non_utf8_file() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("ctx_stats_non_utf8_file.bin");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_non_utf8_file.bin");
 
     fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
 
@@ -64,6 +58,4 @@ fn skips_line_count_for_non_utf8_file() {
     assert_eq!(stats.lines, 0);
     assert!(!stats.is_text);
     assert_eq!(stats.skipped_reason, Some(StatsSkipReason::NonUtf8));
-
-    fs::remove_file(path).unwrap();
 }

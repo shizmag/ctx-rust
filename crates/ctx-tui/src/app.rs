@@ -1,8 +1,8 @@
+use crate::search::collect_matching_files;
+use ctx_models::{NodeKind, TreeNode, get_relative_path};
+use ratatui::widgets::ListState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use ratatui::widgets::ListState;
-use ctx_models::{NodeKind, TreeNode, get_relative_path};
-use crate::search::collect_matching_files;
 
 pub(crate) struct TuiApp {
     pub(crate) path: PathBuf,
@@ -30,12 +30,12 @@ pub(crate) struct VisibleTuiNode {
 }
 
 impl TuiApp {
-    pub(crate) fn new(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn new(path: PathBuf) -> Result<Self, crate::error::TuiError> {
         let scan_result = ctx_core::scan(&path, ctx_models::ScanOptions::default())?;
-        
+
         let mut expanded_dirs = HashSet::new();
         let checked_paths = HashSet::new();
-        
+
         expanded_dirs.insert(scan_result.root.path.clone());
 
         let mut app = Self {
@@ -49,9 +49,9 @@ impl TuiApp {
             search_active: false,
             search_query: String::new(),
         };
-        
+
         app.update_visible_items();
-        
+
         if !app.visible_items.is_empty() {
             app.list_state.select(Some(0));
         }
@@ -63,7 +63,7 @@ impl TuiApp {
         if !self.search_query.is_empty() {
             let mut matches = Vec::new();
             collect_matching_files(&self.scan_result.root, &self.search_query, &mut matches);
-            
+
             self.visible_items = matches
                 .into_iter()
                 .map(|node| {
@@ -95,13 +95,13 @@ impl TuiApp {
         }
     }
 
-    pub(crate) fn rescan(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn rescan(&mut self) -> Result<(), crate::error::TuiError> {
         let scan_result = ctx_core::scan(&self.path, ctx_models::ScanOptions::default())?;
         self.scan_result = scan_result;
-        
+
         let mut new_expanded = HashSet::new();
         let mut new_checked = HashSet::new();
-        
+
         merge_tree_states(
             &self.scan_result.root,
             &self.expanded_dirs,
@@ -109,12 +109,12 @@ impl TuiApp {
             &mut new_expanded,
             &mut new_checked,
         );
-        
+
         self.expanded_dirs = new_expanded;
         self.checked_paths = new_checked;
-        
+
         self.update_visible_items();
-        
+
         let selected = self.list_state.selected().unwrap_or(0);
         if self.visible_items.is_empty() {
             self.list_state.select(None);
@@ -134,7 +134,7 @@ impl TuiApp {
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
         self.update_visible_items();
-        
+
         let selected = self.list_state.selected().unwrap_or(0);
         if self.visible_items.is_empty() {
             self.list_state.select(None);
@@ -174,7 +174,11 @@ pub(crate) fn traverse_build_visible(
     });
 }
 
-pub(crate) fn set_checked_recursive(node: &TreeNode, checked: bool, checked_paths: &mut HashSet<PathBuf>) {
+pub(crate) fn set_checked_recursive(
+    node: &TreeNode,
+    checked: bool,
+    checked_paths: &mut HashSet<PathBuf>,
+) {
     if checked {
         checked_paths.insert(node.path.clone());
     } else {
@@ -207,7 +211,7 @@ pub(crate) fn merge_tree_states(
     if node.kind == NodeKind::Directory && old_expanded.contains(&node.path) {
         new_expanded.insert(node.path.clone());
     }
-    
+
     if old_checked.contains(&node.path) {
         new_checked.insert(node.path.clone());
     }

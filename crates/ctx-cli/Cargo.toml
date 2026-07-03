@@ -15,3 +15,8 @@ ctx-models = { path = "../ctx-models" }
 ctx-tui = { path = "../ctx-tui" }
 ctx-config = { path = "../ctx-config" }
 arboard = { version = "3.6.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+

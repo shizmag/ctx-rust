@@ -18,7 +18,9 @@ fn collect_matching_files_impl<'a>(
         let name_matches = node.name.to_lowercase().contains(query_lower);
         let mut content_matches = false;
         if !name_matches && node.stats.lines > 0 && node.stats.bytes <= 512 * 1024 {
-            if let ctx_models::FileContentResult::Text(content) = ctx_models::read_file_content(&node.path, 512 * 1024) {
+            if let ctx_models::FileContentResult::Text(content) =
+                ctx_models::read_file_content(&node.path, 512 * 1024)
+            {
                 if content.to_lowercase().contains(query_lower) {
                     content_matches = true;
                 }
@@ -36,8 +38,8 @@ fn collect_matching_files_impl<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ctx_models::{NodeKind, NodeStats, TreeNode};
     use std::path::PathBuf;
-    use ctx_models::{TreeNode, NodeKind, NodeStats};
 
     #[test]
     fn test_collect_matching_files() {
@@ -92,32 +94,30 @@ mod tests {
         // Search by content
         let temp_file_path = PathBuf::from("test_content_match.txt");
         std::fs::write(&temp_file_path, "Hello search world!").unwrap();
-        
+
         let root_content = TreeNode {
             name: "root".to_string(),
             path: PathBuf::from("."),
             kind: NodeKind::Directory,
             stats: NodeStats::default(),
-            children: vec![
-                TreeNode {
-                    name: "test_content_match.txt".to_string(),
-                    path: temp_file_path.clone(),
-                    kind: NodeKind::File,
-                    stats: NodeStats {
-                        lines: 1,
-                        bytes: 20,
-                        ..Default::default()
-                    },
-                    children: vec![],
+            children: vec![TreeNode {
+                name: "test_content_match.txt".to_string(),
+                path: temp_file_path.clone(),
+                kind: NodeKind::File,
+                stats: NodeStats {
+                    lines: 1,
+                    bytes: 20,
+                    ..Default::default()
                 },
-            ],
+                children: vec![],
+            }],
         };
-        
+
         let mut matches = Vec::new();
         collect_matching_files(&root_content, "search world", &mut matches);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].name, "test_content_match.txt");
-        
+
         let _ = std::fs::remove_file(temp_file_path);
     }
 }

@@ -184,7 +184,14 @@ where
         let count = node.children.len();
         for (i, child) in node.children.iter().enumerate() {
             let child_is_last = i == count - 1;
-            walk(child, &next_prefix, child_is_last, false, depth + 1, callback);
+            walk(
+                child,
+                &next_prefix,
+                child_is_last,
+                false,
+                depth + 1,
+                callback,
+            );
         }
     }
 
@@ -263,10 +270,14 @@ mod tests {
 
     #[test]
     fn test_walk_several_files() {
-        let root = create_test_node("root", NodeKind::Directory, vec![
-            create_test_node("a.txt", NodeKind::File, vec![]),
-            create_test_node("b.txt", NodeKind::File, vec![]),
-        ]);
+        let root = create_test_node(
+            "root",
+            NodeKind::Directory,
+            vec![
+                create_test_node("a.txt", NodeKind::File, vec![]),
+                create_test_node("b.txt", NodeKind::File, vec![]),
+            ],
+        );
 
         let mut lines = Vec::new();
         walk_tree_lines(&root, |line| {
@@ -293,11 +304,15 @@ mod tests {
 
     #[test]
     fn test_walk_nested_directories() {
-        let root = create_test_node("root", NodeKind::Directory, vec![
-            create_test_node("sub", NodeKind::Directory, vec![
-                create_test_node("file.txt", NodeKind::File, vec![]),
-            ]),
-        ]);
+        let root = create_test_node(
+            "root",
+            NodeKind::Directory,
+            vec![create_test_node(
+                "sub",
+                NodeKind::Directory,
+                vec![create_test_node("file.txt", NodeKind::File, vec![])],
+            )],
+        );
 
         let mut lines = Vec::new();
         walk_tree_lines(&root, |line| {
@@ -361,10 +376,8 @@ mod tests {
 
     #[test]
     fn test_read_file_content_small_utf8() {
-        let temp_dir = std::env::temp_dir().join("ctx_models_test_utf8");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let file_path = temp_dir.join("small.txt");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("small.txt");
         std::fs::write(&file_path, "hello world").unwrap();
 
         let res = read_file_content(&file_path, 1024);
@@ -372,16 +385,12 @@ mod tests {
             FileContentResult::Text(content) => assert_eq!(content, "hello world"),
             other => panic!("Expected FileContentResult::Text, got {:?}", other),
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_read_file_content_empty() {
-        let temp_dir = std::env::temp_dir().join("ctx_models_test_empty");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let file_path = temp_dir.join("empty.txt");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("empty.txt");
         std::fs::write(&file_path, "").unwrap();
 
         let res = read_file_content(&file_path, 1024);
@@ -389,42 +398,38 @@ mod tests {
             FileContentResult::Text(content) => assert_eq!(content, ""),
             other => panic!("Expected FileContentResult::Text, got {:?}", other),
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_read_file_content_too_large() {
-        let temp_dir = std::env::temp_dir().join("ctx_models_test_too_large");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let file_path = temp_dir.join("large.txt");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("large.txt");
         std::fs::write(&file_path, "some content that is larger than 5 bytes").unwrap();
 
         let res = read_file_content(&file_path, 5);
         match res {
             FileContentResult::Skipped(FileSkipReason::TooLarge) => {}
-            other => panic!("Expected FileContentResult::Skipped(FileSkipReason::TooLarge), got {:?}", other),
+            other => panic!(
+                "Expected FileContentResult::Skipped(FileSkipReason::TooLarge), got {:?}",
+                other
+            ),
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_read_file_content_non_utf8() {
-        let temp_dir = std::env::temp_dir().join("ctx_models_test_non_utf8");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let file_path = temp_dir.join("binary.bin");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("binary.bin");
         std::fs::write(&file_path, vec![0, 159, 146, 150]).unwrap(); // Invalid UTF-8 bytes
 
         let res = read_file_content(&file_path, 1024);
         match res {
             FileContentResult::Skipped(FileSkipReason::NonUtf8) => {}
-            other => panic!("Expected FileContentResult::Skipped(FileSkipReason::NonUtf8), got {:?}", other),
+            other => panic!(
+                "Expected FileContentResult::Skipped(FileSkipReason::NonUtf8), got {:?}",
+                other
+            ),
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -437,4 +442,3 @@ mod tests {
         }
     }
 }
-

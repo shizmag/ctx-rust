@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::path::{Path, PathBuf};
 
 pub struct GitignoreMatcher {
     pub dir_path: PathBuf,
@@ -28,7 +28,11 @@ impl IgnoreStack {
                 if path.exists() {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         let parsed = parse_gitignore(&content);
-                        global_ignore = build_gitignore_from_rules(&root_path, &root_path, &parsed.normal_rules);
+                        global_ignore = build_gitignore_from_rules(
+                            &root_path,
+                            &root_path,
+                            &parsed.normal_rules,
+                        );
                         if global_ignore.is_some() {
                             break;
                         }
@@ -43,7 +47,8 @@ impl IgnoreStack {
         if git_exclude_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&git_exclude_path) {
                 let parsed = parse_gitignore(&content);
-                local_exclude = build_gitignore_from_rules(&root_path, &root_path, &parsed.normal_rules);
+                local_exclude =
+                    build_gitignore_from_rules(&root_path, &root_path, &parsed.normal_rules);
             }
         }
 
@@ -85,7 +90,11 @@ impl IgnoreStack {
         // Find all ancestor directories of `path` starting from `root_path` up to the parent of `path`
         // that are not yet in the stack, and load their .gitignore files.
         let mut to_add = Vec::new();
-        let mut current = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let mut current = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
 
         while current.starts_with(&self.root_path) {
             if self.matchers.iter().any(|m| m.dir_path == current) {
@@ -112,8 +121,10 @@ impl IgnoreStack {
             if gitignore_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
                     let parsed = parse_gitignore(&content);
-                    git_ignore = build_gitignore_from_rules(&self.root_path, &dir, &parsed.normal_rules);
-                    ctx_bypass = build_gitignore_from_rules(&self.root_path, &dir, &parsed.ctx_rules);
+                    git_ignore =
+                        build_gitignore_from_rules(&self.root_path, &dir, &parsed.normal_rules);
+                    ctx_bypass =
+                        build_gitignore_from_rules(&self.root_path, &dir, &parsed.ctx_rules);
                 }
             }
 
@@ -175,18 +186,18 @@ pub fn parse_gitignore(content: &str) -> ParsedGitignore {
         if trimmed.is_empty() {
             if !current_block.is_empty() {
                 if has_ctx {
-                    ctx_rules.extend(current_block.drain(..));
+                    ctx_rules.append(&mut current_block);
                 } else {
-                    normal_rules.extend(current_block.drain(..));
+                    normal_rules.append(&mut current_block);
                 }
                 has_ctx = false;
             }
         } else if trimmed == "#[ctx]" {
             if !current_block.is_empty() {
                 if has_ctx {
-                    ctx_rules.extend(current_block.drain(..));
+                    ctx_rules.append(&mut current_block);
                 } else {
-                    normal_rules.extend(current_block.drain(..));
+                    normal_rules.append(&mut current_block);
                 }
             }
             has_ctx = true;
@@ -209,7 +220,11 @@ pub fn parse_gitignore(content: &str) -> ParsedGitignore {
     }
 }
 
-fn build_gitignore_from_rules(root_path: &Path, dir_path: &Path, rules: &[String]) -> Option<Gitignore> {
+fn build_gitignore_from_rules(
+    root_path: &Path,
+    dir_path: &Path,
+    rules: &[String],
+) -> Option<Gitignore> {
     if rules.is_empty() {
         return None;
     }
@@ -223,8 +238,5 @@ fn build_gitignore_from_rules(root_path: &Path, dir_path: &Path, rules: &[String
 fn get_home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .map(PathBuf::from)
-        })
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
 }

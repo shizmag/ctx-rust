@@ -1,5 +1,7 @@
+use ctx_models::{
+    NodeKind, ScanResult, TreeNode, format_bytes, get_relative_path, walk_tree_lines,
+};
 use std::path::Path;
-use ctx_models::{NodeKind, ScanResult, TreeNode, walk_tree_lines, format_bytes, get_relative_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -40,7 +42,11 @@ fn render_tree(root: &TreeNode) -> String {
             out.push_str(&line.node.name);
             out.push('\n');
         } else {
-            let connector = if line.is_last { "└── " } else { "├── " };
+            let connector = if line.is_last {
+                "└── "
+            } else {
+                "├── "
+            };
             out.push_str(&line.prefix);
             out.push_str(connector);
             out.push_str(&line.node.name);
@@ -60,7 +66,11 @@ fn collect_file_nodes<'a>(node: &'a TreeNode, files: &mut Vec<&'a TreeNode>) {
     }
 }
 
-fn get_skip_reason(node: &TreeNode, res: &ctx_models::FileContentResult, max_file_size: u64) -> String {
+fn get_skip_reason(
+    node: &TreeNode,
+    res: &ctx_models::FileContentResult,
+    max_file_size: u64,
+) -> String {
     match res {
         ctx_models::FileContentResult::Text(_) => String::new(),
         ctx_models::FileContentResult::Skipped(ctx_models::FileSkipReason::TooLarge) => {
@@ -139,7 +149,7 @@ fn get_markdown_fence(content: &str) -> String {
 
 fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<String, std::io::Error> {
     let mut out = String::new();
-    
+
     out.push_str(&format!("# Project: {}\n\n", result.root.name));
 
     if options.include_stats {
@@ -147,7 +157,10 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
         out.push_str(&format!("- **Files**: {}\n", result.summary.files));
         out.push_str(&format!("- **Directories**: {}\n", result.summary.dirs));
         out.push_str(&format!("- **Total Lines**: {}\n", result.summary.lines));
-        out.push_str(&format!("- **Total Size**: {}\n", format_bytes(result.summary.bytes)));
+        out.push_str(&format!(
+            "- **Total Size**: {}\n",
+            format_bytes(result.summary.bytes)
+        ));
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
             out.push_str(&format!(
                 "- **Hidden**: {} files, {} directories\n",
@@ -169,7 +182,7 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
     for file_node in files {
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
         out.push_str(&format!("### `{}`\n", rel_path));
-        
+
         match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
             ctx_models::FileContentResult::Text(content) => {
                 let lang = get_markdown_lang(&file_node.path);
@@ -193,18 +206,30 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
 
 fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, std::io::Error> {
     let mut out = String::new();
-    
-    out.push_str(&format!("<project name=\"{}\">\n", escape_xml(&result.root.name)));
+
+    out.push_str(&format!(
+        "<project name=\"{}\">\n",
+        escape_xml(&result.root.name)
+    ));
 
     if options.include_stats {
         out.push_str("  <summary>\n");
         out.push_str(&format!("    <files>{}</files>\n", result.summary.files));
-        out.push_str(&format!("    <directories>{}</directories>\n", result.summary.dirs));
+        out.push_str(&format!(
+            "    <directories>{}</directories>\n",
+            result.summary.dirs
+        ));
         out.push_str(&format!("    <lines>{}</lines>\n", result.summary.lines));
         out.push_str(&format!("    <bytes>{}</bytes>\n", result.summary.bytes));
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
-            out.push_str(&format!("    <hidden_files>{}</hidden_files>\n", result.summary.hidden_files));
-            out.push_str(&format!("    <hidden_directories>{}</hidden_directories>\n", result.summary.hidden_dirs));
+            out.push_str(&format!(
+                "    <hidden_files>{}</hidden_files>\n",
+                result.summary.hidden_files
+            ));
+            out.push_str(&format!(
+                "    <hidden_directories>{}</hidden_directories>\n",
+                result.summary.hidden_dirs
+            ));
         }
         out.push_str("  </summary>\n");
     }
@@ -226,7 +251,7 @@ fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, st
 
     for file_node in files {
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
-        
+
         match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
             ctx_models::FileContentResult::Text(content) => {
                 out.push_str(&format!("    <file path=\"{}\">\n", escape_xml(&rel_path)));
@@ -254,14 +279,17 @@ fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, st
 
 fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, std::io::Error> {
     let mut out = String::new();
-    
+
     out.push_str(&format!("Project: {}\n", result.root.name));
 
     if options.include_stats {
         out.push_str(&format!("Files: {}\n", result.summary.files));
         out.push_str(&format!("Directories: {}\n", result.summary.dirs));
         out.push_str(&format!("Total Lines: {}\n", result.summary.lines));
-        out.push_str(&format!("Total Size: {}\n", format_bytes(result.summary.bytes)));
+        out.push_str(&format!(
+            "Total Size: {}\n",
+            format_bytes(result.summary.bytes)
+        ));
         out.push('\n');
     }
 
@@ -274,7 +302,7 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
 
     for file_node in files {
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
-        
+
         match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
             ctx_models::FileContentResult::Text(content) => {
                 out.push_str("================================================================================\n");
@@ -300,7 +328,7 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
 
 pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error> {
     let mut out = String::new();
-    
+
     let reset = "\x1b[0m";
     let gray = "\x1b[38;2;86;95;137m";
     let bold_blue = "\x1b[1;38;2;122;162;247m";
@@ -315,7 +343,11 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
         let icon = get_node_icon(&node.name, is_dir);
 
         // Calculate prefix, icon, name lengths for alignment
-        let prefix_len = if line.is_root { 0 } else { line.prefix.chars().count() + 4 };
+        let prefix_len = if line.is_root {
+            0
+        } else {
+            line.prefix.chars().count() + 4
+        };
         let icon_width = 2; // Emoji icon + 1 space
         let name_len = node.name.chars().count() + if is_dir { 1 } else { 0 };
         let total_width = prefix_len + icon_width + name_len;
@@ -347,7 +379,7 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
             if node.stats.tokens > 0 {
                 dir_parts.push(format!("{} tokens", node.stats.tokens));
             }
-            
+
             let stats_str = if !dir_parts.is_empty() {
                 format!(" ({})", dir_parts.join(", "))
             } else {
@@ -359,9 +391,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                 bold_blue, icon, node.name, reset, leader, gray, stats_str, reset
             ));
         } else {
-            let connector = if line.is_last { "└── " } else { "├── " };
+            let connector = if line.is_last {
+                "└── "
+            } else {
+                "├── "
+            };
             out.push_str(&format!("{}{}{}", gray, line.prefix, connector));
-            
+
             match node.kind {
                 NodeKind::Directory => {
                     let mut dir_parts = Vec::new();
@@ -378,7 +414,7 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                     if node.stats.tokens > 0 {
                         dir_parts.push(format!("{} tokens", node.stats.tokens));
                     }
-                    
+
                     let stats_str = if !dir_parts.is_empty() {
                         format!(" ({})", dir_parts.join(", "))
                     } else {
@@ -396,11 +432,14 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                         .and_then(|ext| ext.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    
+
                     let file_color = match extension.as_str() {
-                        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "go" | "java" | "swift" | "html" | "css" | "sh" | "bash" => green,
+                        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "go" | "java"
+                        | "swift" | "html" | "css" | "sh" | "bash" => green,
                         "md" | "txt" | "pdf" | "adoc" | "license" => yellow,
-                        "toml" | "json" | "yaml" | "yml" | "lock" | "ini" | "conf" | "xml" => magenta,
+                        "toml" | "json" | "yaml" | "yml" | "lock" | "ini" | "conf" | "xml" => {
+                            magenta
+                        }
                         _ => foreground,
                     };
 
@@ -414,13 +453,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                     if node.stats.bytes > 0 {
                         stats_parts.push(format_bytes(node.stats.bytes));
                     }
-                    
+
                     let stats_str = if !stats_parts.is_empty() {
                         format!(" ({})", stats_parts.join(", "))
                     } else {
                         "".to_string()
                     };
-                    
+
                     out.push_str(&format!(
                         "{}{}{}{}{}{}{}{}\n",
                         file_color, icon, node.name, reset, leader, gray, stats_str, reset
@@ -436,19 +475,21 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
         }
         true
     });
-    
+
     // Add space and a gorgeous project summary box in Tokyo Night style!
-    out.push_str("\n\x1b[38;2;86;95;137m╭────────────────────────────────────────────────╮\x1b[0m\n");
+    out.push_str(
+        "\n\x1b[38;2;86;95;137m╭────────────────────────────────────────────────╮\x1b[0m\n",
+    );
     out.push_str(&format!(
         "│ \x1b[1;38;2;122;162;247mProject Summary:\x1b[0m{:31}│\n",
         ""
     ));
-    
+
     let files_str = format!("{} files", result.summary.files);
     let dirs_str = format!("{} directories", result.summary.dirs);
     let lines_str = format!("{} lines", result.summary.lines);
     let size_str = format_bytes(result.summary.bytes);
-    
+
     out.push_str(&format!(
         "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
         "Files", files_str
@@ -465,17 +506,20 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
         "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
         "Total Size", size_str
     ));
-    
+
     if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
-        let hidden_str = format!("{} files, {} dirs", result.summary.hidden_files, result.summary.hidden_dirs);
+        let hidden_str = format!(
+            "{} files, {} dirs",
+            result.summary.hidden_files, result.summary.hidden_dirs
+        );
         out.push_str(&format!(
             "│  \x1b[38;2;247;118;142m{:<12}\x1b[0m : {:<31}│\n",
             "Hidden", hidden_str
         ));
     }
-    
+
     out.push_str("\x1b[38;2;86;95;137m╰────────────────────────────────────────────────╯\x1b[0m\n");
-    
+
     Ok(out)
 }
 
@@ -488,7 +532,11 @@ pub fn get_node_icon(name: &str, is_dir: bool) -> &'static str {
             "🐙 "
         } else if lower_name == "node_modules" {
             "📦 "
-        } else if lower_name == "target" || lower_name == "build" || lower_name == "dist" || lower_name == "out" {
+        } else if lower_name == "target"
+            || lower_name == "build"
+            || lower_name == "dist"
+            || lower_name == "out"
+        {
             "🏗️ "
         } else if lower_name == "src" {
             "📂 "
@@ -496,21 +544,43 @@ pub fn get_node_icon(name: &str, is_dir: bool) -> &'static str {
             "🧪 "
         } else if lower_name == "docs" || lower_name == "doc" {
             "📖 "
-        } else if lower_name == "assets" || lower_name == "static" || lower_name == "images" || lower_name == "img" {
+        } else if lower_name == "assets"
+            || lower_name == "static"
+            || lower_name == "images"
+            || lower_name == "img"
+        {
             "🎨 "
         } else if lower_name == "config" || lower_name == "settings" {
             "⚙️ "
         } else {
             "📁 "
         }
-    } else if lower_name == "cargo.lock" || lower_name == "package-lock.json" || lower_name == "yarn.lock" || lower_name == "pnpm-lock.yaml" {
+    } else if lower_name == "cargo.lock"
+        || lower_name == "package-lock.json"
+        || lower_name == "yarn.lock"
+        || lower_name == "pnpm-lock.yaml"
+    {
         "🔒 "
-    } else if lower_name == "cargo.toml" || lower_name == "package.json" || lower_name == "tsconfig.json" 
-        || lower_name == "webpack.config.js" || lower_name == "vite.config.ts" || lower_name == "makefile" || lower_name == "cmakelists.txt" {
+    } else if lower_name == "cargo.toml"
+        || lower_name == "package.json"
+        || lower_name == "tsconfig.json"
+        || lower_name == "webpack.config.js"
+        || lower_name == "vite.config.ts"
+        || lower_name == "makefile"
+        || lower_name == "cmakelists.txt"
+    {
         "⚙️ "
-    } else if lower_name == ".gitignore" || lower_name == ".gitattributes" || lower_name == ".env" || lower_name == ".env.example" || lower_name == ".dockerignore" {
+    } else if lower_name == ".gitignore"
+        || lower_name == ".gitattributes"
+        || lower_name == ".env"
+        || lower_name == ".env.example"
+        || lower_name == ".dockerignore"
+    {
         "🛠️ "
-    } else if lower_name == "dockerfile" || lower_name == "docker-compose.yml" || lower_name == "docker-compose.yaml" {
+    } else if lower_name == "dockerfile"
+        || lower_name == "docker-compose.yml"
+        || lower_name == "docker-compose.yaml"
+    {
         "🐳 "
     } else if lower_name.ends_with(".rs") {
         "🦀 "
@@ -522,32 +592,60 @@ pub fn get_node_icon(name: &str, is_dir: bool) -> &'static str {
         "🟦 "
     } else if lower_name.ends_with(".md") {
         "📝 "
-    } else if lower_name.ends_with(".toml") || lower_name.ends_with(".json") || lower_name.ends_with(".yaml") || lower_name.ends_with(".yml") || lower_name.ends_with(".xml") || lower_name.ends_with(".ini") || lower_name.ends_with(".conf") {
+    } else if lower_name.ends_with(".toml")
+        || lower_name.ends_with(".json")
+        || lower_name.ends_with(".yaml")
+        || lower_name.ends_with(".yml")
+        || lower_name.ends_with(".xml")
+        || lower_name.ends_with(".ini")
+        || lower_name.ends_with(".conf")
+    {
         "⚙️ "
-    } else if lower_name == "license" || lower_name.starts_with("license.") || lower_name == "copying" {
+    } else if lower_name == "license"
+        || lower_name.starts_with("license.")
+        || lower_name == "copying"
+    {
         "⚖️ "
-    } else if lower_name.ends_with(".sh") || lower_name.ends_with(".bash") || lower_name.ends_with(".zsh") {
+    } else if lower_name.ends_with(".sh")
+        || lower_name.ends_with(".bash")
+        || lower_name.ends_with(".zsh")
+    {
         "🐚 "
     } else if lower_name.ends_with(".go") {
         "🐹 "
     } else if lower_name.ends_with(".c") || lower_name.ends_with(".h") {
         "🇨 "
-    } else if lower_name.ends_with(".cpp") || lower_name.ends_with(".hpp") || lower_name.ends_with(".cc") {
+    } else if lower_name.ends_with(".cpp")
+        || lower_name.ends_with(".hpp")
+        || lower_name.ends_with(".cc")
+    {
         "➕ "
     } else if lower_name.ends_with(".java") || lower_name.ends_with(".jar") {
         "☕ "
     } else if lower_name.ends_with(".html") || lower_name.ends_with(".htm") {
         "🌐 "
-    } else if lower_name.ends_with(".css") || lower_name.ends_with(".scss") || lower_name.ends_with(".sass") || lower_name.ends_with(".less") {
+    } else if lower_name.ends_with(".css")
+        || lower_name.ends_with(".scss")
+        || lower_name.ends_with(".sass")
+        || lower_name.ends_with(".less")
+    {
         "🎨 "
-    } else if lower_name.ends_with(".png") || lower_name.ends_with(".jpg") || lower_name.ends_with(".jpeg") || lower_name.ends_with(".gif") || lower_name.ends_with(".svg") || lower_name.ends_with(".ico") {
+    } else if lower_name.ends_with(".png")
+        || lower_name.ends_with(".jpg")
+        || lower_name.ends_with(".jpeg")
+        || lower_name.ends_with(".gif")
+        || lower_name.ends_with(".svg")
+        || lower_name.ends_with(".ico")
+    {
         "🖼️ "
-    } else if lower_name.ends_with(".zip") || lower_name.ends_with(".tar") || lower_name.ends_with(".gz") || lower_name.ends_with(".rar") || lower_name.ends_with(".7z") {
+    } else if lower_name.ends_with(".zip")
+        || lower_name.ends_with(".tar")
+        || lower_name.ends_with(".gz")
+        || lower_name.ends_with(".rar")
+        || lower_name.ends_with(".7z")
+    {
         "🗜️ "
     } else {
         "📄 "
     }
 }
-
-
-

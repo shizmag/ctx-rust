@@ -4,7 +4,7 @@ use std::path::PathBuf;
 pub fn run_interactive_menu<R: BufRead, W: Write>(
     mut reader: R,
     mut writer: W,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), crate::error::TuiError> {
     let mut path = PathBuf::from(".");
     let mut mode = "smart".to_string();
     let mut format = "markdown".to_string();
@@ -19,9 +19,15 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
         writeln!(
             writer,
             "4. Set max depth (current: {})",
-            max_depth.map(|d| d.to_string()).unwrap_or_else(|| "None".to_string())
+            max_depth
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "None".to_string())
         )?;
-        writeln!(writer, "5. Set max file size (current: {} KB)", max_file_size / 1024)?;
+        writeln!(
+            writer,
+            "5. Set max file size (current: {} KB)",
+            max_file_size / 1024
+        )?;
         writeln!(writer, "6. Run scan and print context to stdout")?;
         writeln!(writer, "7. Run scan and copy context to clipboard")?;
         writeln!(writer, "8. Exit")?;
@@ -189,22 +195,22 @@ pub fn run_interactive_menu<R: BufRead, W: Write>(
                             max_file_size,
                         };
                         match ctx_render::render(&scan_result, &render_options) {
-                            Ok(rendered) => {
-                                match arboard::Clipboard::new() {
-                                    Ok(mut ctx_clipboard) => {
-                                        if let Err(e) = ctx_clipboard.set_text(rendered) {
-                                            writeln!(writer, "Clipboard error: {}", e)?;
-                                        } else {
-                                            writeln!(
-                                                writer,
-                                                "Context successfully copied to clipboard! ({} files, {} tokens)",
-                                                scan_result.summary.files, scan_result.summary.tokens
-                                            )?;
-                                        }
+                            Ok(rendered) => match arboard::Clipboard::new() {
+                                Ok(mut ctx_clipboard) => {
+                                    if let Err(e) = ctx_clipboard.set_text(rendered) {
+                                        writeln!(writer, "Clipboard error: {}", e)?;
+                                    } else {
+                                        writeln!(
+                                            writer,
+                                            "Context successfully copied to clipboard! ({} files, {} tokens)",
+                                            scan_result.summary.files, scan_result.summary.tokens
+                                        )?;
                                     }
-                                    Err(e) => writeln!(writer, "Clipboard initialization error: {}", e)?,
                                 }
-                            }
+                                Err(e) => {
+                                    writeln!(writer, "Clipboard initialization error: {}", e)?
+                                }
+                            },
                             Err(e) => writeln!(writer, "Rendering error: {}", e)?,
                         }
                     }

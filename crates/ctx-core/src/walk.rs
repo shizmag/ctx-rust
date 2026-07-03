@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use ignore::{Walk, WalkBuilder};
+use std::path::{Path, PathBuf};
 
 pub fn setup_walker(root_path: &Path) -> Walk {
     WalkBuilder::new(root_path)
