@@ -89,3 +89,30 @@ Options:
 - `c` / `Enter`: Copy context of selected files to the system clipboard.
 - `r`: Rescan/refresh directory contents.
 - `q` / `Esc`: Exit TUI.
+
+---
+
+## ⚙️ Ignore Rules and Overrides
+
+`ctx` respects standard `.gitignore` rules across your workspace, including:
+- Root and nested `.gitignore` files.
+- Local repository exclusions (`.git/info/exclude`).
+- Global gitignore files (e.g. `~/.gitignore_global`, `~/.config/git/ignore`).
+
+### The `#[ctx]` Bypass Block
+If there are files or folders that you want to ignore in Git but keep visible for `ctx` (e.g., specific build outputs or local config templates that you want to include in your LLM context), you can use the special `#[ctx]` header block in any `.gitignore` file.
+
+Rules placed under `#[ctx]` will be bypassed (i.e. not ignored) by `ctx`:
+
+```text
+# Standard gitignore rules (ignored by both git and ctx)
+node_modules/
+target/
+*.log
+
+#[ctx]
+# Bypassed rules (ignored by git, but visible to ctx)
+visible.log
+dist/config-template.json
+```
+

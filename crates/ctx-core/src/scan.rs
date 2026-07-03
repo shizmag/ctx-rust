@@ -6,7 +6,7 @@ use ctx_models::{
 };
 
 use crate::error::ScanError;
-use crate::ignore::load_gitignore;
+use crate::ignore::IgnoreStack;
 use crate::kind::node_kind;
 use crate::summary;
 use crate::tree_builder::TreeBuilder;
@@ -14,7 +14,7 @@ use crate::walk::{is_inside_pruned_dir, setup_walker};
 
 pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> {
     let root_path = path.canonicalize()?;
-    let gitignore = load_gitignore(&root_path, &options.exclude);
+    let mut ignore_stack = IgnoreStack::new(root_path.clone(), &options.exclude);
 
     let engine = FilterEngine::default_smart();
     let context = FilterContext { options: &options };
@@ -41,21 +41,19 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
         let kind = node_kind(&entry);
         let is_dir = kind == NodeKind::Directory;
 
-        if let Some(ref gi) = gitignore {
-            if gi.matched(entry_path, is_dir).is_ignore() {
-                summary::increment_hidden(&mut summary, is_dir);
-                if is_dir {
-                    pruned_dirs.push(entry_path.to_path_buf());
-                }
-
-                hidden.push(HiddenItem {
-                    path: entry_path.to_path_buf(),
-                    reason: HiddenReason::Gitignored,
-                    is_dir,
-                });
-
-                continue;
+        if ignore_stack.is_ignored(entry_path, is_dir) {
+            summary::increment_hidden(&mut summary, is_dir);
+            if is_dir {
+                pruned_dirs.push(entry_path.to_path_buf());
             }
+
+            hidden.push(HiddenItem {
+                path: entry_path.to_path_buf(),
+                reason: HiddenReason::Gitignored,
+                is_dir,
+            });
+
+            continue;
         }
 
         let depth = entry.depth().saturating_sub(1);

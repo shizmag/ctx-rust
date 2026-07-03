@@ -174,3 +174,86 @@ bypass_ignored.txt
 
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn scan_respects_nested_gitignore_and_pruning() {
+    let root = std::env::temp_dir().join("ctx_core_scan_respects_nested_gitignore");
+    let _ = fs::remove_dir_all(&root);
+
+    fs::create_dir_all(root.join("src/ignored_nested")).unwrap();
+    fs::create_dir_all(root.join("logs")).unwrap();
+
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("src/ignored_nested/file.rs"), "fn ignored() {}\n").unwrap();
+    fs::write(root.join("logs/normal.txt"), "some log\n").unwrap();
+    fs::write(root.join("logs/ctx.txt"), "bypassed log\n").unwrap();
+    fs::write(root.join("visible.txt"), "visible text\n").unwrap();
+
+    // root .gitignore:
+    // normal ignores logs/ and *.txt
+    // #[ctx] bypasses visible.txt
+    let root_gitignore = "\
+# normal ignore
+logs/
+*.txt
+
+#[ctx]
+visible.txt
+";
+    fs::write(root.join(".gitignore"), root_gitignore).unwrap();
+
+    // nested .gitignore in src:
+    // normal ignores ignored_nested/
+    let nested_gitignore = "\
+ignored_nested/
+";
+    fs::write(root.join("src/.gitignore"), nested_gitignore).unwrap();
+
+    let result = scan(
+        &root,
+        ScanOptions {
+            mode: Mode::Smart,
+            max_depth: None,
+            max_file_size: 1024,
+            exclude: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let root_children: Vec<_> = result
+        .root
+        .children
+        .iter()
+        .map(|node| node.name.as_str())
+        .collect();
+
+    // Visible files:
+    // - src/main.rs (visible)
+    // - visible.txt (visible because of #[ctx] bypass, despite *.txt ignore rule)
+    // - .gitignore
+    // - src/.gitignore
+    // Total files = 4
+    assert_eq!(result.summary.files, 4);
+
+    assert!(root_children.contains(&"src"));
+    assert!(root_children.contains(&"visible.txt"));
+    assert!(root_children.contains(&".gitignore"));
+    assert!(!root_children.contains(&"logs")); // logs/ contains only ignored *.txt files
+
+    let src = result
+        .root
+        .children
+        .iter()
+        .find(|node| node.name == "src")
+        .unwrap();
+    let src_children: Vec<_> = src.children.iter().map(|node| node.name.as_str()).collect();
+    assert!(src_children.contains(&"main.rs"));
+    assert!(src_children.contains(&".gitignore"));
+    assert!(!src_children.contains(&"ignored_nested")); // ignored by nested gitignore
+
+    // Check hidden items (pruned directories are in the hidden list):
+    assert!(result.hidden.iter().any(|item| item.path.ends_with("logs") && item.is_dir));
+    assert!(result.hidden.iter().any(|item| item.path.ends_with("src/ignored_nested") && item.is_dir));
+
+    fs::remove_dir_all(root).unwrap();
+}
