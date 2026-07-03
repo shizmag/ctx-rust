@@ -5,4 +5,3 @@ edition = "2024"
 
 [dependencies]
 ctx-models = { path = "../ctx-models" }
-ctx-llm = { path = "../ctx-llm" }

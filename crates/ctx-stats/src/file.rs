@@ -1,4 +1,3 @@
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -20,39 +19,33 @@ pub fn collect_file_stats(path: &Path, max_file_size: u64) -> io::Result<FileSta
     }
 
     let bytes = metadata.len();
-    if bytes > max_file_size {
-        return Ok(FileStats {
-            lines: 0,
-            bytes,
-            tokens: 0,
-            is_text: false,
-            skipped_reason: Some(StatsSkipReason::TooLarge),
-        });
-    }
 
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
-            return Ok(FileStats {
+    match ctx_models::read_file_content(path, max_file_size) {
+        ctx_models::FileContentResult::Text(content) => {
+            let tokens = crate::estimate_tokens(&content);
+            Ok(FileStats {
+                lines: count_lines(&content),
                 bytes,
+                tokens,
+                is_text: true,
+                skipped_reason: None,
+            })
+        }
+        ctx_models::FileContentResult::Skipped(reason) => {
+            let skipped_reason = match reason {
+                ctx_models::FileSkipReason::TooLarge => StatsSkipReason::TooLarge,
+                ctx_models::FileSkipReason::NonUtf8 => StatsSkipReason::NonUtf8,
+            };
+            Ok(FileStats {
                 lines: 0,
+                bytes,
                 tokens: 0,
                 is_text: false,
-                skipped_reason: Some(StatsSkipReason::NonUtf8),
-            });
+                skipped_reason: Some(skipped_reason),
+            })
         }
-        Err(err) => {
-            return Err(err);
+        ctx_models::FileContentResult::ReadError(err) => {
+            Err(io::Error::new(io::ErrorKind::Other, err))
         }
-    };
-
-    let tokens = ctx_llm::estimate_tokens(&content);
-
-    Ok(FileStats {
-        lines: count_lines(&content),
-        bytes,
-        tokens,
-        is_text: true,
-        skipped_reason: None,
-    })
+    }
 }

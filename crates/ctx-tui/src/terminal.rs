@@ -1,0 +1,79 @@
+use std::io;
+use std::path::{Path, PathBuf};
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use crate::app::TuiApp;
+use crate::events::run_app;
+
+pub(crate) fn open_file<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    path: &Path,
+    is_text: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if is_text {
+        // Suspend TUI
+        disable_raw_mode()?;
+        execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        
+        let editor = std::env::var("EDITOR")
+            .unwrap_or_else(|_| "nvim".to_string());
+            
+        let mut child = std::process::Command::new(editor)
+            .arg(path)
+            .spawn()?;
+            
+        child.wait()?;
+        
+        // Restore TUI
+        enable_raw_mode()?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
+        terminal.clear()?;
+    } else {
+        // Open using default system app (background)
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open").arg(path).spawn()?;
+        #[cfg(target_os = "windows")]
+        std::process::Command::new("cmd").args(["/C", "start"]).arg(path).spawn()?;
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
+    }
+    Ok(())
+}
+
+pub fn run_default_interactive_menu() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = TuiApp::new(PathBuf::from("."))?;
+
+    let run_res = run_app(&mut terminal, &mut app);
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = run_res {
+        println!("TUI Error: {}", err);
+    }
+
+    Ok(())
+}

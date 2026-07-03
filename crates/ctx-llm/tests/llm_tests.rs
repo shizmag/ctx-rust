@@ -1,13 +1,6 @@
 use std::fs;
-use ctx_llm::{estimate_tokens, build_context};
+use ctx_llm::build_context;
 use ctx_models::{ScanResult, TreeNode, NodeKind, NodeStats, ProjectSummary};
-
-#[test]
-fn test_estimate_tokens() {
-    assert_eq!(estimate_tokens(""), 0);
-    assert_eq!(estimate_tokens("hello"), 2); // (5 + 3) / 4 = 2
-    assert_eq!(estimate_tokens("hello world"), 3); // (11 + 3) / 4 = 3
-}
 
 #[test]
 fn test_build_context() {

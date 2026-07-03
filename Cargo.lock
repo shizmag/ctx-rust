@@ -299,7 +299,6 @@ dependencies = [
 name = "ctx-stats"
 version = "0.1.0"
 dependencies = [
- "ctx-llm",
  "ctx-models",
 ]
 

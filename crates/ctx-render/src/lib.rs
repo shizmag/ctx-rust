@@ -1,5 +1,5 @@
 use std::path::Path;
-use ctx_models::{NodeKind, ScanResult, TreeNode};
+use ctx_models::{NodeKind, ScanResult, TreeNode, walk_tree_lines, format_bytes, get_relative_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -33,42 +33,22 @@ pub fn render(result: &ScanResult, options: &RenderOptions) -> Result<String, st
     }
 }
 
-fn get_relative_path(path: &Path, root_path: &Path) -> String {
-    match path.strip_prefix(root_path) {
-        Ok(rel) => rel.to_string_lossy().to_string(),
-        Err(_) => path.to_string_lossy().to_string(),
-    }
-}
-
 fn render_tree(root: &TreeNode) -> String {
     let mut out = String::new();
-    render_tree_node(root, "", true, true, &mut out);
+    walk_tree_lines(root, |line| {
+        if line.is_root {
+            out.push_str(&line.node.name);
+            out.push('\n');
+        } else {
+            let connector = if line.is_last { "└── " } else { "├── " };
+            out.push_str(&line.prefix);
+            out.push_str(connector);
+            out.push_str(&line.node.name);
+            out.push('\n');
+        }
+        true
+    });
     out
-}
-
-fn render_tree_node(node: &TreeNode, prefix: &str, is_last: bool, is_root: bool, out: &mut String) {
-    if is_root {
-        out.push_str(&node.name);
-        out.push('\n');
-    } else {
-        let connector = if is_last { "└── " } else { "├── " };
-        out.push_str(prefix);
-        out.push_str(connector);
-        out.push_str(&node.name);
-        out.push('\n');
-    }
-
-    let next_prefix = if is_root {
-        "".to_string()
-    } else {
-        format!("{}{}", prefix, if is_last { "    " } else { "│   " })
-    };
-
-    let count = node.children.len();
-    for (i, child) in node.children.iter().enumerate() {
-        let child_is_last = i == count - 1;
-        render_tree_node(child, &next_prefix, child_is_last, false, out);
-    }
 }
 
 fn collect_file_nodes<'a>(node: &'a TreeNode, files: &mut Vec<&'a TreeNode>) {
@@ -80,29 +60,21 @@ fn collect_file_nodes<'a>(node: &'a TreeNode, files: &mut Vec<&'a TreeNode>) {
     }
 }
 
-enum FileContentResult {
-    Success(String),
-    Skipped(String),
-}
-
-fn read_file_content(node: &TreeNode, max_file_size: u64) -> FileContentResult {
-    // Check size limit
-    if node.stats.bytes > max_file_size {
-        return FileContentResult::Skipped(format!(
-            "Too large ({} KB, limit is {} KB)",
-            node.stats.bytes / 1024,
-            max_file_size / 1024
-        ));
-    }
-
-    match std::fs::read_to_string(&node.path) {
-        Ok(content) => FileContentResult::Success(content),
-        Err(err) => {
-            if err.kind() == std::io::ErrorKind::InvalidData {
-                FileContentResult::Skipped("Binary / Non-UTF8 file".to_string())
-            } else {
-                FileContentResult::Skipped(format!("Read error: {}", err))
-            }
+fn get_skip_reason(node: &TreeNode, res: &ctx_models::FileContentResult, max_file_size: u64) -> String {
+    match res {
+        ctx_models::FileContentResult::Text(_) => String::new(),
+        ctx_models::FileContentResult::Skipped(ctx_models::FileSkipReason::TooLarge) => {
+            format!(
+                "Too large ({} KB, limit is {} KB)",
+                node.stats.bytes / 1024,
+                max_file_size / 1024
+            )
+        }
+        ctx_models::FileContentResult::Skipped(ctx_models::FileSkipReason::NonUtf8) => {
+            "Binary / Non-UTF8 file".to_string()
+        }
+        ctx_models::FileContentResult::ReadError(err) => {
+            format!("Read error: {}", err)
         }
     }
 }
@@ -133,16 +105,6 @@ fn get_markdown_lang(path: &Path) -> &'static str {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    }
-}
-
 fn escape_xml(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len());
     for c in s.chars() {
@@ -156,6 +118,23 @@ fn escape_xml(s: &str) -> String {
         }
     }
     escaped
+}
+
+fn get_markdown_fence(content: &str) -> String {
+    let mut max_backticks = 0;
+    let mut current_backticks = 0;
+    for c in content.chars() {
+        if c == '`' {
+            current_backticks += 1;
+            if current_backticks > max_backticks {
+                max_backticks = current_backticks;
+            }
+        } else {
+            current_backticks = 0;
+        }
+    }
+    let fence_len = std::cmp::max(3, max_backticks + 1);
+    "`".repeat(fence_len)
 }
 
 fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<String, std::io::Error> {
@@ -191,17 +170,19 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
         out.push_str(&format!("### `{}`\n", rel_path));
         
-        match read_file_content(file_node, options.max_file_size) {
-            FileContentResult::Success(content) => {
+        match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
+            ctx_models::FileContentResult::Text(content) => {
                 let lang = get_markdown_lang(&file_node.path);
-                out.push_str(&format!("```{}\n", lang));
+                let fence = get_markdown_fence(&content);
+                out.push_str(&format!("{}{}\n", fence, lang));
                 out.push_str(&content);
                 if !content.ends_with('\n') {
                     out.push('\n');
                 }
-                out.push_str("```\n\n");
+                out.push_str(&format!("{}\n\n", fence));
             }
-            FileContentResult::Skipped(reason) => {
+            other => {
+                let reason = get_skip_reason(file_node, &other, options.max_file_size);
                 out.push_str(&format!("*Skipped: {}*\n\n", reason));
             }
         }
@@ -246,19 +227,16 @@ fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, st
     for file_node in files {
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
         
-        match read_file_content(file_node, options.max_file_size) {
-            FileContentResult::Success(content) => {
+        match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
+            ctx_models::FileContentResult::Text(content) => {
                 out.push_str(&format!("    <file path=\"{}\">\n", escape_xml(&rel_path)));
-                let escaped_content = escape_xml(&content);
-                // Indent content lines for readability
-                for line in escaped_content.lines() {
-                    out.push_str("      ");
-                    out.push_str(line);
-                    out.push('\n');
-                }
+                out.push_str("      <content>");
+                out.push_str(&escape_xml(&content));
+                out.push_str("</content>\n");
                 out.push_str("    </file>\n");
             }
-            FileContentResult::Skipped(reason) => {
+            other => {
+                let reason = get_skip_reason(file_node, &other, options.max_file_size);
                 out.push_str(&format!(
                     "    <file path=\"{}\" skipped=\"{}\" />\n",
                     escape_xml(&rel_path),
@@ -297,8 +275,8 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
     for file_node in files {
         let rel_path = get_relative_path(&file_node.path, &result.root.path);
         
-        match read_file_content(file_node, options.max_file_size) {
-            FileContentResult::Success(content) => {
+        match ctx_models::read_file_content(&file_node.path, options.max_file_size) {
+            ctx_models::FileContentResult::Text(content) => {
                 out.push_str("================================================================================\n");
                 out.push_str(&format!("File: {}\n", rel_path));
                 out.push_str("================================================================================\n");
@@ -308,7 +286,8 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
                 }
                 out.push('\n');
             }
-            FileContentResult::Skipped(reason) => {
+            other => {
+                let reason = get_skip_reason(file_node, &other, options.max_file_size);
                 out.push_str("================================================================================\n");
                 out.push_str(&format!("File: {} [Skipped: {}]\n", rel_path, reason));
                 out.push_str("================================================================================\n\n");
@@ -322,7 +301,141 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
 pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error> {
     let mut out = String::new();
     
-    render_colored_tree_node(&result.root, "", true, true, &mut out);
+    let reset = "\x1b[0m";
+    let gray = "\x1b[38;2;86;95;137m";
+    let bold_blue = "\x1b[1;38;2;122;162;247m";
+    let green = "\x1b[38;2;158;206;106m";
+    let yellow = "\x1b[38;2;224;175;104m";
+    let magenta = "\x1b[38;2;187;154;247m";
+    let foreground = "\x1b[38;2;192;202;245m";
+
+    walk_tree_lines(&result.root, |line| {
+        let node = line.node;
+        let is_dir = node.kind == NodeKind::Directory;
+        let icon = get_node_icon(&node.name, is_dir);
+
+        // Calculate prefix, icon, name lengths for alignment
+        let prefix_len = if line.is_root { 0 } else { line.prefix.chars().count() + 4 };
+        let icon_width = 2; // Emoji icon + 1 space
+        let name_len = node.name.chars().count() + if is_dir { 1 } else { 0 };
+        let total_width = prefix_len + icon_width + name_len;
+
+        let target_col = 55;
+        let padding_count = if total_width < target_col {
+            target_col - total_width
+        } else {
+            1
+        };
+        let leader = if total_width < target_col {
+            format!("{}{}{}", gray, ".".repeat(padding_count), reset)
+        } else {
+            " ".to_string()
+        };
+
+        if line.is_root {
+            let mut dir_parts = Vec::new();
+            if node.stats.files > 0 {
+                dir_parts.push(format!("{} files", node.stats.files));
+            }
+            let subdirs = node.stats.dirs.saturating_sub(1);
+            if subdirs > 0 {
+                dir_parts.push(format!("{} dirs", subdirs));
+            }
+            if node.stats.lines > 0 {
+                dir_parts.push(format!("{} lines", node.stats.lines));
+            }
+            if node.stats.tokens > 0 {
+                dir_parts.push(format!("{} tokens", node.stats.tokens));
+            }
+            
+            let stats_str = if !dir_parts.is_empty() {
+                format!(" ({})", dir_parts.join(", "))
+            } else {
+                "".to_string()
+            };
+
+            out.push_str(&format!(
+                "{}{}{}/{}{}{}{}{}\n",
+                bold_blue, icon, node.name, reset, leader, gray, stats_str, reset
+            ));
+        } else {
+            let connector = if line.is_last { "└── " } else { "├── " };
+            out.push_str(&format!("{}{}{}", gray, line.prefix, connector));
+            
+            match node.kind {
+                NodeKind::Directory => {
+                    let mut dir_parts = Vec::new();
+                    if node.stats.files > 0 {
+                        dir_parts.push(format!("{} files", node.stats.files));
+                    }
+                    let subdirs = node.stats.dirs.saturating_sub(1);
+                    if subdirs > 0 {
+                        dir_parts.push(format!("{} dirs", subdirs));
+                    }
+                    if node.stats.lines > 0 {
+                        dir_parts.push(format!("{} lines", node.stats.lines));
+                    }
+                    if node.stats.tokens > 0 {
+                        dir_parts.push(format!("{} tokens", node.stats.tokens));
+                    }
+                    
+                    let stats_str = if !dir_parts.is_empty() {
+                        format!(" ({})", dir_parts.join(", "))
+                    } else {
+                        "".to_string()
+                    };
+
+                    out.push_str(&format!(
+                        "{}{}{}/{}{}{}{}{}\n",
+                        bold_blue, icon, node.name, reset, leader, gray, stats_str, reset
+                    ));
+                }
+                NodeKind::File => {
+                    let extension = std::path::Path::new(&node.name)
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    
+                    let file_color = match extension.as_str() {
+                        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "go" | "java" | "swift" | "html" | "css" | "sh" | "bash" => green,
+                        "md" | "txt" | "pdf" | "adoc" | "license" => yellow,
+                        "toml" | "json" | "yaml" | "yml" | "lock" | "ini" | "conf" | "xml" => magenta,
+                        _ => foreground,
+                    };
+
+                    let mut stats_parts = Vec::new();
+                    if node.stats.lines > 0 {
+                        stats_parts.push(format!("{} lines", node.stats.lines));
+                    }
+                    if node.stats.tokens > 0 {
+                        stats_parts.push(format!("{} tokens", node.stats.tokens));
+                    }
+                    if node.stats.bytes > 0 {
+                        stats_parts.push(format_bytes(node.stats.bytes));
+                    }
+                    
+                    let stats_str = if !stats_parts.is_empty() {
+                        format!(" ({})", stats_parts.join(", "))
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    out.push_str(&format!(
+                        "{}{}{}{}{}{}{}{}\n",
+                        file_color, icon, node.name, reset, leader, gray, stats_str, reset
+                    ));
+                }
+                _ => {
+                    out.push_str(&format!(
+                        "{}{}{}{}{}\n",
+                        foreground, node.name, reset, leader, reset
+                    ));
+                }
+            }
+        }
+        true
+    });
     
     // Add space and a gorgeous project summary box in Tokyo Night style!
     out.push_str("\n\x1b[38;2;86;95;137m╭────────────────────────────────────────────────╮\x1b[0m\n");
@@ -436,156 +549,5 @@ pub fn get_node_icon(name: &str, is_dir: bool) -> &'static str {
     }
 }
 
-fn render_colored_tree_node(
-    node: &TreeNode,
-    prefix: &str,
-    is_last: bool,
-    is_root: bool,
-    out: &mut String,
-) {
-    let reset = "\x1b[0m";
-    let gray = "\x1b[38;2;86;95;137m";
-    let bold_blue = "\x1b[1;38;2;122;162;247m";
-    let green = "\x1b[38;2;158;206;106m";
-    let yellow = "\x1b[38;2;224;175;104m";
-    let magenta = "\x1b[38;2;187;154;247m";
-    let foreground = "\x1b[38;2;192;202;245m";
-
-    let is_dir = node.kind == NodeKind::Directory;
-    let icon = get_node_icon(&node.name, is_dir);
-
-    // Calculate prefix, icon, name lengths for alignment
-    let prefix_len = if is_root { 0 } else { prefix.chars().count() + 4 };
-    let icon_width = 2; // Emoji icon + 1 space
-    let name_len = node.name.chars().count() + if is_dir { 1 } else { 0 };
-    let total_width = prefix_len + icon_width + name_len;
-
-    let target_col = 55;
-    let padding_count = if total_width < target_col {
-        target_col - total_width
-    } else {
-        1
-    };
-    let leader = if total_width < target_col {
-        format!("{}{}{}", gray, ".".repeat(padding_count), reset)
-    } else {
-        " ".to_string()
-    };
-
-    if is_root {
-        let mut dir_parts = Vec::new();
-        if node.stats.files > 0 {
-            dir_parts.push(format!("{} files", node.stats.files));
-        }
-        let subdirs = node.stats.dirs.saturating_sub(1);
-        if subdirs > 0 {
-            dir_parts.push(format!("{} dirs", subdirs));
-        }
-        if node.stats.lines > 0 {
-            dir_parts.push(format!("{} lines", node.stats.lines));
-        }
-        if node.stats.tokens > 0 {
-            dir_parts.push(format!("{} tokens", node.stats.tokens));
-        }
-        
-        let stats_str = if !dir_parts.is_empty() {
-            format!(" ({})", dir_parts.join(", "))
-        } else {
-            "".to_string()
-        };
-
-        out.push_str(&format!(
-            "{}{}{}/{}{}{}{}{}\n",
-            bold_blue, icon, node.name, reset, leader, gray, stats_str, reset
-        ));
-    } else {
-        let connector = if is_last { "└── " } else { "├── " };
-        out.push_str(&format!("{}{}{}", gray, prefix, connector));
-        
-        match node.kind {
-            NodeKind::Directory => {
-                let mut dir_parts = Vec::new();
-                if node.stats.files > 0 {
-                    dir_parts.push(format!("{} files", node.stats.files));
-                }
-                let subdirs = node.stats.dirs.saturating_sub(1);
-                if subdirs > 0 {
-                    dir_parts.push(format!("{} dirs", subdirs));
-                }
-                if node.stats.lines > 0 {
-                    dir_parts.push(format!("{} lines", node.stats.lines));
-                }
-                if node.stats.tokens > 0 {
-                    dir_parts.push(format!("{} tokens", node.stats.tokens));
-                }
-                
-                let stats_str = if !dir_parts.is_empty() {
-                    format!(" ({})", dir_parts.join(", "))
-                } else {
-                    "".to_string()
-                };
-
-                out.push_str(&format!(
-                    "{}{}{}/{}{}{}{}{}\n",
-                    bold_blue, icon, node.name, reset, leader, gray, stats_str, reset
-                ));
-            }
-            NodeKind::File => {
-                let extension = std::path::Path::new(&node.name)
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                
-                let file_color = match extension.as_str() {
-                    "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "go" | "java" | "swift" | "html" | "css" | "sh" | "bash" => green,
-                    "md" | "txt" | "pdf" | "adoc" | "license" => yellow,
-                    "toml" | "json" | "yaml" | "yml" | "lock" | "ini" | "conf" | "xml" => magenta,
-                    _ => foreground,
-                };
-
-                let mut stats_parts = Vec::new();
-                if node.stats.lines > 0 {
-                    stats_parts.push(format!("{} lines", node.stats.lines));
-                }
-                if node.stats.tokens > 0 {
-                    stats_parts.push(format!("{} tokens", node.stats.tokens));
-                }
-                if node.stats.bytes > 0 {
-                    stats_parts.push(format_bytes(node.stats.bytes));
-                }
-                
-                let stats_str = if !stats_parts.is_empty() {
-                    format!(" ({})", stats_parts.join(", "))
-                } else {
-                    "".to_string()
-                };
-                
-                out.push_str(&format!(
-                    "{}{}{}{}{}{}{}{}\n",
-                    file_color, icon, node.name, reset, leader, gray, stats_str, reset
-                ));
-            }
-            _ => {
-                out.push_str(&format!(
-                    "{}{}{}{}{}\n",
-                    foreground, node.name, reset, leader, reset
-                ));
-            }
-        }
-    }
-
-    let next_prefix = if is_root {
-        "".to_string()
-    } else {
-        format!("{}{}", prefix, if is_last { "    " } else { "│   " })
-    };
-
-    let count = node.children.len();
-    for (i, child) in node.children.iter().enumerate() {
-        let child_is_last = i == count - 1;
-        render_colored_tree_node(child, &next_prefix, child_is_last, false, out);
-    }
-}
 
 

@@ -1,15 +1,5 @@
 use std::path::Path;
-use ctx_models::ScanResult;
-
-/// Estimates the number of tokens in a string.
-/// A standard approximation is ~4 characters per token.
-pub fn estimate_tokens(content: &str) -> usize {
-    if content.is_empty() {
-        0
-    } else {
-        (content.chars().count() + 3) / 4
-    }
-}
+use ctx_models::{ScanResult, get_relative_path};
 
 /// Forms the context string containing directory structure and all file contents,
 /// annotated with token counts.
@@ -30,65 +20,49 @@ pub fn build_context(result: &ScanResult, max_file_size: u64) -> String {
 
 fn render_tree(node: &ctx_models::TreeNode) -> String {
     let mut out = String::new();
-    render_tree_node(node, "", true, true, &mut out);
+    ctx_models::walk_tree_lines(node, |line| {
+        let tokens_str = if line.node.stats.tokens > 0 {
+            format!(" ({} tokens)", line.node.stats.tokens)
+        } else {
+            "".to_string()
+        };
+
+        if line.is_root {
+            out.push_str(&format!("{}{}\n", line.node.name, tokens_str));
+        } else {
+            let connector = if line.is_last { "└── " } else { "├── " };
+            out.push_str(&line.prefix);
+            out.push_str(connector);
+            out.push_str(&format!("{}{}\n", line.node.name, tokens_str));
+        }
+        true
+    });
     out
-}
-
-fn render_tree_node(node: &ctx_models::TreeNode, prefix: &str, is_last: bool, is_root: bool, out: &mut String) {
-    let tokens_str = if node.stats.tokens > 0 {
-        format!(" ({} tokens)", node.stats.tokens)
-    } else {
-        "".to_string()
-    };
-
-    if is_root {
-        out.push_str(&format!("{}{}\n", node.name, tokens_str));
-    } else {
-        let connector = if is_last { "└── " } else { "├── " };
-        out.push_str(prefix);
-        out.push_str(connector);
-        out.push_str(&format!("{}{}\n", node.name, tokens_str));
-    }
-
-    let next_prefix = if is_root {
-        "".to_string()
-    } else {
-        format!("{}{}", prefix, if is_last { "    " } else { "│   " })
-    };
-
-    let count = node.children.len();
-    for (i, child) in node.children.iter().enumerate() {
-        let child_is_last = i == count - 1;
-        render_tree_node(child, &next_prefix, child_is_last, false, out);
-    }
 }
 
 fn append_files_content(node: &ctx_models::TreeNode, max_file_size: u64, root_path: &Path, out: &mut String) {
     if node.kind == ctx_models::NodeKind::File {
-        let rel_path = match node.path.strip_prefix(root_path) {
-            Ok(rel) => rel.to_string_lossy().to_string(),
-            Err(_) => node.path.to_string_lossy().to_string(),
-        };
+        let rel_path = get_relative_path(&node.path, root_path);
 
         out.push_str(&format!("--- FILE: {} ({} tokens) ---\n", rel_path, node.stats.tokens));
         
-        if node.stats.bytes > max_file_size {
-            out.push_str(&format!("[File skipped: Too large ({} KB)]\n\n", node.stats.bytes / 1024));
-            return;
-        }
-
-        match std::fs::read_to_string(&node.path) {
-            Ok(content) => {
+        match ctx_models::read_file_content(&node.path, max_file_size) {
+            ctx_models::FileContentResult::Text(content) => {
                 out.push_str(&content);
                 if !content.ends_with('\n') {
                     out.push('\n');
                 }
                 out.push('\n');
             }
-            Err(_) => {
+            ctx_models::FileContentResult::Skipped(ctx_models::FileSkipReason::TooLarge) => {
+                out.push_str(&format!("[File skipped: Too large ({} KB)]\n\n", node.stats.bytes / 1024));
+            }
+            ctx_models::FileContentResult::Skipped(ctx_models::FileSkipReason::NonUtf8)
+            | ctx_models::FileContentResult::ReadError(_) => {
                 out.push_str("[File skipped: Binary or read error]\n\n");
             }
         }
+        return;
     }
 
     for child in &node.children {
