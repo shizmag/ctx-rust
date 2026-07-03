@@ -4,6 +4,48 @@ use clap::Parser;
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lowercase")]
+pub enum CliMode {
+    Smart,
+    All,
+    Code,
+    Docs,
+    Llm,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lowercase")]
+pub enum CliFormat {
+    #[value(alias = "md")]
+    Markdown,
+    Xml,
+    #[value(alias = "txt", alias = "text")]
+    Plain,
+}
+
+impl From<CliMode> for Mode {
+    fn from(mode: CliMode) -> Self {
+        match mode {
+            CliMode::Smart => Mode::Smart,
+            CliMode::All => Mode::All,
+            CliMode::Code => Mode::Code,
+            CliMode::Docs => Mode::Docs,
+            CliMode::Llm => Mode::Llm,
+        }
+    }
+}
+
+impl From<CliFormat> for Format {
+    fn from(format: CliFormat) -> Self {
+        match format {
+            CliFormat::Markdown => Format::Markdown,
+            CliFormat::Xml => Format::Xml,
+            CliFormat::Plain => Format::Plain,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "ctx", 
@@ -17,11 +59,11 @@ struct Args {
 
     /// Format for the full context output. Choose from: 'markdown' (or 'md'), 'xml', 'plain' (or 'text', 'txt').
     #[arg(short, long, default_value = "markdown")]
-    format: String,
+    format: CliFormat,
 
     /// Gathering strategy mode: 'smart' (respects gitignore + sensible skips), 'all' (scans all files), 'code' (prioritizes code files), 'docs' (prioritizes docs/markdown), 'llm' (structures with token counts).
     #[arg(short, long, default_value = "smart")]
-    mode: String,
+    mode: CliMode,
 
     /// Restrict directory traversal to the specified maximum depth.
     #[arg(long)]
@@ -56,32 +98,6 @@ struct Args {
     interactive: bool,
 }
 
-fn parse_mode(s: &str) -> Result<Mode, String> {
-    match s.to_lowercase().as_str() {
-        "smart" => Ok(Mode::Smart),
-        "all" => Ok(Mode::All),
-        "code" => Ok(Mode::Code),
-        "docs" => Ok(Mode::Docs),
-        "llm" => Ok(Mode::Llm),
-        _ => Err(format!(
-            "invalid mode '{}'. Choose from: smart, all, code, docs, llm",
-            s
-        )),
-    }
-}
-
-fn parse_format(s: &str) -> Result<Format, String> {
-    match s.to_lowercase().as_str() {
-        "markdown" | "md" => Ok(Format::Markdown),
-        "xml" => Ok(Format::Xml),
-        "plain" | "txt" | "text" => Ok(Format::Plain),
-        _ => Err(format!(
-            "invalid format '{}'. Choose from: markdown (md), xml, plain (txt)",
-            s
-        )),
-    }
-}
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("Error: {}", err);
@@ -96,8 +112,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return ctx_tui::run_default_interactive_menu();
     }
 
-    let mode = parse_mode(&args.mode)?;
-    let format = parse_format(&args.format)?;
+    let mode = Mode::from(args.mode);
+    let format = Format::from(args.format);
 
     let scan_options = ScanOptions {
         max_depth: args.max_depth,

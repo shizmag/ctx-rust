@@ -91,6 +91,8 @@ pub enum HiddenReason {
     LargeFile,
     Binary,
     Gitignored,
+    NonCode,
+    NonDocs,
 }
 
 impl HiddenReason {
@@ -106,6 +108,8 @@ impl HiddenReason {
             HiddenReason::LargeFile => "large file",
             HiddenReason::Binary => "binary file",
             HiddenReason::Gitignored => "gitignored",
+            HiddenReason::NonCode => "non-code file",
+            HiddenReason::NonDocs => "non-document file",
         }
     }
 }

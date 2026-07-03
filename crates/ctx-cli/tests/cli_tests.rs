@@ -61,3 +61,39 @@ fn test_cli_scan() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_cli_mode_and_format_parsing() {
+    // Test that aliases and various options are parsed successfully by clap
+    let status_docs_md = Command::new("cargo")
+        .args(["run", "--bin", "ctx", "--", ".", "-m", "docs", "-f", "md", "--no-stats"])
+        .status()
+        .expect("failed to execute cargo run");
+    assert!(status_docs_md.success());
+
+    let status_code_txt = Command::new("cargo")
+        .args(["run", "--bin", "ctx", "--", ".", "-m", "code", "-f", "txt", "--no-stats"])
+        .status()
+        .expect("failed to execute cargo run");
+    assert!(status_code_txt.success());
+
+    let status_llm_text = Command::new("cargo")
+        .args(["run", "--bin", "ctx", "--", ".", "-m", "llm", "-f", "text", "--no-stats"])
+        .status()
+        .expect("failed to execute cargo run");
+    assert!(status_llm_text.success());
+
+    // Test that invalid mode fails to parse
+    let status_invalid_mode = Command::new("cargo")
+        .args(["run", "--bin", "ctx", "--", ".", "-m", "invalid_mode"])
+        .status()
+        .expect("failed to execute cargo run");
+    assert!(!status_invalid_mode.success());
+
+    // Test that invalid format fails to parse
+    let status_invalid_format = Command::new("cargo")
+        .args(["run", "--bin", "ctx", "--", ".", "-f", "invalid_format"])
+        .status()
+        .expect("failed to execute cargo run");
+    assert!(!status_invalid_format.success());
+}
