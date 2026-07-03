@@ -52,28 +52,37 @@ pub(crate) fn open_file<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-pub fn run_default_interactive_menu() -> Result<(), Box<dyn std::error::Error>> {
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        );
+    }
+}
+
+pub fn run_interactive(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    
+    let _guard = TerminalGuard;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = TuiApp::new(PathBuf::from("."))?;
+    let mut app = TuiApp::new(path)?;
 
-    let run_res = run_app(&mut terminal, &mut app);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = run_res {
-        println!("TUI Error: {}", err);
-    }
+    run_app(&mut terminal, &mut app)?;
 
     Ok(())
+}
+
+pub fn run_default_interactive_menu() -> Result<(), Box<dyn std::error::Error>> {
+    run_interactive(PathBuf::from("."))
 }

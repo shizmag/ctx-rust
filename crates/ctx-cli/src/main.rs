@@ -107,9 +107,15 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    run_with_args(args, ctx_tui::run_interactive)
+}
 
+fn run_with_args<F>(args: Args, run_tui: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(PathBuf) -> Result<(), Box<dyn std::error::Error>>,
+{
     if args.interactive {
-        return ctx_tui::run_default_interactive_menu();
+        return run_tui(args.path);
     }
 
     let config = ctx_config::find_and_load_config(&args.path).unwrap_or_default();
@@ -182,4 +188,36 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_passes_path_to_tui() {
+        let args = Args {
+            path: PathBuf::from("/mock/path/to/project"),
+            format: None,
+            mode: None,
+            max_depth: None,
+            max_file_size: None,
+            output: None,
+            no_stats: false,
+            list_hidden: false,
+            clipboard: false,
+            code: false,
+            interactive: true,
+        };
+
+        let mut path_called = None;
+        let mock_run_tui = |path: PathBuf| {
+            path_called = Some(path);
+            Ok(())
+        };
+
+        let res = run_with_args(args, mock_run_tui);
+        assert!(res.is_ok());
+        assert_eq!(path_called, Some(PathBuf::from("/mock/path/to/project")));
+    }
 }
