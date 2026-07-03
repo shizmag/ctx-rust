@@ -4,7 +4,7 @@ use std::process::Command;
 #[test]
 fn test_cli_help() {
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "ctx", "--", "--help"])
+        .args(["run", "--bin", "ctx", "--", "--help"])
         .output()
         .expect("failed to execute cargo run");
 
@@ -22,7 +22,7 @@ fn test_cli_scan() {
 
     // 1. Test ordinary call: should print colored tree and summary
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "ctx",
@@ -41,7 +41,7 @@ fn test_cli_scan() {
 
     // 2. Test call with -C (code): should print the full code content
     let output_code = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "ctx",

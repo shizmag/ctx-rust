@@ -201,12 +201,10 @@ fn load_gitignore(root_path: &Path) -> Option<ignore::gitignore::Gitignore> {
                 current_block.clear();
                 has_ctx = false;
             }
+        } else if trimmed == "#[ctx]" {
+            has_ctx = true;
         } else {
-            if trimmed == "#[ctx]" {
-                has_ctx = true;
-            } else {
-                current_block.push(line.to_string());
-            }
+            current_block.push(line.to_string());
         }
     }
 

@@ -8,12 +8,12 @@ pub fn node_kind(entry: &DirEntry) -> NodeKind {
     };
 
     if file_type.is_file() {
-        return NodeKind::File;
+        NodeKind::File
     } else if file_type.is_dir() {
-        return NodeKind::Directory;
+        NodeKind::Directory
     } else if file_type.is_symlink() {
-        return NodeKind::Symlink;
+        NodeKind::Symlink
     } else {
-        return NodeKind::Other;
+        NodeKind::Other
     }
 }

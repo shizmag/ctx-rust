@@ -390,51 +390,49 @@ pub fn get_node_icon(name: &str, is_dir: bool) -> &'static str {
         } else {
             "📁 "
         }
+    } else if lower_name == "cargo.lock" || lower_name == "package-lock.json" || lower_name == "yarn.lock" || lower_name == "pnpm-lock.yaml" {
+        "🔒 "
+    } else if lower_name == "cargo.toml" || lower_name == "package.json" || lower_name == "tsconfig.json" 
+        || lower_name == "webpack.config.js" || lower_name == "vite.config.ts" || lower_name == "makefile" || lower_name == "cmakelists.txt" {
+        "⚙️ "
+    } else if lower_name == ".gitignore" || lower_name == ".gitattributes" || lower_name == ".env" || lower_name == ".env.example" || lower_name == ".dockerignore" {
+        "🛠️ "
+    } else if lower_name == "dockerfile" || lower_name == "docker-compose.yml" || lower_name == "docker-compose.yaml" {
+        "🐳 "
+    } else if lower_name.ends_with(".rs") {
+        "🦀 "
+    } else if lower_name.ends_with(".py") {
+        "🐍 "
+    } else if lower_name.ends_with(".js") || lower_name.ends_with(".jsx") {
+        "🟨 "
+    } else if lower_name.ends_with(".ts") || lower_name.ends_with(".tsx") {
+        "🟦 "
+    } else if lower_name.ends_with(".md") {
+        "📝 "
+    } else if lower_name.ends_with(".toml") || lower_name.ends_with(".json") || lower_name.ends_with(".yaml") || lower_name.ends_with(".yml") || lower_name.ends_with(".xml") || lower_name.ends_with(".ini") || lower_name.ends_with(".conf") {
+        "⚙️ "
+    } else if lower_name == "license" || lower_name.starts_with("license.") || lower_name == "copying" {
+        "⚖️ "
+    } else if lower_name.ends_with(".sh") || lower_name.ends_with(".bash") || lower_name.ends_with(".zsh") {
+        "🐚 "
+    } else if lower_name.ends_with(".go") {
+        "🐹 "
+    } else if lower_name.ends_with(".c") || lower_name.ends_with(".h") {
+        "🇨 "
+    } else if lower_name.ends_with(".cpp") || lower_name.ends_with(".hpp") || lower_name.ends_with(".cc") {
+        "➕ "
+    } else if lower_name.ends_with(".java") || lower_name.ends_with(".jar") {
+        "☕ "
+    } else if lower_name.ends_with(".html") || lower_name.ends_with(".htm") {
+        "🌐 "
+    } else if lower_name.ends_with(".css") || lower_name.ends_with(".scss") || lower_name.ends_with(".sass") || lower_name.ends_with(".less") {
+        "🎨 "
+    } else if lower_name.ends_with(".png") || lower_name.ends_with(".jpg") || lower_name.ends_with(".jpeg") || lower_name.ends_with(".gif") || lower_name.ends_with(".svg") || lower_name.ends_with(".ico") {
+        "🖼️ "
+    } else if lower_name.ends_with(".zip") || lower_name.ends_with(".tar") || lower_name.ends_with(".gz") || lower_name.ends_with(".rar") || lower_name.ends_with(".7z") {
+        "🗜️ "
     } else {
-        if lower_name == "cargo.lock" || lower_name == "package-lock.json" || lower_name == "yarn.lock" || lower_name == "pnpm-lock.yaml" {
-            "🔒 "
-        } else if lower_name == "cargo.toml" || lower_name == "package.json" || lower_name == "tsconfig.json" 
-            || lower_name == "webpack.config.js" || lower_name == "vite.config.ts" || lower_name == "makefile" || lower_name == "cmakelists.txt" {
-            "⚙️ "
-        } else if lower_name == ".gitignore" || lower_name == ".gitattributes" || lower_name == ".env" || lower_name == ".env.example" || lower_name == ".dockerignore" {
-            "🛠️ "
-        } else if lower_name == "dockerfile" || lower_name == "docker-compose.yml" || lower_name == "docker-compose.yaml" {
-            "🐳 "
-        } else if lower_name.ends_with(".rs") {
-            "🦀 "
-        } else if lower_name.ends_with(".py") {
-            "🐍 "
-        } else if lower_name.ends_with(".js") || lower_name.ends_with(".jsx") {
-            "🟨 "
-        } else if lower_name.ends_with(".ts") || lower_name.ends_with(".tsx") {
-            "🟦 "
-        } else if lower_name.ends_with(".md") {
-            "📝 "
-        } else if lower_name.ends_with(".toml") || lower_name.ends_with(".json") || lower_name.ends_with(".yaml") || lower_name.ends_with(".yml") || lower_name.ends_with(".xml") || lower_name.ends_with(".ini") || lower_name.ends_with(".conf") {
-            "⚙️ "
-        } else if lower_name == "license" || lower_name.starts_with("license.") || lower_name == "copying" {
-            "⚖️ "
-        } else if lower_name.ends_with(".sh") || lower_name.ends_with(".bash") || lower_name.ends_with(".zsh") {
-            "🐚 "
-        } else if lower_name.ends_with(".go") {
-            "🐹 "
-        } else if lower_name.ends_with(".c") || lower_name.ends_with(".h") {
-            "🇨 "
-        } else if lower_name.ends_with(".cpp") || lower_name.ends_with(".hpp") || lower_name.ends_with(".cc") {
-            "➕ "
-        } else if lower_name.ends_with(".java") || lower_name.ends_with(".jar") {
-            "☕ "
-        } else if lower_name.ends_with(".html") || lower_name.ends_with(".htm") {
-            "🌐 "
-        } else if lower_name.ends_with(".css") || lower_name.ends_with(".scss") || lower_name.ends_with(".sass") || lower_name.ends_with(".less") {
-            "🎨 "
-        } else if lower_name.ends_with(".png") || lower_name.ends_with(".jpg") || lower_name.ends_with(".jpeg") || lower_name.ends_with(".gif") || lower_name.ends_with(".svg") || lower_name.ends_with(".ico") {
-            "🖼️ "
-        } else if lower_name.ends_with(".zip") || lower_name.ends_with(".tar") || lower_name.ends_with(".gz") || lower_name.ends_with(".rar") || lower_name.ends_with(".7z") {
-            "🗜️ "
-        } else {
-            "📄 "
-        }
+        "📄 "
     }
 }
 

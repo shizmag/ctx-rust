@@ -20,7 +20,7 @@ pub fn build_context(result: &ScanResult, max_file_size: u64) -> String {
 
     out.push_str("=== DIRECTORY STRUCTURE ===\n");
     out.push_str(&render_tree(&result.root));
-    out.push_str("\n");
+    out.push('\n');
 
     out.push_str("=== FILE CONTENTS ===\n\n");
     append_files_content(&result.root, max_file_size, &result.root.path, &mut out);
