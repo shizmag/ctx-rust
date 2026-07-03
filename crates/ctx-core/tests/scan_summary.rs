@@ -32,8 +32,15 @@ fn scan_builds_tree_and_skips_hidden_directories() {
     .unwrap();
 
     assert_eq!(result.summary.files, 3);
+    assert_eq!(result.summary.dirs, 2); // src, src/bin
     assert_eq!(result.summary.hidden_dirs, 2);
     assert_eq!(result.summary.lines, 3);
+    assert!(result.summary.bytes > 0);
+    assert!(result.summary.tokens > 0);
+
+    // Verify hidden directories are in the hidden list
+    assert!(result.hidden.iter().any(|item| item.path.ends_with(".git") && item.is_dir));
+    assert!(result.hidden.iter().any(|item| item.path.ends_with("target") && item.is_dir));
 
     let root_children: Vec<_> = result
         .root
@@ -57,6 +64,50 @@ fn scan_builds_tree_and_skips_hidden_directories() {
     assert_eq!(src.kind, NodeKind::Directory);
     assert_eq!(src.stats.files, 2);
     assert_eq!(src.stats.lines, 2);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scan_respects_max_depth() {
+    let root = std::env::temp_dir().join("ctx_core_scan_respects_max_depth");
+    let _ = fs::remove_dir_all(&root);
+
+    fs::create_dir_all(root.join("depth1/depth2/depth3")).unwrap();
+    fs::write(root.join("depth1/file1.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("depth1/depth2/file2.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("depth1/depth2/depth3/file3.rs"), "fn main() {}\n").unwrap();
+
+    let result = scan(
+        &root,
+        ScanOptions {
+            mode: Mode::Smart,
+            max_depth: Some(1),
+            max_file_size: 1024,
+            exclude: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    // Should include:
+    // - depth1 (directory, depth 0)
+    // - depth1/file1.rs (file, depth 1)
+    // - depth1/depth2 (directory, depth 1)
+    // Should NOT include:
+    // - depth1/depth2/file2.rs (depth 2)
+    // - depth1/depth2/depth3 (depth 2)
+    // - depth1/depth2/depth3/file3.rs (depth 3)
+    
+    assert_eq!(result.summary.files, 1);
+    assert_eq!(result.summary.dirs, 2);
+
+    let depth1 = result.root.children.iter().find(|node| node.name == "depth1").unwrap();
+    let depth1_children: Vec<_> = depth1.children.iter().map(|node| node.name.as_str()).collect();
+    assert!(depth1_children.contains(&"file1.rs"));
+    assert!(depth1_children.contains(&"depth2"));
+    
+    let depth2 = depth1.children.iter().find(|node| node.name == "depth2").unwrap();
+    assert!(depth2.children.is_empty());
 
     fs::remove_dir_all(root).unwrap();
 }

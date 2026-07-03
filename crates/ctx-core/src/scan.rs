@@ -4,11 +4,13 @@ use ctx_filter::{FilterContext, FilterEngine, FilterEntry};
 use ctx_models::{
     HiddenItem, HiddenReason, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult, Visibility,
 };
-use ignore::WalkBuilder;
 
 use crate::error::ScanError;
+use crate::ignore::load_gitignore;
 use crate::kind::node_kind;
+use crate::summary;
 use crate::tree_builder::TreeBuilder;
+use crate::walk::{is_inside_pruned_dir, setup_walker};
 
 pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> {
     let root_path = path.canonicalize()?;
@@ -17,13 +19,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
     let engine = FilterEngine::default_smart();
     let context = FilterContext { options: &options };
 
-    let walker = WalkBuilder::new(&root_path)
-        .hidden(false)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .follow_links(false)
-        .build();
+    let walker = setup_walker(&root_path);
 
     let mut summary = ProjectSummary::default();
     let mut hidden = Vec::new();
@@ -47,11 +43,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
 
         if let Some(ref gi) = gitignore {
             if gi.matched(entry_path, is_dir).is_ignore() {
+                summary::increment_hidden(&mut summary, is_dir);
                 if is_dir {
-                    summary.hidden_dirs += 1;
                     pruned_dirs.push(entry_path.to_path_buf());
-                } else {
-                    summary.hidden_files += 1;
                 }
 
                 hidden.push(HiddenItem {
@@ -85,13 +79,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
             Visibility::Visible => {}
 
             Visibility::Hidden(reason) => {
-                let is_dir = kind == NodeKind::Directory;
-
+                summary::increment_hidden(&mut summary, is_dir);
                 if is_dir {
-                    summary.hidden_dirs += 1;
                     pruned_dirs.push(entry_path.to_path_buf());
-                } else {
-                    summary.hidden_files += 1;
                 }
 
                 hidden.push(HiddenItem {
@@ -114,7 +104,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     tokens: 0,
                 };
 
-                summary.dirs += 1;
+                summary::add_dir(&mut summary);
                 tree.add_node(entry_path, kind, stats);
             }
 
@@ -129,11 +119,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     tokens: file_stats.tokens,
                 };
 
-                summary.files += 1;
-                summary.lines += file_stats.lines;
-                summary.bytes += file_stats.bytes;
-                summary.tokens += file_stats.tokens;
-
+                summary::add_file(&mut summary, &file_stats);
                 tree.add_node(entry_path, kind, stats);
             }
 
@@ -168,66 +154,4 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
         summary,
         hidden,
     })
-}
-
-fn is_inside_pruned_dir(path: &Path, pruned_dirs: &[PathBuf]) -> bool {
-    pruned_dirs
-        .iter()
-        .any(|dir| path != dir && path.starts_with(dir))
-}
-
-fn load_gitignore(root_path: &Path, exclude_patterns: &[String]) -> Option<ignore::gitignore::Gitignore> {
-    let gitignore_path = root_path.join(".gitignore");
-    let mut builder = ignore::gitignore::GitignoreBuilder::new(root_path);
-
-    for pattern in exclude_patterns {
-        let _ = builder.add_line(None, pattern);
-    }
-
-    if !gitignore_path.exists() {
-        if !exclude_patterns.is_empty() {
-            return builder.build().ok();
-        }
-        return None;
-    }
-
-    let content = match std::fs::read_to_string(&gitignore_path) {
-        Ok(c) => c,
-        Err(_) => {
-            if !exclude_patterns.is_empty() {
-                return builder.build().ok();
-            }
-            return None;
-        }
-    };
-
-    let mut current_block: Vec<String> = Vec::new();
-    let mut has_ctx = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if !current_block.is_empty() {
-                if !has_ctx {
-                    for rule in &current_block {
-                        let _ = builder.add_line(None, rule);
-                    }
-                }
-                current_block.clear();
-                has_ctx = false;
-            }
-        } else if trimmed == "#[ctx]" {
-            has_ctx = true;
-        } else {
-            current_block.push(line.to_string());
-        }
-    }
-
-    if !current_block.is_empty() && !has_ctx {
-        for rule in &current_block {
-            let _ = builder.add_line(None, rule);
-        }
-    }
-
-    builder.build().ok()
 }
