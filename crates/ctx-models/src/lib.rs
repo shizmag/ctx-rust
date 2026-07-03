@@ -46,6 +46,9 @@ pub struct NodeStats {
     pub lines: usize,
     pub bytes: u64,
     pub tokens: usize,
+    pub tests: usize,
+    pub covered_lines: usize,
+    pub coverable_lines: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -55,6 +58,9 @@ pub struct FileStats {
     pub tokens: usize,
     pub is_text: bool,
     pub skipped_reason: Option<StatsSkipReason>,
+    pub tests: usize,
+    pub covered_lines: usize,
+    pub coverable_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +88,9 @@ pub struct ProjectSummary {
     pub tokens: usize,
     pub hidden_files: usize,
     pub hidden_dirs: usize,
+    pub tests: usize,
+    pub covered_lines: usize,
+    pub coverable_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

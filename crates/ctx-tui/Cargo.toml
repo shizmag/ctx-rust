@@ -7,6 +7,7 @@ edition = "2024"
 ctx-models = { path = "../ctx-models" }
 ctx-core = { path = "../ctx-core" }
 ctx-render = { path = "../ctx-render" }
+ctx-test = { path = "../ctx-test" }
 arboard = { version = "3.6.1", default-features = false }
 ratatui = "0.26"
 crossterm = "0.27"

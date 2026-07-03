@@ -23,6 +23,9 @@ fn test_render_formats() {
             lines: 2,
             bytes: 28,
             tokens: 7,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
         },
         children: vec![
             TreeNode {
@@ -35,6 +38,9 @@ fn test_render_formats() {
                     lines: 1,
                     bytes: 15,
                     tokens: 4,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 },
                 children: Vec::new(),
             },
@@ -48,6 +54,9 @@ fn test_render_formats() {
                     lines: 1,
                     bytes: 13,
                     tokens: 3,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 },
                 children: Vec::new(),
             },
@@ -64,6 +73,9 @@ fn test_render_formats() {
             tokens: 7,
             hidden_files: 0,
             hidden_dirs: 0,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
         },
         hidden: Vec::new(),
     };
@@ -250,6 +262,9 @@ fn test_render_golden_snapshot() {
             lines: 5,
             bytes: 52,
             tokens: 15,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
         },
         children: vec![
             TreeNode {
@@ -262,6 +277,9 @@ fn test_render_golden_snapshot() {
                     lines: 1,
                     bytes: 15,
                     tokens: 5,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 },
                 children: Vec::new(),
             },
@@ -275,6 +293,9 @@ fn test_render_golden_snapshot() {
                     lines: 4,
                     bytes: 37,
                     tokens: 10,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 },
                 children: Vec::new(),
             },
@@ -291,6 +312,9 @@ fn test_render_golden_snapshot() {
             tokens: 15,
             hidden_files: 0,
             hidden_dirs: 0,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
         },
         hidden: Vec::new(),
     };
@@ -313,6 +337,7 @@ fn test_render_golden_snapshot() {
 - **Directories**: 1
 - **Total Lines**: 5
 - **Total Size**: 52 B
+- **Tests**: 0
 
 ## Directory Structure
 ```text

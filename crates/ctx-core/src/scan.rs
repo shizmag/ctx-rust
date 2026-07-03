@@ -15,6 +15,7 @@ use crate::walk::{is_inside_pruned_dir, setup_walker};
 
 pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> {
     let root_path = path.canonicalize()?;
+    let test_ctx = ctx_test::TestContext::discover(&root_path);
     let mut ignore_stack = IgnoreStack::new(root_path.clone(), &options.exclude);
 
     let engine = FilterEngine::default_smart();
@@ -101,6 +102,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     lines: 0,
                     bytes: 0,
                     tokens: 0,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 };
 
                 summary::add_dir(&mut summary);
@@ -108,7 +112,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
             }
 
             NodeKind::File => {
-                let file_stats = ctx_stats::collect_file_stats(entry_path, options.max_file_size)?;
+                let file_stats = ctx_stats::collect_file_stats(entry_path, options.max_file_size, Some(&test_ctx))?;
 
                 let stats = NodeStats {
                     files: 1,
@@ -116,6 +120,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     lines: file_stats.lines,
                     bytes: file_stats.bytes,
                     tokens: file_stats.tokens,
+                    tests: file_stats.tests,
+                    covered_lines: file_stats.covered_lines,
+                    coverable_lines: file_stats.coverable_lines,
                 };
 
                 summary::add_file(&mut summary, &file_stats);
@@ -129,6 +136,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     lines: 0,
                     bytes: bytes.unwrap_or(0),
                     tokens: 0,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 };
 
                 tree.add_node(entry_path, kind, stats);
@@ -141,6 +151,9 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
                     lines: 0,
                     bytes: bytes.unwrap_or(0),
                     tokens: 0,
+                    tests: 0,
+                    covered_lines: 0,
+                    coverable_lines: 0,
                 };
 
                 tree.add_node(entry_path, kind, stats);

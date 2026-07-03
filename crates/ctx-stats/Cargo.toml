@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ctx-models = { path = "../ctx-models" }
+ctx-test = { path = "../ctx-test" }
 
 [dev-dependencies]
 tempfile = "3"

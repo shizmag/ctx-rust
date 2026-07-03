@@ -2,7 +2,8 @@ use clap::Parser;
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
@@ -53,6 +54,9 @@ impl From<CliFormat> for Format {
     about = "✨ ctx: A highly informative, interactive directory tree visualizer and LLM context gatherer.\n\nRuns a beautiful, interactive TUI or outputs detailed markdown/plain/xml context for your files."
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Target directory path to analyze.
     #[arg(default_value = ".")]
     path: PathBuf,
@@ -107,6 +111,11 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    if let Some(cmd) = args.command {
+        match cmd {
+            Command::Graph(g) => return handle_graph_command(g),
+        }
+    }
     run_with_args(args, ctx_tui::run_interactive)
 }
 
@@ -198,6 +207,7 @@ mod tests {
     #[test]
     fn test_cli_passes_path_to_tui() {
         let args = Args {
+            command: None,
             path: PathBuf::from("/mock/path/to/project"),
             format: None,
             mode: None,
@@ -220,5 +230,230 @@ mod tests {
         let res = run_with_args(args, mock_run_tui);
         assert!(res.is_ok());
         assert_eq!(path_called, Some(PathBuf::from("/mock/path/to/project")));
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    Graph(GraphCommand),
+}
+
+#[derive(clap::Args, Debug)]
+struct GraphCommand {
+    #[command(subcommand)]
+    command: GraphSubcommand,
+
+    #[arg(default_value = ".", global = true)]
+    path: PathBuf,
+
+    #[arg(long, global = true)]
+    no_rust_analyzer: bool,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum GraphSubcommand {
+    Build,
+    Symbols,
+    Calls { symbol: String },
+    Callers { symbol: String },
+    Slice { symbol: String },
+}
+
+fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::error::Error>> {
+    use ctx_codegraph::BuildIndexOptions;
+    use std::collections::HashMap;
+
+    let use_rust_analyzer = !graph_args.no_rust_analyzer;
+
+    match graph_args.command {
+        GraphSubcommand::Build => {
+            println!("Building codegraph index...");
+            let options = BuildIndexOptions {
+                use_rust_analyzer,
+                max_depth: None,
+                include_tests: true,
+            };
+            ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
+            println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
+        }
+        GraphSubcommand::Symbols => {
+            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let index = ctx_codegraph::load_index(&conn, &graph_args.path)?;
+            
+            let mut grouped: HashMap<PathBuf, Vec<ctx_codegraph::Symbol>> = HashMap::new();
+            for sym in index.symbols {
+                grouped.entry(sym.file.clone()).or_default().push(sym);
+            }
+
+            let mut sorted_files: Vec<PathBuf> = grouped.keys().cloned().collect();
+            sorted_files.sort();
+
+            for file in sorted_files {
+                let rel_path = file.strip_prefix(&graph_args.path).unwrap_or(&file);
+                println!("{}:", rel_path.display());
+                let mut file_syms = grouped.remove(&file).unwrap();
+                file_syms.sort_by_key(|s| s.range.start_line);
+                for sym in file_syms {
+                    println!(
+                        "  [{:?}] {} (L{}-{})",
+                        sym.kind, sym.name, sym.range.start_line, sym.range.end_line
+                    );
+                }
+            }
+        }
+        GraphSubcommand::Calls { symbol } => {
+            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
+
+            if candidates.is_empty() {
+                eprintln!("Symbol not found: {}", symbol);
+                std::process::exit(1);
+            }
+
+            if candidates.len() > 1 {
+                print_ambiguity(&symbol, &candidates, &graph_args.path);
+                std::process::exit(1);
+            }
+
+            let sym = &candidates[0];
+            let callees = ctx_codegraph::storage::load_callees(&conn, sym.id.unwrap())?;
+
+            println!("Callees of {}:", sym.qualified_name);
+            if callees.is_empty() {
+                println!("  (none)");
+            } else {
+                for (edge, target) in callees {
+                    match target {
+                        Some(t) => println!("  - {} -> {} ({:?})", edge.raw_name, t.qualified_name, edge.confidence),
+                        None => println!("  - {} -> [Unresolved] ({:?})", edge.raw_name, edge.confidence),
+                    }
+                }
+            }
+        }
+        GraphSubcommand::Callers { symbol } => {
+            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
+
+            if candidates.is_empty() {
+                eprintln!("Symbol not found: {}", symbol);
+                std::process::exit(1);
+            }
+
+            if candidates.len() > 1 {
+                print_ambiguity(&symbol, &candidates, &graph_args.path);
+                std::process::exit(1);
+            }
+
+            let sym = &candidates[0];
+            let callers = ctx_codegraph::storage::load_callers(&conn, sym.id.unwrap())?;
+
+            println!("Callers of {}:", sym.qualified_name);
+            if callers.is_empty() {
+                println!("  (none)");
+            } else {
+                for (edge, caller) in callers {
+                    println!(
+                        "  - {} via `{}` at L{}:{} ({:?})",
+                        caller.qualified_name, edge.raw_name, edge.call_range.start_line, edge.call_range.start_col, edge.confidence
+                    );
+                }
+            }
+        }
+        GraphSubcommand::Slice { symbol } => {
+            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
+
+            if candidates.is_empty() {
+                eprintln!("Symbol not found: {}", symbol);
+                std::process::exit(1);
+            }
+
+            if candidates.len() > 1 {
+                print_ambiguity(&symbol, &candidates, &graph_args.path);
+                std::process::exit(1);
+            }
+
+            let sym = &candidates[0];
+            let index = ctx_codegraph::load_index(&conn, &graph_args.path)?;
+
+            println!("Forward slice tree for {}:", sym.qualified_name);
+            let mut visited = HashSet::new();
+            visited.insert(sym.id.unwrap());
+            print_slice_tree_helper(&index, sym.id.unwrap(), 0, 10, &mut visited);
+        }
+    }
+
+    Ok(())
+}
+
+fn get_connection_or_rebuild(
+    path: &Path,
+    use_rust_analyzer: bool,
+) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
+    let db_path = path.join(".ctx-codegraph/codegraph.sqlite");
+    if !db_path.exists() {
+        println!("Index not found. Building codegraph index...");
+        let options = ctx_codegraph::BuildIndexOptions {
+            use_rust_analyzer,
+            max_depth: None,
+            include_tests: true,
+        };
+        ctx_codegraph::rebuild_index_db(path, options)?;
+    }
+    let conn = ctx_codegraph::open_db(path)?;
+    Ok(conn)
+}
+
+fn print_ambiguity(symbol: &str, candidates: &[ctx_codegraph::Symbol], root_path: &Path) {
+    eprintln!("Ambiguous symbol: {}", symbol);
+    eprintln!("\nCandidates:");
+    for cand in candidates {
+        let rel_path = cand.file.strip_prefix(root_path).unwrap_or(&cand.file);
+        eprintln!(
+            "  {:<30} {}:{}",
+            cand.qualified_name,
+            rel_path.display(),
+            cand.range.start_line
+        );
+    }
+}
+
+fn print_slice_tree_helper(
+    index: &ctx_codegraph::CodeIndex,
+    curr_id: ctx_codegraph::SymbolId,
+    depth: usize,
+    max_depth: usize,
+    visited: &mut HashSet<ctx_codegraph::SymbolId>,
+) {
+    let sym = match index.symbols.iter().find(|s| s.id == Some(curr_id)) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let indent = "  ".repeat(depth);
+    if depth > 0 {
+        println!("{}└─ {}", indent, sym.qualified_name);
+    } else {
+        println!("{}", sym.qualified_name);
+    }
+
+    if depth >= max_depth {
+        return;
+    }
+
+    for edge in &index.edges {
+        if edge.from == curr_id {
+            if let Some(to_id) = edge.to {
+                if !visited.contains(&to_id) {
+                    visited.insert(to_id);
+                    print_slice_tree_helper(index, to_id, depth + 1, max_depth, visited);
+                    visited.remove(&to_id);
+                } else {
+                    if let Some(target_sym) = index.symbols.iter().find(|s| s.id == Some(to_id)) {
+                        println!("{}  └─ {} (already visited)", indent, target_sym.qualified_name);
+                    }
+                }
+            }
+        }
     }
 }

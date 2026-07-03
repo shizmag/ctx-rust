@@ -17,4 +17,7 @@ pub fn add_file(summary: &mut ProjectSummary, file_stats: &FileStats) {
     summary.lines += file_stats.lines;
     summary.bytes += file_stats.bytes;
     summary.tokens += file_stats.tokens;
+    summary.tests += file_stats.tests;
+    summary.covered_lines += file_stats.covered_lines;
+    summary.coverable_lines += file_stats.coverable_lines;
 }

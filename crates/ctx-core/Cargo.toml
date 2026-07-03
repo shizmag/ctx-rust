@@ -9,6 +9,7 @@ thiserror = "2"
 ctx-models = { path = "../ctx-models" }
 ctx-filter = { path = "../ctx-filter" }
 ctx-stats = { path = "../ctx-stats" }
+ctx-test = { path = "../ctx-test" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -117,6 +117,9 @@ fn recompute_stats(node: &mut TreeNode) -> NodeStats {
             lines: 0,
             bytes: 0,
             tokens: 0,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
         },
         NodeKind::Symlink | NodeKind::Other => node.stats.clone(),
     };
@@ -129,6 +132,9 @@ fn recompute_stats(node: &mut TreeNode) -> NodeStats {
         stats.lines += child_stats.lines;
         stats.bytes += child_stats.bytes;
         stats.tokens += child_stats.tokens;
+        stats.tests += child_stats.tests;
+        stats.covered_lines += child_stats.covered_lines;
+        stats.coverable_lines += child_stats.coverable_lines;
     }
 
     node.stats = stats.clone();

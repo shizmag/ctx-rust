@@ -10,7 +10,7 @@ fn counts_lines_and_bytes_for_text_file() {
 
     fs::write(&path, "one\ntwo\nthree\n").unwrap();
 
-    let stats = collect_file_stats(&path, 1024).unwrap();
+    let stats = collect_file_stats(&path, 1024, None).unwrap();
 
     assert_eq!(stats.lines, 3);
     assert!(stats.bytes > 0);
@@ -26,7 +26,7 @@ fn empty_file_has_zero_lines() {
 
     fs::write(&path, "").unwrap();
 
-    let stats = collect_file_stats(&path, 1024).unwrap();
+    let stats = collect_file_stats(&path, 1024, None).unwrap();
 
     assert_eq!(stats.lines, 0);
     assert_eq!(stats.bytes, 0);
@@ -40,7 +40,7 @@ fn skips_line_count_for_large_file() {
 
     fs::write(&path, "hello world").unwrap();
 
-    let stats = collect_file_stats(&path, 4).unwrap();
+    let stats = collect_file_stats(&path, 4, None).unwrap();
 
     assert_eq!(stats.lines, 0);
     assert_eq!(stats.skipped_reason, Some(StatsSkipReason::TooLarge));
@@ -53,7 +53,7 @@ fn skips_line_count_for_non_utf8_file() {
 
     fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
 
-    let stats = collect_file_stats(&path, 1024).unwrap();
+    let stats = collect_file_stats(&path, 1024, None).unwrap();
 
     assert_eq!(stats.lines, 0);
     assert!(!stats.is_text);

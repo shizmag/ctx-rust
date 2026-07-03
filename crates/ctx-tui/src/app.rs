@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub(crate) struct TuiApp {
     pub(crate) path: PathBuf,
     pub(crate) scan_result: ctx_models::ScanResult,
+    pub(crate) test_ctx: ctx_test::TestContext,
     pub(crate) expanded_dirs: HashSet<PathBuf>,
     pub(crate) checked_paths: HashSet<PathBuf>,
     pub(crate) visible_items: Vec<VisibleTuiNode>,
@@ -25,6 +26,9 @@ pub(crate) struct VisibleTuiNode {
     pub(crate) lines: usize,
     pub(crate) tokens: usize,
     pub(crate) bytes: u64,
+    pub(crate) tests: usize,
+    pub(crate) covered_lines: usize,
+    pub(crate) coverable_lines: usize,
     pub(crate) tree_line_prefix: String,
     pub(crate) is_text: bool,
 }
@@ -32,6 +36,7 @@ pub(crate) struct VisibleTuiNode {
 impl TuiApp {
     pub(crate) fn new(path: PathBuf) -> Result<Self, crate::error::TuiError> {
         let scan_result = ctx_core::scan(&path, ctx_models::ScanOptions::default())?;
+        let test_ctx = ctx_test::TestContext::discover(&path);
 
         let mut expanded_dirs = HashSet::new();
         let checked_paths = HashSet::new();
@@ -41,6 +46,7 @@ impl TuiApp {
         let mut app = Self {
             path,
             scan_result,
+            test_ctx,
             expanded_dirs,
             checked_paths,
             visible_items: Vec::new(),
@@ -78,6 +84,9 @@ impl TuiApp {
                         lines: node.stats.lines,
                         tokens: node.stats.tokens,
                         bytes: node.stats.bytes,
+                        tests: node.stats.tests,
+                        covered_lines: node.stats.covered_lines,
+                        coverable_lines: node.stats.coverable_lines,
                         tree_line_prefix: String::new(),
                         is_text: node.stats.lines > 0 || node.stats.bytes == 0,
                     }
@@ -166,6 +175,9 @@ pub(crate) fn traverse_build_visible(
             lines: line.node.stats.lines,
             tokens: line.node.stats.tokens,
             bytes: line.node.stats.bytes,
+            tests: line.node.stats.tests,
+            covered_lines: line.node.stats.covered_lines,
+            coverable_lines: line.node.stats.coverable_lines,
             tree_line_prefix: line.prefix.clone(),
             is_text: line.node.stats.lines > 0 || line.node.stats.bytes == 0,
         });

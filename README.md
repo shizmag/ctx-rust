@@ -164,3 +164,19 @@ visible.log
 dist/config-template.json
 ```
 
+---
+
+## 🕸️ Code Graph (Best-Effort Semantic Slicing)
+
+`ctx` includes a best-effort code graph construction engine for Rust (`ctx-codegraph`) to perform semantic analysis and slice recursive dependencies.
+
+### Commands:
+- **Build Index**: `ctx graph build` (Builds or updates the SQLite index, optionally starting a local `rust-analyzer` process for exact resolution).
+- **List Symbols**: `ctx graph symbols` (Lists all indexed symbols grouped by file).
+- **Show Callees**: `ctx graph calls <symbol>` (Displays all symbols called by `<symbol>`).
+- **Show Callers**: `ctx graph callers <symbol>` (Displays all symbols that call `<symbol>`).
+- **Slice tree**: `ctx graph slice <symbol>` (Prints the recursive forward call slice tree starting at `<symbol>`).
+
+For details on the graph backend and limitations, see [crates/ctx-codegraph/README.md](file:///Users/vladimirkasterin/python/ctx-rust/crates/ctx-codegraph/README.md).
+
+

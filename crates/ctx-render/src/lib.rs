@@ -161,6 +161,11 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
             "- **Total Size**: {}\n",
             format_bytes(result.summary.bytes)
         ));
+        out.push_str(&format!("- **Tests**: {}\n", result.summary.tests));
+        if result.summary.coverable_lines > 0 {
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            out.push_str(&format!("- **Coverage**: {:.1}%\n", cov));
+        }
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
             out.push_str(&format!(
                 "- **Hidden**: {} files, {} directories\n",
@@ -221,6 +226,11 @@ fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, st
         ));
         out.push_str(&format!("    <lines>{}</lines>\n", result.summary.lines));
         out.push_str(&format!("    <bytes>{}</bytes>\n", result.summary.bytes));
+        out.push_str(&format!("    <tests>{}</tests>\n", result.summary.tests));
+        if result.summary.coverable_lines > 0 {
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            out.push_str(&format!("    <coverage_pct>{:.1}</coverage_pct>\n", cov));
+        }
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
             out.push_str(&format!(
                 "    <hidden_files>{}</hidden_files>\n",
@@ -290,6 +300,11 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
             "Total Size: {}\n",
             format_bytes(result.summary.bytes)
         ));
+        out.push_str(&format!("Tests: {}\n", result.summary.tests));
+        if result.summary.coverable_lines > 0 {
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            out.push_str(&format!("Coverage: {:.1}%\n", cov));
+        }
         out.push('\n');
     }
 
@@ -379,6 +394,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
             if node.stats.tokens > 0 {
                 dir_parts.push(format!("{} tokens", node.stats.tokens));
             }
+            if node.stats.tests > 0 {
+                dir_parts.push(format!("{} tests", node.stats.tests));
+            }
+            if node.stats.coverable_lines > 0 {
+                let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                dir_parts.push(format!("{:.1}% cov", cov));
+            }
 
             let stats_str = if !dir_parts.is_empty() {
                 format!(" ({})", dir_parts.join(", "))
@@ -413,6 +435,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                     }
                     if node.stats.tokens > 0 {
                         dir_parts.push(format!("{} tokens", node.stats.tokens));
+                    }
+                    if node.stats.tests > 0 {
+                        dir_parts.push(format!("{} tests", node.stats.tests));
+                    }
+                    if node.stats.coverable_lines > 0 {
+                        let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                        dir_parts.push(format!("{:.1}% cov", cov));
                     }
 
                     let stats_str = if !dir_parts.is_empty() {
@@ -453,6 +482,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                     if node.stats.bytes > 0 {
                         stats_parts.push(format_bytes(node.stats.bytes));
                     }
+                    if node.stats.tests > 0 {
+                        stats_parts.push(format!("{} tests", node.stats.tests));
+                    }
+                    if node.stats.coverable_lines > 0 {
+                        let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                        stats_parts.push(format!("{:.1}% cov", cov));
+                    }
 
                     let stats_str = if !stats_parts.is_empty() {
                         format!(" ({})", stats_parts.join(", "))
@@ -489,6 +525,13 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
     let dirs_str = format!("{} directories", result.summary.dirs);
     let lines_str = format!("{} lines", result.summary.lines);
     let size_str = format_bytes(result.summary.bytes);
+    let tests_str = format!("{} tests", result.summary.tests);
+    let cov_str = if result.summary.coverable_lines > 0 {
+        let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+        format!("{:.1}%", cov)
+    } else {
+        "N/A".to_string()
+    };
 
     out.push_str(&format!(
         "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
@@ -505,6 +548,14 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
     out.push_str(&format!(
         "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
         "Total Size", size_str
+    ));
+    out.push_str(&format!(
+        "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
+        "Tests", tests_str
+    ));
+    out.push_str(&format!(
+        "│  \x1b[38;2;125;207;255m{:<12}\x1b[0m : {:<31}│\n",
+        "Coverage", cov_str
     ));
 
     if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {

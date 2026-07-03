@@ -76,7 +76,18 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                 Color::Rgb(86, 95, 137)
             };
 
-            let stats_str = format!(" ({} lines, {} tokens)", item.lines, item.tokens);
+            let mut stats_parts = vec![
+                format!("{} lines", item.lines),
+                format!("{} tokens", item.tokens),
+            ];
+            if item.tests > 0 {
+                stats_parts.push(format!("{} tests", item.tests));
+            }
+            if item.coverable_lines > 0 {
+                let cov = (item.covered_lines as f64 / item.coverable_lines as f64) * 100.0;
+                stats_parts.push(format!("{:.1}% cov", cov));
+            }
+            let stats_str = format!(" ({})", stats_parts.join(", "));
             let stats_style = Style::default().fg(Color::Rgb(86, 95, 137));
 
             let mut spans = vec![
@@ -139,6 +150,13 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
     let total_bytes: u64 = sum_all_bytes(&app.scan_result.root);
     let checked_bytes: u64 = checked_files_nodes.iter().map(|f| f.stats.bytes).sum();
 
+    let total_tests = app.scan_result.summary.tests;
+    let checked_tests: usize = checked_files_nodes.iter().map(|f| f.stats.tests).sum();
+    let total_coverable = app.scan_result.summary.coverable_lines;
+    let total_covered = app.scan_result.summary.covered_lines;
+    let checked_coverable: usize = checked_files_nodes.iter().map(|f| f.stats.coverable_lines).sum();
+    let checked_covered: usize = checked_files_nodes.iter().map(|f| f.stats.covered_lines).sum();
+
     let stats_text = vec![
         Line::from(vec![
             Span::styled(
@@ -188,6 +206,39 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                 ),
                 Style::default().fg(Color::Rgb(192, 202, 245)),
             ),
+        ]),
+        Line::from(vec![
+            Span::styled("Tests: ", Style::default().fg(Color::Rgb(125, 207, 255))),
+            Span::styled(
+                format!("{} / {}", checked_tests, total_tests),
+                Style::default().fg(Color::Rgb(192, 202, 245)),
+            ),
+            Span::styled(
+                "  │  Coverage: ",
+                Style::default().fg(Color::Rgb(125, 207, 255)),
+            ),
+            Span::styled(
+                if total_coverable > 0 {
+                    let cov = (total_covered as f64 / total_coverable as f64) * 100.0;
+                    format!("{:.1}%", cov)
+                } else {
+                    "N/A".to_string()
+                },
+                Style::default()
+                    .fg(Color::Rgb(158, 206, 106))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            if checked_coverable > 0 {
+                Span::styled(
+                    format!(
+                        " (selected: {:.1}%)",
+                        (checked_covered as f64 / checked_coverable as f64) * 100.0
+                    ),
+                    Style::default().fg(Color::Rgb(86, 95, 137)),
+                )
+            } else {
+                Span::raw("")
+            },
         ]),
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::Rgb(125, 207, 255))),
@@ -258,6 +309,25 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                         Span::raw("  Total Size  : "),
                         Span::styled(size_str, Style::default().fg(Color::Rgb(125, 207, 255))),
                     ]),
+                    Line::from(vec![
+                        Span::raw("  Total Tests : "),
+                        Span::styled(
+                            format!("{}", item.tests),
+                            Style::default().fg(Color::Rgb(187, 154, 247)),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  Coverage    : "),
+                        Span::styled(
+                            if item.coverable_lines > 0 {
+                                let cov = (item.covered_lines as f64 / item.coverable_lines as f64) * 100.0;
+                                format!("{:.1}%", cov)
+                            } else {
+                                "N/A".to_string()
+                            },
+                            Style::default().fg(Color::Rgb(158, 206, 106)),
+                        ),
+                    ]),
                 ]
             } else if !item.is_text {
                 vec![Line::from(Span::styled(
@@ -271,14 +341,48 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                     .unwrap_or("");
 
                 match ctx_models::read_file_content(&item.path, u64::MAX) {
-                    ctx_models::FileContentResult::Text(content) => content
-                        .lines()
-                        .take(40)
-                        .map(|l| {
-                            let hl = highlight_line(l, extension);
-                            highlight_line_matches(hl, &app.search_query)
-                        })
-                        .collect(),
+                    ctx_models::FileContentResult::Text(content) => {
+                        let line_coverage = app.test_ctx.get_file_line_coverage(&item.path);
+                        content
+                            .lines()
+                            .take(40)
+                            .enumerate()
+                            .map(|(idx, l)| {
+                                let line_num = idx + 1;
+                                let hl = highlight_line(l, extension);
+                                let matched = highlight_line_matches(hl, &app.search_query);
+
+                                let gutter_style = if let Some(ref hits_map) = line_coverage {
+                                    if let Some(&hits) = hits_map.get(&line_num) {
+                                        if hits > 0 {
+                                            Style::default().fg(Color::Rgb(158, 206, 106)) // green
+                                        } else {
+                                            Style::default().fg(Color::Rgb(247, 118, 142)) // red
+                                        }
+                                    } else {
+                                        Style::default().fg(Color::Rgb(86, 95, 137)) // gray
+                                    }
+                                } else {
+                                    Style::default().fg(Color::Rgb(86, 95, 137)) // gray
+                                };
+
+                                let indicator = if let Some(ref hits_map) = line_coverage {
+                                    if let Some(&hits) = hits_map.get(&line_num) {
+                                        if hits > 0 { "█ " } else { "█ " }
+                                    } else { "  " }
+                                } else { "  " };
+
+                                let prefix_span = Span::styled(
+                                    format!("{:3} │{}", line_num, indicator),
+                                    gutter_style,
+                                );
+
+                                let mut spans = vec![prefix_span];
+                                spans.extend(matched.spans);
+                                Line::from(spans)
+                            })
+                            .collect()
+                    }
                     ctx_models::FileContentResult::Skipped(reason) => {
                         let msg = match reason {
                             ctx_models::FileSkipReason::TooLarge => {

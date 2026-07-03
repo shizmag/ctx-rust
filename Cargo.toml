@@ -9,5 +9,7 @@ members = [
     "crates/ctx-tui",
     "crates/ctx-llm",
     "crates/ctx-models",
+    "crates/ctx-test",
+    "crates/ctx-codegraph",
 ]
 resolver = "2"
