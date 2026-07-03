@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use ctx_filter::FilterEntry;
+use ctx_filter::{FilterContext, FilterEngine, FilterEntry};
 use ctx_models::{
     HiddenItem, HiddenReason, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult, Visibility,
 };
@@ -13,6 +13,9 @@ use crate::tree_builder::TreeBuilder;
 pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> {
     let root_path = path.canonicalize()?;
     let gitignore = load_gitignore(&root_path, &options.exclude);
+
+    let engine = FilterEngine::default_smart();
+    let context = FilterContext { options: &options };
 
     let walker = WalkBuilder::new(&root_path)
         .hidden(false)
@@ -78,7 +81,7 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
 
         let filter_entry = FilterEntry::new(entry_path.to_path_buf(), kind, depth, bytes);
 
-        match ctx_filter::classify(&filter_entry, &options) {
+        match engine.check(&filter_entry, &context) {
             Visibility::Visible => {}
 
             Visibility::Hidden(reason) => {

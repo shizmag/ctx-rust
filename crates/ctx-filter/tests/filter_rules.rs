@@ -61,20 +61,24 @@ fn all_mode_disables_builtin_hiding() {
         exclude: Vec::new(),
     };
 
-    let item = entry("node_modules", NodeKind::Directory);
+    let node_modules = entry("node_modules", NodeKind::Directory);
+    let git = entry(".git", NodeKind::Directory);
+    let target = entry("target", NodeKind::Directory);
 
-    let result = classify(&item, &options);
-
-    assert_eq!(result, Visibility::Visible);
+    assert_eq!(classify(&node_modules, &options), Visibility::Visible);
+    assert_eq!(classify(&git, &options), Visibility::Visible);
+    assert_eq!(classify(&target, &options), Visibility::Visible);
 }
 
 #[test]
 fn symlink_is_not_hidden_by_directory_rule() {
-    let item = entry("node_modules", NodeKind::Symlink);
+    let node_modules = entry("node_modules", NodeKind::Symlink);
+    let git = entry(".git", NodeKind::Symlink);
+    let target = entry("target", NodeKind::Symlink);
 
-    let result = classify(&item, &options());
-
-    assert_eq!(result, Visibility::Visible);
+    assert_eq!(classify(&node_modules, &options()), Visibility::Visible);
+    assert_eq!(classify(&git, &options()), Visibility::Visible);
+    assert_eq!(classify(&target, &options()), Visibility::Visible);
 }
 
 #[test]
