@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod error;
 pub mod index;
 pub mod languages;
@@ -7,6 +8,10 @@ pub mod service;
 pub mod slice;
 pub mod storage;
 
+pub use backend::{
+    BackendMetadata, LanguageBackend, ParserBackend, ResolverBackend, WorkspaceMarker,
+    global_registry,
+};
 pub use error::CodeGraphError;
 pub use index::{BuildIndexOptions, build_index};
 pub use model::*;

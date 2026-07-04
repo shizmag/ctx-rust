@@ -46,7 +46,7 @@ fn test_integration_builds_simple_project_index_and_slice() {
     let index = build_index(
         root,
         BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -136,7 +136,7 @@ fn test_integration_rebuild_sqlite_database() {
     let (_index, _report) = rebuild_index_db(
         root,
         BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -202,7 +202,7 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
     let (index, _) = rebuild_index_db(
         root,
         BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,

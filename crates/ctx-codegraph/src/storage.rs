@@ -1,13 +1,13 @@
+use crate::backend::{BackendRegistry, ParseInput, ParsedFile, ResolveInput, global_registry};
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
 use crate::model::{
-    CallEdge, CallSite, CodeIndex, FileChangeDetection, FileId, FileSnapshot, RebuildReason,
-    IndexDiff, IndexState, Language, LanguageObject, LanguageObjectKind, ResolutionConfidence,
-    SourceRange, Symbol, SymbolId, SymbolKind, SymbolResolution, TextRange, FileParseStatus,
-    EdgeKind, AffectedSet, CallId,
+    AffectedSet, CallEdge, CallId, CallSite, CodeIndex, EdgeKind, FileChangeDetection, FileId,
+    FileParseStatus, FileSnapshot, IndexDiff, IndexState, Language, LanguageObject,
+    LanguageObjectKind, RebuildReason, ResolutionConfidence, SourceRange, Symbol, SymbolId,
+    SymbolKind, SymbolResolution, TextRange,
 };
 use crate::resolver::noop::resolve_name_only;
-use crate::resolver::rust_analyzer_lsp::resolve_via_lsp;
 use std::path::{Path, PathBuf};
 
 pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
@@ -15,11 +15,33 @@ pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
         Ok(path) => path,
         Err(_) => start_dir.to_path_buf(),
     };
+    let registry = crate::backend::global_registry();
     loop {
-        if current.join(".git").exists()
-            || current.join(".ctxconfig").exists()
-            || current.join("Cargo.toml").exists()
-        {
+        let mut matches = current.join(".git").exists() || current.join(".ctxconfig").exists();
+        if !matches {
+            for backend in registry.all() {
+                for marker in backend.workspace_markers() {
+                    match marker {
+                        crate::backend::WorkspaceMarker::File(name) => {
+                            if current.join(name).exists() {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        crate::backend::WorkspaceMarker::Directory(name) => {
+                            if current.join(name).exists() {
+                                matches = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if matches {
+                    break;
+                }
+            }
+        }
+        if matches {
             return current;
         }
         match current.parent() {
@@ -33,6 +55,14 @@ pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
 pub fn check_db_compatibility(
     conn: &rusqlite::Connection,
     options: &BuildIndexOptions,
+) -> Result<Option<RebuildReason>, CodeGraphError> {
+    check_db_compatibility_with_registry(conn, options, global_registry())
+}
+
+pub fn check_db_compatibility_with_registry(
+    conn: &rusqlite::Connection,
+    options: &BuildIndexOptions,
+    registry: &BackendRegistry,
 ) -> Result<Option<RebuildReason>, CodeGraphError> {
     // Check if metadata table exists
     let table_exists: bool = conn
@@ -49,11 +79,10 @@ pub fn check_db_compatibility(
     }
 
     let get_meta = |key: &str| -> Option<String> {
-        conn.query_row(
-            "SELECT value FROM metadata WHERE key = ?",
-            [key],
-            |row| row.get::<_, String>(0),
-        ).ok()
+        conn.query_row("SELECT value FROM metadata WHERE key = ?", [key], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()
     };
 
     // 1. Schema version
@@ -68,20 +97,9 @@ pub fn check_db_compatibility(
         return Ok(Some(RebuildReason::IndexerVersionChanged));
     }
 
-    // 3. Backend set
-    let backend_id = get_meta("backend_id");
-    if backend_id.as_deref() != Some("tree-sitter-rust") {
-        return Ok(Some(RebuildReason::BackendSetChanged));
-    }
-
-    // 4. Parser version & config
-    let parser_version = get_meta("parser_version");
-    if parser_version.as_deref() != Some("0.20.0") {
-        return Ok(Some(RebuildReason::ParserVersionChanged));
-    }
-
+    // 3. Parser version & config
     let expected_parser_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
         format!("{:x}", hasher.finalize())
@@ -91,12 +109,8 @@ pub fn check_db_compatibility(
         return Ok(Some(RebuildReason::ParserConfigChanged));
     }
 
-    // 5. Resolver id, version & config
-    let expected_resolver_id = if options.use_rust_analyzer {
-        "rust-analyzer-lsp"
-    } else {
-        "noop"
-    };
+    // 4. Resolver id, version & config
+    let expected_resolver_id = if options.use_lsp { "lsp" } else { "noop" };
     let resolver_id = get_meta("resolver_id");
     if resolver_id.as_deref() != Some(expected_resolver_id) {
         return Ok(Some(RebuildReason::ResolverConfigChanged));
@@ -108,9 +122,15 @@ pub fn check_db_compatibility(
     }
 
     let expected_resolver_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        hasher.update(
+            format!(
+                "use_lsp:{:?},max_depth:{:?}",
+                options.use_lsp, options.max_depth
+            )
+            .as_bytes(),
+        );
         format!("{:x}", hasher.finalize())
     };
     let resolver_config_hash = get_meta("resolver_config_hash");
@@ -118,7 +138,7 @@ pub fn check_db_compatibility(
         return Ok(Some(RebuildReason::ResolverConfigChanged));
     }
 
-    // 6. Change detection strategy
+    // 5. Change detection strategy
     let expected_change_detection = match options.change_detection {
         FileChangeDetection::MtimeAndSize => "MtimeAndSize",
         FileChangeDetection::ContentHash => "ContentHash",
@@ -128,10 +148,52 @@ pub fn check_db_compatibility(
         return Ok(Some(RebuildReason::ChangeDetectionStrategyChanged));
     }
 
-    // 7. Base index status
+    // 6. Base index status
     let base_index_ready = get_meta("base_index_ready");
     if base_index_ready.as_deref() != Some("true") {
         return Ok(Some(RebuildReason::PreviousRunIncomplete));
+    }
+
+    // Check backends metadata
+    let backends_metadata_str: Option<String> = conn
+        .query_row(
+            "SELECT value FROM metadata WHERE key = 'backends_metadata'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(meta_str) = backends_metadata_str {
+        if let Ok(stored_metas) =
+            serde_json::from_str::<Vec<crate::backend::BackendMetadata>>(&meta_str)
+        {
+            for stored in stored_metas {
+                if let Some(backend) = registry
+                    .all()
+                    .iter()
+                    .find(|b| b.id().0 == stored.backend_id)
+                {
+                    let current = backend.metadata(options);
+                    if current.parser_version != stored.parser_version {
+                        return Ok(Some(RebuildReason::ParserVersionChanged));
+                    }
+                    if current.resolver_id != stored.resolver_id
+                        || current.config_hash != stored.config_hash
+                    {
+                        return Ok(Some(RebuildReason::ResolverConfigChanged));
+                    }
+                    if current.resolver_version != stored.resolver_version {
+                        return Ok(Some(RebuildReason::ResolverVersionChanged));
+                    }
+                } else {
+                    return Ok(Some(RebuildReason::BackendSetChanged));
+                }
+            }
+        } else {
+            return Ok(Some(RebuildReason::CorruptDatabase));
+        }
+    } else {
+        return Ok(Some(RebuildReason::BackendSetChanged));
     }
 
     Ok(None)
@@ -141,6 +203,15 @@ pub fn compute_index_diff(
     conn: &rusqlite::Connection,
     workspace_root: &Path,
     options: &BuildIndexOptions,
+) -> Result<IndexDiff, CodeGraphError> {
+    compute_index_diff_with_registry(conn, workspace_root, options, global_registry())
+}
+
+pub fn compute_index_diff_with_registry(
+    conn: &rusqlite::Connection,
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    registry: &BackendRegistry,
 ) -> Result<IndexDiff, CodeGraphError> {
     let mut disk_files = std::collections::HashSet::new();
     let walker = walkdir::WalkDir::new(workspace_root)
@@ -163,7 +234,7 @@ pub fn compute_index_diff(
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_file() {
-            if crate::index::should_index_path(path) {
+            if crate::index::should_index_path_with_registry(path, registry) {
                 disk_files.insert(path.to_path_buf());
             }
         }
@@ -172,25 +243,41 @@ pub fn compute_index_diff(
     let mut db_files = std::collections::HashMap::new();
     {
         let mut stmt =
-            conn.prepare("SELECT path, rel_path, mtime_ms, size_bytes, content_hash, parse_status FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'")?;
+            conn.prepare("SELECT path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, parse_status FROM files")?;
         let db_files_rows = stmt.query_map([], |row| {
             let path_str: String = row.get(0)?;
             let rel_path_str: String = row.get(1)?;
-            let mtime_ms: i64 = row.get(2)?;
-            let size_bytes: u64 = row.get(3)?;
-            let content_hash: Option<String> = row.get(4)?;
-            let parse_status_str: String = row.get(5)?;
-            let parse_status = FileParseStatus::from_str(&parse_status_str)
-                .unwrap_or(FileParseStatus::Success);
+            let language: String = row.get(2)?;
+            let backend_id: String = row.get(3)?;
+            let mtime_ms: i64 = row.get(4)?;
+            let size_bytes: u64 = row.get(5)?;
+            let content_hash: Option<String> = row.get(6)?;
+            let parser_id: String = row.get(7)?;
+            let parser_version: String = row.get(8)?;
+            let parser_config_hash: String = row.get(9)?;
+            let parse_status_str: String = row.get(10)?;
+            let parse_status =
+                FileParseStatus::from_str(&parse_status_str).unwrap_or(FileParseStatus::Success);
             Ok((
                 PathBuf::from(path_str),
-                (PathBuf::from(rel_path_str), mtime_ms, size_bytes, content_hash, parse_status),
+                (
+                    PathBuf::from(rel_path_str),
+                    language,
+                    backend_id,
+                    mtime_ms,
+                    size_bytes,
+                    content_hash,
+                    parser_id,
+                    parser_version,
+                    parser_config_hash,
+                    parse_status,
+                ),
             ))
         })?;
 
         for row in db_files_rows {
-            let (path, (rel_path, mtime_ms, size_bytes, content_hash, parse_status)) = row?;
-            db_files.insert(path, (rel_path, mtime_ms, size_bytes, content_hash, parse_status));
+            let (path, val) = row?;
+            db_files.insert(path, val);
         }
     }
 
@@ -203,11 +290,25 @@ pub fn compute_index_diff(
         let disk_mtime = crate::index::get_mtime_ms(path).unwrap_or(0);
         let disk_size = crate::index::get_size_bytes(path).unwrap_or(0) as u64;
 
-        if let Some((rel_path, db_mtime, db_size, db_hash, db_parse_status)) = db_files.get(path) {
+        if let Some((
+            rel_path,
+            db_lang,
+            db_backend_id,
+            db_mtime,
+            db_size,
+            db_hash,
+            db_parser_id,
+            db_parser_version,
+            db_parser_config_hash,
+            db_parse_status,
+        )) = db_files.get(path)
+        {
             let mut disk_hash = None;
             let is_modified = match options.change_detection {
                 FileChangeDetection::MtimeAndSize => {
-                    disk_mtime != *db_mtime || disk_size != *db_size || *db_parse_status == FileParseStatus::Failed
+                    disk_mtime != *db_mtime
+                        || disk_size != *db_size
+                        || *db_parse_status == FileParseStatus::Failed
                 }
                 FileChangeDetection::ContentHash => {
                     let computed = crate::index::compute_file_hash(path);
@@ -220,15 +321,15 @@ pub fn compute_index_diff(
                 file_id: None,
                 rel_path: rel_path.clone(),
                 abs_path: path.clone(),
-                language: "rust".to_string(),
-                backend_id: "tree-sitter-rust".to_string(),
+                language: db_lang.clone(),
+                backend_id: db_backend_id.clone(),
                 size_bytes: disk_size,
                 mtime_ms: disk_mtime,
                 mtime_ns: None,
                 content_hash: disk_hash.or_else(|| db_hash.clone()),
-                parser_id: "tree-sitter-rust".to_string(),
-                parser_version: "0.20.0".to_string(),
-                parser_config_hash: "".to_string(),
+                parser_id: db_parser_id.clone(),
+                parser_version: db_parser_version.clone(),
+                parser_config_hash: db_parser_config_hash.clone(),
                 indexed_at_ms: None,
                 parse_status: *db_parse_status,
             };
@@ -239,11 +340,12 @@ pub fn compute_index_diff(
                 unchanged.push(snapshot);
             }
         } else {
-            let snapshot = crate::index::create_file_snapshot(
+            let snapshot = crate::index::create_file_snapshot_with_registry(
                 workspace_root,
                 path,
                 options.change_detection,
                 options.include_tests,
+                registry,
             );
             added.push(snapshot);
         }
@@ -267,41 +369,45 @@ pub fn get_index_state(
     root: &Path,
     options: &BuildIndexOptions,
 ) -> Result<IndexState, CodeGraphError> {
+    get_index_state_with_registry(root, options, global_registry())
+}
+
+pub fn get_index_state_with_registry(
+    root: &Path,
+    options: &BuildIndexOptions,
+    registry: &BackendRegistry,
+) -> Result<IndexState, CodeGraphError> {
     let workspace_root = find_workspace_root(root);
     let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
     if !db_path.exists() {
-        return Ok(IndexState::NeedsFullRebuild(
-            RebuildReason::MissingDatabase,
-        ));
+        return Ok(IndexState::NeedsFullRebuild(RebuildReason::MissingDatabase));
     }
 
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(_) => {
-            return Ok(IndexState::NeedsFullRebuild(
-                RebuildReason::CorruptDatabase,
-            ));
+            return Ok(IndexState::NeedsFullRebuild(RebuildReason::CorruptDatabase));
         }
     };
 
     if let Err(_) = conn.execute("PRAGMA foreign_keys = ON;", []) {
-        return Ok(IndexState::NeedsFullRebuild(
-            RebuildReason::CorruptDatabase,
-        ));
+        return Ok(IndexState::NeedsFullRebuild(RebuildReason::CorruptDatabase));
     }
 
-    if let Some(reason) = check_db_compatibility(&conn, options)? {
+    if let Some(reason) = check_db_compatibility_with_registry(&conn, options, registry)? {
         return Ok(IndexState::NeedsFullRebuild(reason));
     }
 
-    let diff = compute_index_diff(&conn, &workspace_root, options)?;
+    let diff = compute_index_diff_with_registry(&conn, &workspace_root, options, registry)?;
     if diff.added.is_empty() && diff.modified.is_empty() && diff.deleted.is_empty() {
-        if options.use_rust_analyzer {
-            let lsp_status = conn.query_row(
-                "SELECT value FROM metadata WHERE key = 'resolver_status_rust-analyzer-lsp'",
-                [],
-                |row| row.get::<_, String>(0),
-            ).unwrap_or_else(|_| "none".to_string());
+        if options.use_lsp {
+            let lsp_status = conn
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'lsp_enrichment'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_else(|_| "none".to_string());
             if lsp_status == "none" {
                 return Ok(IndexState::NeedsIncrementalUpdate(diff));
             }
@@ -313,7 +419,15 @@ pub fn get_index_state(
 }
 
 pub fn validate_index_db(root: &Path, options: &BuildIndexOptions) -> Result<bool, CodeGraphError> {
-    match get_index_state(root, options)? {
+    validate_index_db_with_registry(root, options, global_registry())
+}
+
+pub fn validate_index_db_with_registry(
+    root: &Path,
+    options: &BuildIndexOptions,
+    registry: &BackendRegistry,
+) -> Result<bool, CodeGraphError> {
+    match get_index_state_with_registry(root, options, registry)? {
         IndexState::Ready => Ok(true),
         _ => Ok(false),
     }
@@ -416,14 +530,39 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3')",
         [],
     )?;
-    conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('backend', 'tree-sitter-rust+optional-rust-analyzer-lsp')", [])?;
+    // Store default backends metadata initially
+    let registry = crate::backend::global_registry();
+    let metas: Vec<_> = registry
+        .all()
+        .iter()
+        .map(|b| b.metadata(&crate::index::BuildIndexOptions::default()))
+        .collect();
+    let metas_str = serde_json::to_string(&metas).unwrap_or_default();
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('backends_metadata', ?1)",
+        [metas_str],
+    )?;
 
     Ok(())
 }
 
 pub fn clear_index(conn: &mut rusqlite::Connection) -> Result<(), CodeGraphError> {
+    clear_index_with_registry(conn, global_registry())
+}
+
+pub fn clear_index_with_registry(
+    conn: &mut rusqlite::Connection,
+    registry: &BackendRegistry,
+) -> Result<(), CodeGraphError> {
     let tx = conn.transaction()?;
-    tx.execute("DELETE FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'", [])?;
+    for backend in registry.all() {
+        let lang = backend.language().0.clone();
+        let backend_id = backend.id();
+        tx.execute(
+            "DELETE FROM files WHERE language = ?1 AND backend_id = ?2",
+            rusqlite::params![lang, backend_id.0],
+        )?;
+    }
     tx.commit()?;
     Ok(())
 }
@@ -457,7 +596,7 @@ pub fn save_index(
             let row_id = stmt.insert(rusqlite::params![
                 abs_path_str,
                 rel_path_str,
-                "rust",
+                file.language,
                 file.backend_id,
                 mtime_ms,
                 size_bytes,
@@ -466,7 +605,12 @@ pub fn save_index(
                 file.parser_version,
                 file.parser_config_hash,
                 file.indexed_at_ms.or_else(|| {
-                    Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+                    Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as i64,
+                    )
                 }),
                 parse_status_str,
             ])?;
@@ -492,10 +636,17 @@ pub fn save_index(
                 .get(&sym.file)
                 .copied()
                 .or_else(|| {
-                    index.files.iter().find(|f| f.rel_path == sym.file || f.abs_path == sym.file).and_then(|f| f.file_id)
+                    index
+                        .files
+                        .iter()
+                        .find(|f| f.rel_path == sym.file || f.abs_path == sym.file)
+                        .and_then(|f| f.file_id)
                 })
                 .ok_or_else(|| {
-                    CodeGraphError::Parse(format!("File not found for symbol: {}", sym.file.display()))
+                    CodeGraphError::Parse(format!(
+                        "File not found for symbol: {}",
+                        sym.file.display()
+                    ))
                 })?;
             sym.file_id = Some(file_id);
 
@@ -509,7 +660,7 @@ pub fn save_index(
                 sym.name,
                 sym.qualified_name,
                 sym.kind.as_str(),
-                "Rust",
+                sym.language.0.as_str(),
                 sym.range.start_line,
                 sym.range.start_col,
                 sym.range.end_line,
@@ -542,7 +693,11 @@ pub fn save_index(
                 .get(&cs.file)
                 .copied()
                 .or_else(|| {
-                    index.files.iter().find(|f| f.rel_path == cs.file || f.abs_path == cs.file).and_then(|f| f.file_id)
+                    index
+                        .files
+                        .iter()
+                        .find(|f| f.rel_path == cs.file || f.abs_path == cs.file)
+                        .and_then(|f| f.file_id)
                 })
                 .ok_or_else(|| {
                     CodeGraphError::Parse(format!(
@@ -630,7 +785,7 @@ pub fn save_index(
 
 pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
-    let mut stmt = conn.prepare("SELECT id, path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, indexed_at_ms, parse_status FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'")?;
+    let mut stmt = conn.prepare("SELECT id, path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, indexed_at_ms, parse_status FROM files")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -661,7 +816,8 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             parser_version,
             parser_config_hash,
             indexed_at_ms,
-            parse_status: FileParseStatus::from_str(&parse_status_str).unwrap_or(FileParseStatus::Success),
+            parse_status: FileParseStatus::from_str(&parse_status_str)
+                .unwrap_or(FileParseStatus::Success),
         });
     }
 
@@ -686,6 +842,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let name: String = row.get(2)?;
         let qualified_name: String = row.get(3)?;
         let kind_str: String = row.get(4)?;
+        let lang_str: String = row.get(5)?;
 
         let start_line: usize = row.get(6)?;
         let start_col: usize = row.get(7)?;
@@ -718,7 +875,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             name,
             qualified_name,
             kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
-            language: Language::Rust,
+            language: Language(lang_str),
             file: file_path,
             range: TextRange {
                 start_line,
@@ -821,24 +978,38 @@ pub fn rebuild_index_db(
     root: &Path,
     options: BuildIndexOptions,
 ) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
+    rebuild_index_db_with_registry(root, options, crate::backend::global_registry())
+}
+
+pub fn rebuild_index_db_with_registry(
+    root: &Path,
+    options: BuildIndexOptions,
+    registry: &BackendRegistry,
+) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
     let workspace_root = find_workspace_root(root);
-    let state = get_index_state(&workspace_root, &options)?;
+    let state = get_index_state_with_registry(&workspace_root, &options, registry)?;
 
     let mut conn = open_db(&workspace_root)?;
     init_schema(&conn)?;
 
     match state {
         IndexState::NeedsFullRebuild(reason) => {
-            let (index, report) =
-                run_full_rebuild(&mut conn, &workspace_root, options, Some(reason))?;
+            let (index, report) = run_full_rebuild_with_registry(
+                &mut conn,
+                &workspace_root,
+                options,
+                Some(reason),
+                registry,
+            )?;
             Ok((index, report))
         }
         IndexState::Missing => {
-            let (index, report) = run_full_rebuild(
+            let (index, report) = run_full_rebuild_with_registry(
                 &mut conn,
                 &workspace_root,
                 options,
                 Some(RebuildReason::MissingDatabase),
+                registry,
             )?;
             Ok((index, report))
         }
@@ -880,17 +1051,16 @@ pub fn rebuild_index_db(
             Ok((index, report))
         }
         IndexState::NeedsIncrementalUpdate(diff) => {
-            let (index, report) =
-                run_incremental_update(&mut conn, &workspace_root, options, diff)?;
+            let (index, report) = run_incremental_update_with_registry(
+                &mut conn,
+                &workspace_root,
+                options,
+                diff,
+                registry,
+            )?;
             Ok((index, report))
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ParsedFile {
-    pub symbols: Vec<Symbol>,
-    pub call_sites: Vec<CallSite>,
 }
 
 #[derive(Debug, Clone)]
@@ -905,6 +1075,15 @@ pub fn compute_affected_set(
     diff: &IndexDiff,
     staged: &[StagedFileUpdate],
 ) -> Result<AffectedSet, CodeGraphError> {
+    compute_affected_set_with_registry(conn, diff, staged, global_registry())
+}
+
+pub fn compute_affected_set_with_registry(
+    conn: &rusqlite::Connection,
+    diff: &IndexDiff,
+    staged: &[StagedFileUpdate],
+    registry: &BackendRegistry,
+) -> Result<AffectedSet, CodeGraphError> {
     let mut files = std::collections::HashSet::new();
     let mut symbols = std::collections::HashSet::new();
     let mut occurrences = std::collections::HashSet::new();
@@ -914,11 +1093,17 @@ pub fn compute_affected_set(
     // Default edge kind and resolver
     edge_kinds.insert(EdgeKind::Call);
     resolvers.insert("noop".to_string());
-    resolvers.insert("rust-analyzer-lsp".to_string());
+    for backend in registry.all() {
+        if let Some(res) = backend.resolver() {
+            resolvers.insert(res.resolver_id().0);
+        }
+    }
 
     let mut get_file_id_stmt = conn.prepare("SELECT id FROM files WHERE path = ?1")?;
     for path in &diff.deleted {
-        if let Ok(id) = get_file_id_stmt.query_row([path.to_string_lossy().to_string()], |row| row.get::<_, i64>(0)) {
+        if let Ok(id) = get_file_id_stmt.query_row([path.to_string_lossy().to_string()], |row| {
+            row.get::<_, i64>(0)
+        }) {
             files.insert(FileId(id));
         }
     }
@@ -940,7 +1125,8 @@ pub fn compute_affected_set(
     }
 
     for &sym_id in &symbols {
-        let mut stmt = conn.prepare("SELECT call_site_id FROM call_edges WHERE to_symbol_id = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT call_site_id FROM call_edges WHERE to_symbol_id = ?1")?;
         let rows = stmt.query_map([sym_id.0], |row| row.get::<_, i64>(0))?;
         for row in rows {
             if let Ok(cs_id) = row {
@@ -959,19 +1145,21 @@ pub fn compute_affected_set(
 }
 
 fn load_all_symbols(conn: &rusqlite::Connection) -> Result<Vec<Symbol>, CodeGraphError> {
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
                s.start_line, s.start_col, s.end_line, s.end_col, f.path
         FROM symbols s
         JOIN files f ON s.file_id = f.id
-        WHERE f.language = 'rust' AND f.backend_id = 'tree-sitter-rust'
-    ")?;
+    ",
+    )?;
     let rows = stmt.query_map([], |row| {
         let id: i64 = row.get(0)?;
         let file_id: i64 = row.get(1)?;
         let name: String = row.get(2)?;
         let qualified_name: String = row.get(3)?;
         let kind_str: String = row.get(4)?;
+        let lang_str: String = row.get(5)?;
         let start_line: usize = row.get(6)?;
         let start_col: usize = row.get(7)?;
         let end_line: usize = row.get(8)?;
@@ -984,7 +1172,7 @@ fn load_all_symbols(conn: &rusqlite::Connection) -> Result<Vec<Symbol>, CodeGrap
             name,
             qualified_name,
             kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
-            language: Language::Rust,
+            language: Language(lang_str),
             file: PathBuf::from(file_path),
             range: TextRange {
                 start_line,
@@ -1018,7 +1206,8 @@ fn load_call_sites_to_resolve(
         FROM call_sites cs
         JOIN files f ON cs.file_id = f.id
         WHERE 1=0
-    ".to_string();
+    "
+    .to_string();
 
     if !new_file_ids.is_empty() {
         let placeholders: Vec<String> = new_file_ids.iter().map(|id| id.to_string()).collect();
@@ -1026,7 +1215,10 @@ fn load_call_sites_to_resolve(
     }
 
     if !affected_occurrences.is_empty() {
-        let placeholders: Vec<String> = affected_occurrences.iter().map(|id| id.0.to_string()).collect();
+        let placeholders: Vec<String> = affected_occurrences
+            .iter()
+            .map(|id| id.0.to_string())
+            .collect();
         sql.push_str(&format!(" OR cs.id IN ({})", placeholders.join(",")));
     }
 
@@ -1071,6 +1263,24 @@ fn rebuild_affected_edges_in_tx(
     affected_files: &[FileId],
     affected_occurrences: &std::collections::HashSet<CallId>,
 ) -> Result<(), CodeGraphError> {
+    rebuild_affected_edges_in_tx_with_registry(
+        tx,
+        workspace_root,
+        options,
+        affected_files,
+        affected_occurrences,
+        crate::backend::global_registry(),
+    )
+}
+
+fn rebuild_affected_edges_in_tx_with_registry(
+    tx: &rusqlite::Transaction,
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    affected_files: &[FileId],
+    affected_occurrences: &std::collections::HashSet<CallId>,
+    registry: &BackendRegistry,
+) -> Result<(), CodeGraphError> {
     let mut file_ids = Vec::new();
     for fid in affected_files {
         file_ids.push(fid.0);
@@ -1081,49 +1291,17 @@ fn rebuild_affected_edges_in_tx(
         return Ok(());
     }
 
-    let cs_ids: Vec<String> = call_sites.iter().map(|cs| cs.id.unwrap().0.to_string()).collect();
-    let sql = format!("DELETE FROM call_edges WHERE call_site_id IN ({})", cs_ids.join(","));
+    let cs_ids: Vec<String> = call_sites
+        .iter()
+        .map(|cs| cs.id.unwrap().0.to_string())
+        .collect();
+    let sql = format!(
+        "DELETE FROM call_edges WHERE call_site_id IN ({})",
+        cs_ids.join(",")
+    );
     tx.execute(&sql, [])?;
 
     let all_symbols = load_all_symbols(tx)?;
-
-    let mut lsp_client = if options.use_rust_analyzer {
-        match crate::resolver::rust_analyzer_lsp::LspClient::new(workspace_root) {
-            Ok(client) => Some(client),
-            Err(err) => {
-                eprintln!(
-                    "Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.",
-                    err
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    if let Some(ref mut client) = lsp_client {
-        if let Some(first_cs) = call_sites.first() {
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(30);
-            let delay = std::time::Duration::from_millis(200);
-
-            while start.elapsed() < timeout {
-                let res = resolve_via_lsp(client, first_cs, &all_symbols);
-                match res {
-                    Err(err) if err.contains("-32603") || err.contains("file not found") => {
-                        std::thread::sleep(delay);
-                    }
-                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(5000) => {
-                        std::thread::sleep(delay);
-                    }
-                    _ => {
-                        break;
-                    }
-                }
-            }
-        }
-    }
 
     let mut edge_stmt = tx.prepare(
         "INSERT INTO call_edges (from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence)
@@ -1139,18 +1317,27 @@ fn rebuild_affected_edges_in_tx(
         let mut resolved_idx = None;
         let mut confidence = ResolutionConfidence::Unresolved;
 
-        if let Some(ref mut client) = lsp_client {
-            match resolve_via_lsp(client, cs, &all_symbols) {
-                Ok(Some(idx)) => {
-                    resolved_idx = Some(idx);
-                    confidence = ResolutionConfidence::LspExact;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    eprintln!(
-                        "LSP resolution warning for call to {}: {}",
-                        cs.raw_name, err
-                    );
+        let backend = registry.find_by_path(&cs.file);
+        let resolver = backend.and_then(|b| b.resolver());
+
+        if options.use_lsp {
+            if let Some(res) = resolver {
+                let resolve_input = crate::backend::ResolveInput {
+                    workspace_root,
+                    call_site: cs,
+                    symbols: &all_symbols,
+                };
+                match res.resolve(resolve_input) {
+                    Ok(out) => {
+                        resolved_idx = out.resolved_symbol_index;
+                        confidence = out.confidence;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "LSP resolution warning for call to {}: {}",
+                            cs.raw_name, err
+                        );
+                    }
                 }
             }
         }
@@ -1229,46 +1416,82 @@ pub fn validate_index_invariants(conn: &rusqlite::Connection) -> Result<(), Code
     Ok(())
 }
 
-fn run_full_rebuild(
+pub fn run_full_rebuild(
     conn: &mut rusqlite::Connection,
     workspace_root: &Path,
     options: BuildIndexOptions,
     reason: Option<RebuildReason>,
 ) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
-    clear_index(conn)?;
+    run_full_rebuild_with_registry(
+        conn,
+        workspace_root,
+        options,
+        reason,
+        crate::backend::global_registry(),
+    )
+}
+
+fn run_full_rebuild_with_registry(
+    conn: &mut rusqlite::Connection,
+    workspace_root: &Path,
+    options: BuildIndexOptions,
+    reason: Option<RebuildReason>,
+    registry: &BackendRegistry,
+) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
+    clear_index_with_registry(conn, registry)?;
 
     let mut base_options = options.clone();
-    base_options.use_rust_analyzer = false;
-    let mut index = crate::index::build_index(workspace_root, base_options)?;
+    base_options.use_lsp = false;
+    let mut index =
+        crate::index::build_index_with_registry(workspace_root, base_options, registry)?;
 
     save_index(conn, &mut index)?;
 
     let tx = conn.transaction()?;
 
-    let write_meta = |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
-        tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [key, value])?;
-        Ok(())
-    };
+    let write_meta =
+        |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
+            tx.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                [key, value],
+            )?;
+            Ok(())
+        };
     write_meta(&tx, "schema_version", "3")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
-    write_meta(&tx, "backend_id", "tree-sitter-rust")?;
-    write_meta(&tx, "parser_id", "tree-sitter-rust")?;
-    write_meta(&tx, "parser_version", "0.20.0")?;
+
+    let metas: Vec<_> = registry
+        .all()
+        .iter()
+        .map(|b| b.metadata(&options))
+        .collect();
+    let metas_str = serde_json::to_string(&metas).unwrap_or_default();
+    tx.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('backends_metadata', ?1)",
+        [metas_str],
+    )?;
+
     let parser_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
         format!("{:x}", hasher.finalize())
     };
     write_meta(&tx, "parser_config_hash", &parser_config_hash)?;
 
-    let resolver_id = if options.use_rust_analyzer { "rust-analyzer-lsp" } else { "noop" };
+    let resolver_id = if options.use_lsp { "lsp" } else { "noop" };
     write_meta(&tx, "resolver_id", resolver_id)?;
     write_meta(&tx, "resolver_version", "0.1.0")?;
     let resolver_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        hasher.update(
+            format!(
+                "use_lsp:{:?},max_depth:{:?}",
+                options.use_lsp, options.max_depth
+            )
+            .as_bytes(),
+        );
         format!("{:x}", hasher.finalize())
     };
     write_meta(&tx, "resolver_config_hash", &resolver_config_hash)?;
@@ -1306,12 +1529,19 @@ fn run_full_rebuild(
     };
 
     let affected_files_vec: Vec<FileId> = affected.files.iter().copied().collect();
-    rebuild_affected_edges_in_tx(&tx, workspace_root, &options, &affected_files_vec, &affected.occurrences)?;
+    rebuild_affected_edges_in_tx_with_registry(
+        &tx,
+        workspace_root,
+        &options,
+        &affected_files_vec,
+        &affected.occurrences,
+        registry,
+    )?;
 
-    if options.use_rust_analyzer {
-        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "complete")?;
+    if options.use_lsp {
+        write_meta(&tx, "lsp_enrichment", "complete")?;
     } else {
-        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "none")?;
+        write_meta(&tx, "lsp_enrichment", "none")?;
     }
 
     tx.commit()?;
@@ -1320,10 +1550,26 @@ fn run_full_rebuild(
 
     let loaded = load_index(conn, workspace_root)?;
 
-    let lsp_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::LspExact).count();
-    let syntax_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Syntax).count();
-    let heuristic_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Heuristic).count();
-    let unresolved_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Unresolved).count();
+    let lsp_count = loaded
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::LspExact)
+        .count();
+    let syntax_count = loaded
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Syntax)
+        .count();
+    let heuristic_count = loaded
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Heuristic)
+        .count();
+    let unresolved_count = loaded
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
+        .count();
 
     let report = crate::model::BuildReport {
         full_rebuild: true,
@@ -1352,13 +1598,37 @@ pub fn run_incremental_update(
     options: BuildIndexOptions,
     diff: IndexDiff,
 ) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
+    run_incremental_update_with_registry(
+        conn,
+        workspace_root,
+        options,
+        diff,
+        crate::backend::global_registry(),
+    )
+}
+
+pub fn run_incremental_update_with_registry(
+    conn: &mut rusqlite::Connection,
+    workspace_root: &Path,
+    options: BuildIndexOptions,
+    diff: IndexDiff,
+    registry: &BackendRegistry,
+) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
     let mut staged_updates = Vec::new();
     let mut get_file_id_stmt = conn.prepare("SELECT id FROM files WHERE path = ?1")?;
 
     for snapshot in &diff.added {
         let path = &snapshot.abs_path;
-        let parse_res = crate::languages::rust::parse_rust_file(path)
-            .map(|(symbols, call_sites)| ParsedFile { symbols, call_sites })
+        let backend = registry.find_by_path(path).ok_or_else(|| {
+            CodeGraphError::Parse(format!("No backend found for path: {}", path.display()))
+        })?;
+        let parse_res = backend
+            .parser()
+            .parse_file(crate::backend::ParseInput { path })
+            .map(|parsed| ParsedFile {
+                symbols: parsed.symbols,
+                call_sites: parsed.call_sites,
+            })
             .map_err(|e| e.to_string());
 
         staged_updates.push(StagedFileUpdate {
@@ -1374,8 +1644,16 @@ pub fn run_incremental_update(
             .query_row([path.to_string_lossy().to_string()], |row| row.get(0))
             .ok();
 
-        let parse_res = crate::languages::rust::parse_rust_file(path)
-            .map(|(symbols, call_sites)| ParsedFile { symbols, call_sites })
+        let backend = registry.find_by_path(path).ok_or_else(|| {
+            CodeGraphError::Parse(format!("No backend found for path: {}", path.display()))
+        })?;
+        let parse_res = backend
+            .parser()
+            .parse_file(crate::backend::ParseInput { path })
+            .map(|parsed| ParsedFile {
+                symbols: parsed.symbols,
+                call_sites: parsed.call_sites,
+            })
             .map_err(|e| e.to_string());
 
         staged_updates.push(StagedFileUpdate {
@@ -1386,7 +1664,7 @@ pub fn run_incremental_update(
     }
     drop(get_file_id_stmt);
 
-    let affected = compute_affected_set(conn, &diff, &staged_updates)?;
+    let affected = compute_affected_set_with_registry(conn, &diff, &staged_updates, registry)?;
 
     let tx = conn.transaction()?;
 
@@ -1437,7 +1715,12 @@ pub fn run_incremental_update(
     for update in &staged_updates {
         let path_str = update.snapshot.abs_path.to_string_lossy().to_string();
         let rel_path_str = update.snapshot.rel_path.to_string_lossy().to_string();
-        let current_time = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64);
+        let current_time = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+        );
 
         match &update.parse_result {
             Ok(parsed) => {
@@ -1459,7 +1742,7 @@ pub fn run_incremental_update(
                     file_insert_stmt.execute(rusqlite::params![
                         path_str,
                         rel_path_str,
-                        "rust",
+                        update.snapshot.language,
                         update.snapshot.backend_id,
                         update.snapshot.mtime_ms,
                         update.snapshot.size_bytes,
@@ -1518,7 +1801,7 @@ pub fn run_incremental_update(
                         sym.name,
                         sym.qualified_name,
                         sym.kind.as_str(),
-                        "Rust",
+                        sym.language.0.clone(),
                         sym.range.start_line,
                         sym.range.start_col,
                         sym.range.end_line,
@@ -1564,7 +1847,7 @@ pub fn run_incremental_update(
                     file_insert_stmt.execute(rusqlite::params![
                         path_str,
                         rel_path_str,
-                        "rust",
+                        update.snapshot.language,
                         update.snapshot.backend_id,
                         update.snapshot.mtime_ms,
                         update.snapshot.size_bytes,
@@ -1586,32 +1869,58 @@ pub fn run_incremental_update(
     drop(cs_stmt);
     drop(delete_file_contents_stmt);
 
-    rebuild_affected_edges_in_tx(&tx, workspace_root, &options, &successfully_parsed_file_ids, &affected.occurrences)?;
+    rebuild_affected_edges_in_tx_with_registry(
+        &tx,
+        workspace_root,
+        &options,
+        &successfully_parsed_file_ids,
+        &affected.occurrences,
+        registry,
+    )?;
 
-    let write_meta = |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
-        tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [key, value])?;
-        Ok(())
-    };
+    let write_meta =
+        |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
+            tx.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                [key, value],
+            )?;
+            Ok(())
+        };
     write_meta(&tx, "schema_version", "3")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
-    write_meta(&tx, "backend_id", "tree-sitter-rust")?;
-    write_meta(&tx, "parser_id", "tree-sitter-rust")?;
-    write_meta(&tx, "parser_version", "0.20.0")?;
+
+    let metas: Vec<_> = registry
+        .all()
+        .iter()
+        .map(|b| b.metadata(&options))
+        .collect();
+    let metas_str = serde_json::to_string(&metas).unwrap_or_default();
+    tx.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('backends_metadata', ?1)",
+        [metas_str],
+    )?;
+
     let parser_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
         format!("{:x}", hasher.finalize())
     };
     write_meta(&tx, "parser_config_hash", &parser_config_hash)?;
 
-    let resolver_id = if options.use_rust_analyzer { "rust-analyzer-lsp" } else { "noop" };
+    let resolver_id = if options.use_lsp { "lsp" } else { "noop" };
     write_meta(&tx, "resolver_id", resolver_id)?;
     write_meta(&tx, "resolver_version", "0.1.0")?;
     let resolver_config_hash = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        hasher.update(
+            format!(
+                "use_lsp:{:?},max_depth:{:?}",
+                options.use_lsp, options.max_depth
+            )
+            .as_bytes(),
+        );
         format!("{:x}", hasher.finalize())
     };
     write_meta(&tx, "resolver_config_hash", &resolver_config_hash)?;
@@ -1623,10 +1932,10 @@ pub fn run_incremental_update(
     write_meta(&tx, "change_detection_strategy", change_detection)?;
     write_meta(&tx, "base_index_ready", "true")?;
 
-    if options.use_rust_analyzer {
-        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "complete")?;
+    if options.use_lsp {
+        write_meta(&tx, "lsp_enrichment", "complete")?;
     } else {
-        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "none")?;
+        write_meta(&tx, "lsp_enrichment", "none")?;
     }
 
     tx.commit()?;
@@ -1635,10 +1944,26 @@ pub fn run_incremental_update(
 
     let final_index = load_index(conn, workspace_root)?;
 
-    let lsp_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::LspExact).count();
-    let syntax_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Syntax).count();
-    let heuristic_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Heuristic).count();
-    let unresolved_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Unresolved).count();
+    let lsp_count = final_index
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::LspExact)
+        .count();
+    let syntax_count = final_index
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Syntax)
+        .count();
+    let heuristic_count = final_index
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Heuristic)
+        .count();
+    let unresolved_count = final_index
+        .edges
+        .iter()
+        .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
+        .count();
 
     let report = crate::model::BuildReport {
         full_rebuild: false,
@@ -1682,6 +2007,7 @@ pub fn find_symbols(
             let name: String = row.get(2)?;
             let qualified_name: String = row.get(3)?;
             let kind_str: String = row.get(4)?;
+            let lang_str: String = row.get(5)?;
 
             let start_line: usize = row.get(6)?;
             let start_col: usize = row.get(7)?;
@@ -1713,7 +2039,7 @@ pub fn find_symbols(
                 name,
                 qualified_name,
                 kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
-                language: Language::Rust,
+                language: Language(lang_str),
                 file: PathBuf::from(file_path),
                 range: TextRange {
                     start_line,
@@ -1770,7 +2096,7 @@ pub fn resolve_symbol(
         let kind = LanguageObjectKind::from(sym.kind);
         let file_path = sym.file.clone();
         let range = SourceRange::from(sym.range.clone());
-        let language = Some(format!("{:?}", sym.language).to_lowercase());
+        let language = Some(sym.language.0.clone());
 
         let obj = LanguageObject {
             id,
@@ -1836,6 +2162,7 @@ pub fn load_callees(
             s.name,
             s.qualified_name,
             s.kind,
+            s.language,
             s.start_line,
             s.start_col,
             s.end_line,
@@ -1886,15 +2213,16 @@ pub fn load_callees(
             let s_name: String = row.get(9)?;
             let s_qualified_name: String = row.get(10)?;
             let s_kind_str: String = row.get(11)?;
-            let s_start_line: usize = row.get(12)?;
-            let s_start_col: usize = row.get(13)?;
-            let s_end_line: usize = row.get(14)?;
-            let s_end_col: usize = row.get(15)?;
-            let s_body_start_line: Option<usize> = row.get(16)?;
-            let s_body_start_col: Option<usize> = row.get(17)?;
-            let s_body_end_line: Option<usize> = row.get(18)?;
-            let s_body_end_col: Option<usize> = row.get(19)?;
-            let s_file_path: String = row.get(20)?;
+            let s_lang_str: String = row.get(12)?;
+            let s_start_line: usize = row.get(13)?;
+            let s_start_col: usize = row.get(14)?;
+            let s_end_line: usize = row.get(15)?;
+            let s_end_col: usize = row.get(16)?;
+            let s_body_start_line: Option<usize> = row.get(17)?;
+            let s_body_start_col: Option<usize> = row.get(18)?;
+            let s_body_end_line: Option<usize> = row.get(19)?;
+            let s_body_end_col: Option<usize> = row.get(20)?;
+            let s_file_path: String = row.get(21)?;
 
             let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
                 s_body_start_line,
@@ -1918,7 +2246,7 @@ pub fn load_callees(
                 name: s_name,
                 qualified_name: s_qualified_name,
                 kind: SymbolKind::from_str(&s_kind_str).unwrap_or(SymbolKind::Function),
-                language: Language::Rust,
+                language: Language(s_lang_str),
                 file: PathBuf::from(s_file_path),
                 range: TextRange {
                     start_line: s_start_line,
@@ -1957,6 +2285,7 @@ pub fn load_callers(
             s.name,
             s.qualified_name,
             s.kind,
+            s.language,
             s.start_line,
             s.start_col,
             s.end_line,
@@ -2006,15 +2335,16 @@ pub fn load_callers(
         let s_name: String = row.get(9)?;
         let s_qualified_name: String = row.get(10)?;
         let s_kind_str: String = row.get(11)?;
-        let s_start_line: usize = row.get(12)?;
-        let s_start_col: usize = row.get(13)?;
-        let s_end_line: usize = row.get(14)?;
-        let s_end_col: usize = row.get(15)?;
-        let s_body_start_line: Option<usize> = row.get(16)?;
-        let s_body_start_col: Option<usize> = row.get(17)?;
-        let s_body_end_line: Option<usize> = row.get(18)?;
-        let s_body_end_col: Option<usize> = row.get(19)?;
-        let s_file_path: String = row.get(20)?;
+        let s_lang_str: String = row.get(12)?;
+        let s_start_line: usize = row.get(13)?;
+        let s_start_col: usize = row.get(14)?;
+        let s_end_line: usize = row.get(15)?;
+        let s_end_col: usize = row.get(16)?;
+        let s_body_start_line: Option<usize> = row.get(17)?;
+        let s_body_start_col: Option<usize> = row.get(18)?;
+        let s_body_end_line: Option<usize> = row.get(19)?;
+        let s_body_end_col: Option<usize> = row.get(20)?;
+        let s_file_path: String = row.get(21)?;
 
         let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
             s_body_start_line,
@@ -2038,7 +2368,7 @@ pub fn load_callers(
             name: s_name,
             qualified_name: s_qualified_name,
             kind: SymbolKind::from_str(&s_kind_str).unwrap_or(SymbolKind::Function),
-            language: Language::Rust,
+            language: Language(s_lang_str),
             file: PathBuf::from(s_file_path),
             range: TextRange {
                 start_line: s_start_line,
@@ -2087,6 +2417,7 @@ pub fn load_symbols_for_file(
         let name: String = row.get(1)?;
         let qualified_name: String = row.get(2)?;
         let kind_str: String = row.get(3)?;
+        let lang_str: String = row.get(4)?;
 
         let start_line: usize = row.get(5)?;
         let start_col: usize = row.get(6)?;
@@ -2117,7 +2448,7 @@ pub fn load_symbols_for_file(
             name,
             qualified_name,
             kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
-            language: Language::Rust,
+            language: Language(lang_str),
             file: path.to_path_buf(),
             range: TextRange {
                 start_line,
@@ -2175,7 +2506,7 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
                 language: "rust".to_string(),
-                backend_id: "tree-sitter-rust".to_string(),
+                backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
                 mtime_ns: None,
@@ -2193,7 +2524,7 @@ mod tests {
                     name: "run_pipeline".to_string(),
                     qualified_name: "mod::run_pipeline".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 1,
@@ -2209,7 +2540,7 @@ mod tests {
                     name: "load".to_string(),
                     qualified_name: "mod::load".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 6,
@@ -2287,7 +2618,7 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
                 language: "rust".to_string(),
-                backend_id: "tree-sitter-rust".to_string(),
+                backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
                 mtime_ns: None,
@@ -2304,7 +2635,7 @@ mod tests {
                 name: "run_pipeline".to_string(),
                 qualified_name: "mod::run_pipeline".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 1,
@@ -2347,7 +2678,7 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
                 language: "rust".to_string(),
-                backend_id: "tree-sitter-rust".to_string(),
+                backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
                 mtime_ns: None,
@@ -2365,7 +2696,7 @@ mod tests {
                     name: "run_pipeline".to_string(),
                     qualified_name: "mod::run_pipeline".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 1,
@@ -2381,7 +2712,7 @@ mod tests {
                     name: "Pipeline".to_string(),
                     qualified_name: "mod::Pipeline".to_string(),
                     kind: SymbolKind::Struct,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 6,
@@ -2397,7 +2728,7 @@ mod tests {
                     name: "duplicate_name".to_string(),
                     qualified_name: "modA::duplicate_name".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 11,
@@ -2413,7 +2744,7 @@ mod tests {
                     name: "duplicate_name".to_string(),
                     qualified_name: "modB::duplicate_name".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 16,
@@ -2483,7 +2814,7 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
                 language: "rust".to_string(),
-                backend_id: "tree-sitter-rust".to_string(),
+                backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
                 mtime_ns: None,
@@ -2501,7 +2832,7 @@ mod tests {
                     name: "run_pipeline".to_string(),
                     qualified_name: "mod::run_pipeline".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 1,
@@ -2517,7 +2848,7 @@ mod tests {
                     name: "load".to_string(),
                     qualified_name: "mod::load".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 6,
@@ -2533,7 +2864,7 @@ mod tests {
                     name: "process".to_string(),
                     qualified_name: "mod::process".to_string(),
                     kind: SymbolKind::Function,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 11,
@@ -2549,7 +2880,7 @@ mod tests {
                     name: "test_run_pipeline".to_string(),
                     qualified_name: "mod::test_run_pipeline".to_string(),
                     kind: SymbolKind::Test,
-                    language: Language::Rust,
+                    language: Language::rust(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 16,

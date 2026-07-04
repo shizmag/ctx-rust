@@ -1,18 +1,17 @@
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::backend::{BackendRegistry, ParseInput, ResolveInput, global_registry};
 use crate::error::CodeGraphError;
-use crate::languages::rust::parse_rust_file;
-use crate::model::{CallEdge, CodeIndex, FileSnapshot, FileParseStatus, SymbolId, SymbolKind};
+use crate::model::{CallEdge, CodeIndex, FileParseStatus, FileSnapshot, SymbolId, SymbolKind};
 use crate::resolver::noop::resolve_name_only;
-use crate::resolver::rust_analyzer_lsp::{LspClient, resolve_via_lsp};
 
 #[derive(Debug, Clone)]
 pub struct BuildIndexOptions {
-    pub use_rust_analyzer: bool,
+    pub use_lsp: bool,
     pub max_depth: Option<usize>,
     pub include_tests: bool,
     pub change_detection: crate::model::FileChangeDetection,
@@ -21,7 +20,7 @@ pub struct BuildIndexOptions {
 impl Default for BuildIndexOptions {
     fn default() -> Self {
         Self {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -61,6 +60,22 @@ pub fn create_file_snapshot(
     change_detection: crate::model::FileChangeDetection,
     include_tests: bool,
 ) -> FileSnapshot {
+    create_file_snapshot_with_registry(
+        workspace_root,
+        abs_path,
+        change_detection,
+        include_tests,
+        global_registry(),
+    )
+}
+
+pub fn create_file_snapshot_with_registry(
+    workspace_root: &Path,
+    abs_path: &Path,
+    change_detection: crate::model::FileChangeDetection,
+    include_tests: bool,
+    registry: &BackendRegistry,
+) -> FileSnapshot {
     let rel_path = abs_path
         .strip_prefix(workspace_root)
         .unwrap_or(abs_path)
@@ -73,24 +88,29 @@ pub fn create_file_snapshot(
         None
     };
 
-    let parser_config_hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(format!("include_tests:{}", include_tests).as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
+    let backend = registry
+        .find_by_path(abs_path)
+        .expect("No backend registered for path");
+    let parser = backend.parser();
+    let parser_config_hash = backend.config_fingerprint(&BuildIndexOptions {
+        use_lsp: false,
+        max_depth: None,
+        include_tests,
+        change_detection,
+    });
 
     FileSnapshot {
         file_id: None,
         rel_path,
         abs_path: abs_path.to_path_buf(),
-        language: "rust".to_string(),
-        backend_id: "tree-sitter-rust".to_string(),
+        language: backend.language().0.clone(),
+        backend_id: backend.id().0.clone(),
         size_bytes,
         mtime_ms,
         mtime_ns: None,
         content_hash,
-        parser_id: "tree-sitter-rust".to_string(),
-        parser_version: "0.20.0".to_string(),
+        parser_id: parser.parser_id().0.clone(),
+        parser_version: parser.parser_version(),
         parser_config_hash,
         indexed_at_ms: None,
         parse_status: FileParseStatus::Success,
@@ -98,6 +118,10 @@ pub fn create_file_snapshot(
 }
 
 pub(crate) fn should_index_path(path: &Path) -> bool {
+    should_index_path_with_registry(path, global_registry())
+}
+
+pub(crate) fn should_index_path_with_registry(path: &Path, registry: &BackendRegistry) -> bool {
     for component in path.components() {
         if let Some(s) = component.as_os_str().to_str() {
             if s == "target" || s == ".git" || s == ".codegraph" || s == ".ctx-codegraph" {
@@ -105,10 +129,18 @@ pub(crate) fn should_index_path(path: &Path) -> bool {
             }
         }
     }
-    path.extension().map(|e| e == "rs").unwrap_or(false)
+    registry.find_by_path(path).is_some()
 }
 
 pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex, CodeGraphError> {
+    build_index_with_registry(root, options, global_registry())
+}
+
+pub fn build_index_with_registry(
+    root: &Path,
+    options: BuildIndexOptions,
+    registry: &BackendRegistry,
+) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
     let mut global_symbols = Vec::new();
     let mut global_call_sites = Vec::new();
@@ -129,27 +161,41 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
         }
         true
     });
-    let mut rust_files = Vec::new();
+    let mut matching_files = Vec::new();
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if should_index_path(path) {
-            rust_files.push(path.to_path_buf());
+        if should_index_path_with_registry(path, registry) && path.is_file() {
+            matching_files.push(path.to_path_buf());
         }
     }
 
     // Process each file
-    for path in rust_files {
-        let source_file = create_file_snapshot(root, &path, options.change_detection, options.include_tests);
-        files.push(source_file.clone());
+    for path in matching_files {
+        let backend = match registry.find_by_path(&path) {
+            Some(b) => b,
+            None => continue,
+        };
 
-        let (mut file_symbols, mut file_call_sites) = match parse_rust_file(&path) {
+        let mut source_file = create_file_snapshot_with_registry(
+            root,
+            &path,
+            options.change_detection,
+            options.include_tests,
+            registry,
+        );
+
+        let parsed = match backend.parser().parse_file(ParseInput { path: &path }) {
             Ok(res) => res,
             Err(e) => {
-                // If it fails to parse, we log / skip or return error. Let's make it robust: skip or turn into a warning.
                 eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                source_file.parse_status = FileParseStatus::Failed;
+                files.push(source_file);
                 continue;
             }
         };
+        files.push(source_file);
+
+        let (mut file_symbols, mut file_call_sites) = (parsed.symbols, parsed.call_sites);
 
         if !options.include_tests {
             let mut new_symbols = Vec::new();
@@ -204,43 +250,6 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
 
     // Resolve call sites
     let mut edges = Vec::new();
-    let mut lsp_client = if options.use_rust_analyzer {
-        match LspClient::new(root) {
-            Ok(client) => Some(client),
-            Err(err) => {
-                eprintln!(
-                    "Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.",
-                    err
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    if let Some(ref mut client) = lsp_client {
-        if let Some(first_cs) = global_call_sites.first() {
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(15);
-            let delay = std::time::Duration::from_millis(200);
-
-            while start.elapsed() < timeout {
-                let res = resolve_via_lsp(client, first_cs, &global_symbols);
-                match res {
-                    Err(err) if err.contains("-32603") || err.contains("file not found") => {
-                        std::thread::sleep(delay);
-                    }
-                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(5000) => {
-                        std::thread::sleep(delay);
-                    }
-                    _ => {
-                        break;
-                    }
-                }
-            }
-        }
-    }
 
     for (call_site_idx, cs) in global_call_sites.iter().enumerate() {
         let from_id = match cs.from {
@@ -251,18 +260,27 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
         let mut resolved_idx = None;
         let mut confidence = crate::model::ResolutionConfidence::Unresolved;
 
-        if let Some(ref mut client) = lsp_client {
-            match resolve_via_lsp(client, cs, &global_symbols) {
-                Ok(Some(idx)) => {
-                    resolved_idx = Some(idx);
-                    confidence = crate::model::ResolutionConfidence::LspExact;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    eprintln!(
-                        "LSP resolution warning for call to {}: {}",
-                        cs.raw_name, err
-                    );
+        let backend = registry.find_by_path(&cs.file);
+        let resolver = backend.and_then(|b| b.resolver());
+
+        if options.use_lsp {
+            if let Some(res) = resolver {
+                let resolve_input = ResolveInput {
+                    workspace_root: root,
+                    call_site: cs,
+                    symbols: &global_symbols,
+                };
+                match res.resolve(resolve_input) {
+                    Ok(out) => {
+                        resolved_idx = out.resolved_symbol_index;
+                        confidence = out.confidence;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "LSP resolution warning for call to {}: {}",
+                            cs.raw_name, err
+                        );
+                    }
                 }
             }
         }

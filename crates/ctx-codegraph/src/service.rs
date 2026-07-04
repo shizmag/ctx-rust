@@ -27,7 +27,7 @@ impl GraphContextService {
     pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
         let workspace_root = crate::storage::find_workspace_root(repo_root);
         let options = crate::index::BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -57,7 +57,7 @@ impl GraphContextService {
             let kind = LanguageObjectKind::from(sym.kind);
             let file_path = sym.file;
             let range = SourceRange::from(sym.range);
-            let language = Some(format!("{:?}", sym.language).to_lowercase());
+            let language = Some(sym.language.0.clone());
 
             results.push(LanguageObject {
                 id,
@@ -101,7 +101,7 @@ impl GraphContextService {
             file_path: root_sym.file.clone(),
             range: SourceRange::from(root_sym.range.clone()),
             signature: None,
-            language: Some(format!("{:?}", root_sym.language).to_lowercase()),
+            language: Some(root_sym.language.0.clone()),
         };
 
         let mut visited = HashSet::new();
@@ -147,7 +147,7 @@ impl GraphContextService {
                     file_path: sym.file.clone(),
                     range: SourceRange::from(sym.range.clone()),
                     signature: None,
-                    language: Some(format!("{:?}", sym.language).to_lowercase()),
+                    language: Some(sym.language.0.clone()),
                 };
                 nodes.push(obj);
             }

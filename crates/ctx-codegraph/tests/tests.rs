@@ -60,7 +60,7 @@ fn test_name_only_resolution_and_ambiguity() {
             name: "foo".to_string(),
             qualified_name: "mod::foo".to_string(),
             kind: SymbolKind::Function,
-            language: Language::Rust,
+            language: Language::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 1,
@@ -76,7 +76,7 @@ fn test_name_only_resolution_and_ambiguity() {
             name: "bar".to_string(),
             qualified_name: "mod1::bar".to_string(),
             kind: SymbolKind::Function,
-            language: Language::Rust,
+            language: Language::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 6,
@@ -92,7 +92,7 @@ fn test_name_only_resolution_and_ambiguity() {
             name: "bar".to_string(),
             qualified_name: "mod2::bar".to_string(),
             kind: SymbolKind::Function,
-            language: Language::Rust,
+            language: Language::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 11,
@@ -136,7 +136,7 @@ fn test_sqlite_and_find_symbols() {
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: PathBuf::from("src/lib.rs"),
             language: "rust".to_string(),
-            backend_id: "tree-sitter-rust".to_string(),
+            backend_id: "rust-backend".to_string(),
             size_bytes: 100,
             mtime_ms: 12345,
             mtime_ns: None,
@@ -154,7 +154,7 @@ fn test_sqlite_and_find_symbols() {
                 name: "foo".to_string(),
                 qualified_name: "mod::foo".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 1,
@@ -170,7 +170,7 @@ fn test_sqlite_and_find_symbols() {
                 name: "bar_func".to_string(),
                 qualified_name: "mod::bar_func".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 6,
@@ -246,7 +246,7 @@ fn test_slices() {
                 name: "a".to_string(),
                 qualified_name: "a".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 1,
@@ -262,7 +262,7 @@ fn test_slices() {
                 name: "b".to_string(),
                 qualified_name: "b".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 3,
@@ -278,7 +278,7 @@ fn test_slices() {
                 name: "c".to_string(),
                 qualified_name: "c".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 5,
@@ -369,7 +369,7 @@ fn test_integration_mini_project() {
     let (index, _) = rebuild_index_db(
         dir.path(),
         BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -473,6 +473,18 @@ fn test_integration_with_rust_analyzer() {
     "#;
     fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
 
+    if std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return;
+    }
+
     let src_dir = dir.path().join("src");
     fs::create_dir_all(&src_dir).unwrap();
 
@@ -489,7 +501,7 @@ fn test_integration_with_rust_analyzer() {
     let (index, _) = rebuild_index_db(
         dir.path(),
         BuildIndexOptions {
-            use_rust_analyzer: true,
+            use_lsp: true,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -514,7 +526,7 @@ fn test_service_context_selection() {
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: dir.path().join("src/lib.rs"),
             language: "rust".to_string(),
-            backend_id: "tree-sitter-rust".to_string(),
+            backend_id: "rust-backend".to_string(),
             size_bytes: 200,
             mtime_ms: 100,
             mtime_ns: None,
@@ -532,7 +544,7 @@ fn test_service_context_selection() {
                 name: "a".to_string(),
                 qualified_name: "a".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 1,
@@ -548,7 +560,7 @@ fn test_service_context_selection() {
                 name: "b".to_string(),
                 qualified_name: "b".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 6,
@@ -564,7 +576,7 @@ fn test_service_context_selection() {
                 name: "c".to_string(),
                 qualified_name: "c".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 11,
@@ -580,7 +592,7 @@ fn test_service_context_selection() {
                 name: "d".to_string(),
                 qualified_name: "d".to_string(),
                 kind: SymbolKind::Function,
-                language: Language::Rust,
+                language: Language::rust(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 16,
@@ -790,7 +802,7 @@ fn test_index_lifecycle_validation() {
     assert!(db_path.exists());
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -822,7 +834,7 @@ fn test_index_lifecycle_validation() {
     assert!(validate_index_db(root, &options).unwrap());
 
     let different_options = BuildIndexOptions {
-        use_rust_analyzer: true,
+        use_lsp: true,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -879,7 +891,7 @@ fn test_edge_resolution_quality_variants() {
     let (index, report) = rebuild_index_db(
         root,
         BuildIndexOptions {
-            use_rust_analyzer: false,
+            use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -940,7 +952,7 @@ fn test_incremental_diff_report() {
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1014,7 +1026,7 @@ fn test_db_correctness_after_incremental_update() {
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1176,7 +1188,7 @@ while True:
 
     // Run build index with lsp
     let options = BuildIndexOptions {
-        use_rust_analyzer: true,
+        use_lsp: true,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1199,6 +1211,7 @@ while True:
 }
 
 #[test]
+#[test]
 fn test_parse_failure_preserves_old_graph() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -1215,7 +1228,7 @@ fn test_parse_failure_preserves_old_graph() {
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1233,7 +1246,7 @@ fn test_parse_failure_preserves_old_graph() {
     // Run incremental update (through rebuild_index_db)
     let (index2, report2) = rebuild_index_db(root, options.clone()).unwrap();
     // Parse should have failed, so the old symbol graph is preserved
-    assert_eq!(report2.parsed_files, 0); // it attempted but failed to parse successfully, wait, it failed so symbols/sites were not overwritten
+    assert_eq!(report2.parsed_files, 0);
     assert!(index2.symbols.iter().any(|s| s.name == "a"));
 
     // Check IndexState in the DB. Since lib.rs has parse_status = 'Failed', the index state should be NeedsIncrementalUpdate, not Ready!
@@ -1261,7 +1274,7 @@ fn test_content_hash_detection() {
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::ContentHash,
@@ -1289,14 +1302,16 @@ fn test_content_hash_detection() {
         .unwrap();
     }
 
-
     // Now, run with change_detection = ContentHash. It should detect it as MODIFIED because the content hash differs!
     let state_hash = get_index_state(root, &options).unwrap();
     if let IndexState::NeedsIncrementalUpdate(diff) = state_hash {
         assert_eq!(diff.modified.len(), 1);
         assert_eq!(diff.modified[0].rel_path, PathBuf::from("src/lib.rs"));
     } else {
-        panic!("Expected NeedsIncrementalUpdate for ContentHash, got {:?}", state_hash);
+        panic!(
+            "Expected NeedsIncrementalUpdate for ContentHash, got {:?}",
+            state_hash
+        );
     }
 
     // Run incremental build, verify the symbol is updated
@@ -1321,7 +1336,7 @@ fn test_rebuild_triggers_on_config_changes() {
     fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1352,9 +1367,9 @@ fn test_rebuild_triggers_on_config_changes() {
         other => panic!("Expected ParserConfigChanged, got {:?}", other),
     }
 
-    // 3. Resolver config changes (e.g. use_rust_analyzer changes)
+    // 3. Resolver config changes (e.g. use_lsp changes)
     let options_diff_resolver = BuildIndexOptions {
-        use_rust_analyzer: true,
+        use_lsp: true,
         ..options.clone()
     };
     let state3 = get_index_state(root, &options_diff_resolver).unwrap();
@@ -1384,7 +1399,7 @@ fn test_affected_set_callee_pulls_callers() {
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1424,7 +1439,7 @@ fn test_other_languages_preserved() {
     fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1557,7 +1572,7 @@ while True:
     fs::write(src_dir.join("lib.rs"), "fn a() { b(); }\nfn b() {}\n").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: true,
+        use_lsp: true,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1566,7 +1581,7 @@ while True:
     let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
 
     unsafe {
-        std::env::set_var("PATH", old_path);
+        std::env::set_var("PATH", &old_path);
     }
 
     assert!(report.full_rebuild);
@@ -1590,7 +1605,7 @@ fn test_db_transaction_rollback_on_failure() {
             rel_path: PathBuf::from("lib.rs"),
             abs_path: dir.path().join("lib.rs"),
             language: "rust".to_string(),
-            backend_id: "tree-sitter-rust".to_string(),
+            backend_id: "rust-backend".to_string(),
             size_bytes: 100,
             mtime_ms: 100,
             mtime_ns: None,
@@ -1607,19 +1622,26 @@ fn test_db_transaction_rollback_on_failure() {
     };
     storage::save_index(&mut conn, &mut index).unwrap();
 
-    let run_failed_transaction = |conn: &mut rusqlite::Connection| -> Result<(), crate::error::CodeGraphError> {
-        let tx = conn.transaction()?;
-        tx.execute("INSERT INTO symbols (file_id, name, qualified_name, kind, language, start_line, start_col, end_line, end_col) VALUES (1, 'foo', 'foo', 'function', 'rust', 1, 1, 1, 1)", [])?;
-        tx.execute("INSERT INTO files (path, rel_path, language, backend_id, mtime_ms, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", 
-                   rusqlite::params![dir.path().join("lib.rs").to_string_lossy().to_string(), "lib.rs", "rust", "tree-sitter-rust", 100, 100])?;
-        tx.commit()?;
-        Ok(())
-    };
+    let run_failed_transaction =
+        |conn: &mut rusqlite::Connection| -> Result<(), crate::error::CodeGraphError> {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT INTO symbols (file_id, name, qualified_name, kind, language, start_line, start_col, end_line, end_col) VALUES (1, 'foo', 'foo', 'function', 'rust', 1, 1, 1, 1)", [])?;
+            tx.execute("INSERT INTO files (path, rel_path, language, backend_id, mtime_ms, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", 
+                   rusqlite::params![dir.path().join("lib.rs").to_string_lossy().to_string(), "lib.rs", "rust", "rust-backend", 100, 100])?;
+            tx.commit()?;
+            Ok(())
+        };
 
     let res = run_failed_transaction(&mut conn);
     assert!(res.is_err());
 
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM symbols WHERE name = 'foo'", [], |row| row.get(0)).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM symbols WHERE name = 'foo'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(count, 0, "Changes were committed despite error!");
 }
 
@@ -1645,7 +1667,7 @@ fn test_empty_and_whitespace_only_files() {
     fs::write(&file3, "   \n  \n\t ").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1678,7 +1700,7 @@ fn test_multiple_simultaneous_changes() {
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1697,7 +1719,8 @@ fn test_multiple_simultaneous_changes() {
     assert_eq!(report.modified_files, 1);
     assert_eq!(report.added_files, 1);
 
-    let symbol_names: std::collections::HashSet<String> = index2.symbols.iter().map(|s| s.name.clone()).collect();
+    let symbol_names: std::collections::HashSet<String> =
+        index2.symbols.iter().map(|s| s.name.clone()).collect();
     assert!(!symbol_names.contains("a"));
     assert!(!symbol_names.contains("b"));
     assert!(symbol_names.contains("b_new"));
@@ -1721,7 +1744,7 @@ fn test_parse_failure_recovery() {
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_lsp: false,
         max_depth: None,
         include_tests: true,
         change_detection: crate::model::FileChangeDetection::MtimeAndSize,
@@ -1739,9 +1762,48 @@ fn test_parse_failure_recovery() {
     fs::write(&file_path, "pub fn b() {}").unwrap();
     let (index3, report3) = rebuild_index_db(root, options.clone()).unwrap();
     assert_eq!(report3.modified_files, 1);
-    
+
     assert!(index3.symbols.iter().any(|s| s.name == "b"));
     assert!(!index3.symbols.iter().any(|s| s.name == "a"));
 }
 
+#[test]
+fn test_generic_pipeline_with_mock_backend() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let proj_dir = temp_dir.path().to_path_buf();
 
+    // Create a mock workspace directory with mock.project file as marker
+    std::fs::write(proj_dir.join("mock.project"), "mock project content").unwrap();
+
+    // Write a mock code file
+    let mock_code = "
+        fn foo()
+        fn bar()
+    ";
+    std::fs::write(proj_dir.join("test_file.mock"), mock_code).unwrap();
+
+    // Run build index
+    let options = BuildIndexOptions {
+        use_lsp: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
+
+    // Verify index results
+    assert!(report.full_rebuild);
+    assert_eq!(index.files.len(), 1);
+    assert_eq!(
+        index.files[0].abs_path.file_name().unwrap(),
+        "test_file.mock"
+    );
+    assert_eq!(index.files[0].language, "mock");
+
+    assert_eq!(index.symbols.len(), 2);
+    let sym_names: std::collections::HashSet<String> =
+        index.symbols.iter().map(|s| s.name.clone()).collect();
+    assert!(sym_names.contains("foo"));
+    assert!(sym_names.contains("bar"));
+}

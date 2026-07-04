@@ -502,7 +502,7 @@ mod tests {
 
         // 2. Build codegraph index so search works
         let options = ctx_codegraph::BuildIndexOptions {
-            use_rust_analyzer: false, // fast tree-sitter fallback
+            use_lsp: false, // fast tree-sitter fallback
             max_depth: None,
             include_tests: true,
             change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -616,7 +616,7 @@ mod tests {
                         name: "a".to_string(),
                         qualified_name: "a".to_string(),
                         kind: ctx_codegraph::SymbolKind::Function,
-                        language: ctx_codegraph::Language::Rust,
+                        language: ctx_codegraph::Language::rust(),
                         file: std::path::PathBuf::from("lib.rs"),
                         range: ctx_codegraph::TextRange {
                             start_line: 1,
@@ -632,7 +632,7 @@ mod tests {
                         name: "b".to_string(),
                         qualified_name: "b".to_string(),
                         kind: ctx_codegraph::SymbolKind::Function,
-                        language: ctx_codegraph::Language::Rust,
+                        language: ctx_codegraph::Language::rust(),
                         file: std::path::PathBuf::from("lib.rs"),
                         range: ctx_codegraph::TextRange {
                             start_line: 4,
@@ -648,7 +648,7 @@ mod tests {
                         name: "c".to_string(),
                         qualified_name: "c".to_string(),
                         kind: ctx_codegraph::SymbolKind::Function,
-                        language: ctx_codegraph::Language::Rust,
+                        language: ctx_codegraph::Language::rust(),
                         file: std::path::PathBuf::from("lib.rs"),
                         range: ctx_codegraph::TextRange {
                             start_line: 7,

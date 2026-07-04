@@ -1,2 +1,2 @@
+pub mod lsp_transport;
 pub mod noop;
-pub mod rust_analyzer_lsp;

@@ -7,3 +7,4 @@ run/.ctx-codegraph/codegraph.sqlite
 .ctx-codegraph/
 .ctx_*/
 prompts/
+AGENTS.md

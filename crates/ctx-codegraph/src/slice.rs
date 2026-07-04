@@ -103,7 +103,7 @@ mod tests {
             name: name.to_string(),
             qualified_name: name.to_string(),
             kind,
-            language: Language::Rust,
+            language: Language::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 1,

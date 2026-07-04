@@ -1,7 +1,28 @@
+use crate::backend::{ParseInput, ParsedFile, ParserBackend, ParserId};
 use crate::error::CodeGraphError;
 use crate::model::{CallSite, Language, Symbol, SymbolKind, TextRange};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
+
+pub struct RustParser;
+
+impl ParserBackend for RustParser {
+    fn parser_id(&self) -> ParserId {
+        ParserId("tree-sitter-rust".to_string())
+    }
+
+    fn parser_version(&self) -> String {
+        "0.20.0".to_string()
+    }
+
+    fn parse_file(&self, input: ParseInput<'_>) -> Result<ParsedFile, CodeGraphError> {
+        let (symbols, call_sites) = parse_rust_file(input.path)?;
+        Ok(ParsedFile {
+            symbols,
+            call_sites,
+        })
+    }
+}
 
 struct ParserState<'a> {
     source: &'a [u8],
@@ -30,7 +51,6 @@ fn clean_type_name(s: &str) -> String {
     } else {
         s.trim()
     };
-    // Also clean up any leading/trailing reference symbols or deref, though usually type_name is clean.
     clean.to_string()
 }
 
@@ -73,7 +93,7 @@ impl<'a> ParserState<'a> {
                     name: impl_name.clone(),
                     qualified_name: impl_name.clone(),
                     kind: SymbolKind::Impl,
-                    language: Language::Rust,
+                    language: Language("rust".to_string()),
                     file: self.file_path.clone(),
                     range,
                     body_range: None,
@@ -101,7 +121,7 @@ impl<'a> ParserState<'a> {
                         name: mod_name,
                         qualified_name: qname,
                         kind: SymbolKind::Module,
-                        language: Language::Rust,
+                        language: Language("rust".to_string()),
                         file: self.file_path.clone(),
                         range,
                         body_range: None,
@@ -123,7 +143,7 @@ impl<'a> ParserState<'a> {
                         name: name.clone(),
                         qualified_name,
                         kind: SymbolKind::Struct,
-                        language: Language::Rust,
+                        language: Language("rust".to_string()),
                         file: self.file_path.clone(),
                         range,
                         body_range: None,
@@ -145,7 +165,7 @@ impl<'a> ParserState<'a> {
                         name: name.clone(),
                         qualified_name,
                         kind: SymbolKind::Enum,
-                        language: Language::Rust,
+                        language: Language("rust".to_string()),
                         file: self.file_path.clone(),
                         range,
                         body_range: None,
@@ -167,7 +187,7 @@ impl<'a> ParserState<'a> {
                         name: name.clone(),
                         qualified_name,
                         kind: SymbolKind::Trait,
-                        language: Language::Rust,
+                        language: Language("rust".to_string()),
                         file: self.file_path.clone(),
                         range,
                         body_range: None,
@@ -227,7 +247,7 @@ impl<'a> ParserState<'a> {
                         name,
                         qualified_name,
                         kind,
-                        language: Language::Rust,
+                        language: Language("rust".to_string()),
                         file: self.file_path.clone(),
                         range,
                         body_range,
@@ -283,7 +303,10 @@ pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), Code
         .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", path.display())))?;
 
     if tree.root_node().has_error() {
-        return Err(CodeGraphError::Parse(format!("Syntax error in {}", path.display())));
+        return Err(CodeGraphError::Parse(format!(
+            "Syntax error in {}",
+            path.display()
+        )));
     }
 
     let file_stem = path
@@ -303,233 +326,4 @@ pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), Code
     state.visit(tree.root_node(), None, None, None);
 
     Ok((state.symbols, state.call_sites))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_free_function() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            pub fn run_pipeline() {
-                load();
-            }
-
-            fn load() {}
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let run_pipeline = symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
-        let load = symbols.iter().find(|s| s.name == "load").unwrap();
-
-        assert_eq!(run_pipeline.kind, SymbolKind::Function);
-        assert_eq!(load.kind, SymbolKind::Function);
-        assert!(run_pipeline.range.start_line > 0);
-        assert!(run_pipeline.body_range.is_some());
-    }
-
-    #[test]
-    fn test_impl_methods() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            pub struct Pipeline;
-
-            impl Pipeline {
-                pub fn new() -> Self {
-                    Self
-                }
-
-                pub fn run(&self) {
-                    self.load();
-                }
-
-                fn load(&self) {}
-            }
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let pipeline = symbols
-            .iter()
-            .find(|s| s.name == "Pipeline" && s.kind == SymbolKind::Struct)
-            .unwrap();
-        let new_method = symbols.iter().find(|s| s.name == "new").unwrap();
-        let run_method = symbols.iter().find(|s| s.name == "run").unwrap();
-        let load_method = symbols.iter().find(|s| s.name == "load").unwrap();
-
-        assert_eq!(pipeline.kind, SymbolKind::Struct);
-        assert_eq!(new_method.kind, SymbolKind::Method);
-        assert_eq!(run_method.kind, SymbolKind::Method);
-        assert_eq!(load_method.kind, SymbolKind::Method);
-
-        assert!(new_method.qualified_name.contains("Pipeline"));
-        assert!(run_method.qualified_name.contains("Pipeline"));
-        assert!(load_method.qualified_name.contains("Pipeline"));
-    }
-
-    #[test]
-    fn test_trait_methods_and_declaration() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            pub trait Runner {
-                fn run(&self);
-            }
-
-            pub struct Job;
-
-            impl Runner for Job {
-                fn run(&self) {}
-            }
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let runner = symbols
-            .iter()
-            .find(|s| s.name == "Runner" && s.kind == SymbolKind::Trait)
-            .unwrap();
-        let run_impl = symbols
-            .iter()
-            .find(|s| s.name == "run" && s.kind == SymbolKind::Method)
-            .unwrap();
-
-        assert_eq!(runner.kind, SymbolKind::Trait);
-        assert!(run_impl.qualified_name.contains("Job"));
-        assert!(run_impl.qualified_name.contains("Runner"));
-    }
-
-    #[test]
-    fn test_test_functions() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            #[test]
-            fn test_run_pipeline() {
-                run_pipeline();
-            }
-
-            fn helper() {}
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let test_run = symbols
-            .iter()
-            .find(|s| s.name == "test_run_pipeline")
-            .unwrap();
-        let helper = symbols.iter().find(|s| s.name == "helper").unwrap();
-
-        assert_eq!(test_run.kind, SymbolKind::Test);
-        assert_eq!(helper.kind, SymbolKind::Function);
-    }
-
-    #[test]
-    fn test_simple_call() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            fn run_pipeline() {
-                load();
-            }
-            fn load() {}
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let run_pipeline_idx = symbols
-            .iter()
-            .position(|s| s.name == "run_pipeline")
-            .unwrap();
-        let call = call_sites.iter().find(|c| c.raw_name == "load").unwrap();
-
-        assert_eq!(call.from_temp_index, Some(run_pipeline_idx));
-    }
-
-    #[test]
-    fn test_qualified_path_call() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            fn run_pipeline() {
-                crate::pipeline::load();
-            }
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (_symbols, call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let call = call_sites
-            .iter()
-            .find(|c| c.raw_name == "crate::pipeline::load")
-            .unwrap();
-        assert_eq!(call.raw_name, "crate::pipeline::load");
-    }
-
-    #[test]
-    fn test_method_call() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            struct Pipeline;
-
-            impl Pipeline {
-                fn run(&self) {
-                    self.load();
-                }
-
-                fn load(&self) {}
-            }
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (symbols, call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let run_idx = symbols.iter().position(|s| s.name == "run").unwrap();
-        let call = call_sites
-            .iter()
-            .find(|c| c.raw_name == "self.load")
-            .unwrap();
-
-        assert_eq!(call.from_temp_index, Some(run_idx));
-    }
-
-    #[test]
-    fn test_associated_function_call() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        let code = r#"
-            struct Pipeline;
-
-            impl Pipeline {
-                fn new() -> Self {
-                    Self
-                }
-            }
-
-            fn build() {
-                Pipeline::new();
-            }
-        "#;
-        fs::write(&file_path, code).unwrap();
-
-        let (_symbols, call_sites) = parse_rust_file(&file_path).unwrap();
-
-        let call = call_sites
-            .iter()
-            .find(|c| c.raw_name == "Pipeline::new")
-            .unwrap();
-        assert_eq!(call.raw_name, "Pipeline::new");
-    }
 }

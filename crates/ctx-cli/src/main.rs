@@ -348,7 +348,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         GraphSubcommand::Build => {
             println!("Building codegraph index...");
             let options = BuildIndexOptions {
-                use_rust_analyzer,
+                use_lsp: use_rust_analyzer,
                 max_depth: None,
                 include_tests: true,
                 change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -418,13 +418,19 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                                 println!("Full rebuild completed (Resolver version changed).");
                             }
                             ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
-                                println!("Full rebuild completed (Resolver configuration changed).");
+                                println!(
+                                    "Full rebuild completed (Resolver configuration changed)."
+                                );
                             }
                             ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
-                                println!("Full rebuild completed (Discovery configuration changed).");
+                                println!(
+                                    "Full rebuild completed (Discovery configuration changed)."
+                                );
                             }
                             ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
-                                println!("Full rebuild completed (Change detection strategy changed).");
+                                println!(
+                                    "Full rebuild completed (Change detection strategy changed)."
+                                );
                             }
                             ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
                                 println!("Full rebuild completed (Previous run was incomplete).");
@@ -689,7 +695,7 @@ fn get_connection_or_rebuild(
 ) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
     let options = ctx_codegraph::BuildIndexOptions {
-        use_rust_analyzer,
+        use_lsp: use_rust_analyzer,
         max_depth: None,
         include_tests: true,
         change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -756,16 +762,24 @@ fn get_connection_or_rebuild(
                         println!("Resolver version changed. Rebuilt codegraph index cleanly.");
                     }
                     ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
-                        println!("Resolver configuration changed. Rebuilt codegraph index cleanly.");
+                        println!(
+                            "Resolver configuration changed. Rebuilt codegraph index cleanly."
+                        );
                     }
                     ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
-                        println!("Discovery configuration changed. Rebuilt codegraph index cleanly.");
+                        println!(
+                            "Discovery configuration changed. Rebuilt codegraph index cleanly."
+                        );
                     }
                     ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
-                        println!("Change detection strategy changed. Rebuilt codegraph index cleanly.");
+                        println!(
+                            "Change detection strategy changed. Rebuilt codegraph index cleanly."
+                        );
                     }
                     ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
-                        println!("Previous index run was incomplete. Rebuilt codegraph index cleanly.");
+                        println!(
+                            "Previous index run was incomplete. Rebuilt codegraph index cleanly."
+                        );
                     }
                     ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
                         println!("Previous index run failed. Rebuilt codegraph index cleanly.");

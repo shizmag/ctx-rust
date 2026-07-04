@@ -60,4 +60,25 @@ Prints the recursive forward dependency tree of the symbol (all transitive calle
 - **Dynamic & Generic Calls**: Macro-generated code, trait dynamic dispatch, and complex generic methods/calls might remain unresolved.
 - **Raw Names**: Unresolved calls are still preserved and displayed as raw call names.
 - **SQLite Storage**: The index database is saved locally at `.ctx-codegraph/codegraph.sqlite`.
-- **Language Support**: Python support is not part of this first implementation; only Rust code indexing is supported at this stage.
+- **Language Support**: Python, Go, and TypeScript support are planned. Currently, Rust indexing is fully supported, and mock backends are available for testing.
+
+---
+
+## 🔌 Adding a New Language Backend
+
+To add support for a new programming language backend:
+
+1. **Implement `ParserBackend`**:
+   Create a struct that implements the `ParserBackend` trait (defined in `src/backend/traits.rs`) using tree-sitter or another parser for your language.
+
+2. **Implement `ResolverBackend` (Optional)**:
+   If your language has an LSP server, implement the `ResolverBackend` trait to query symbol definitions. You can leverage the generic `GenericLspClient` transport in `src/resolver/lsp_transport.rs`.
+
+3. **Implement `LanguageBackend`**:
+   Create a backend structure implementing `LanguageBackend` which returns your parser, resolver, file matching rules, and project markers (e.g. `package.json` for TypeScript, `go.mod` for Go).
+
+4. **Register the Backend**:
+   Register your backend struct in the `global_registry` initializer located in `src/backend/registry.rs`:
+   ```rust
+   reg.register(Box::new(MyLanguageBackend::new()));
+   ```
