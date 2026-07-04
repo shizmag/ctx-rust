@@ -483,3 +483,267 @@ fn test_integration_with_rust_analyzer() {
     let load_edge = index.edges.iter().find(|e| e.raw_name == "load").unwrap();
     assert_eq!(load_edge.confidence, ResolutionConfidence::Exact);
 }
+
+#[test]
+fn test_service_context_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open_db(dir.path()).unwrap();
+    storage::init_schema(&conn).unwrap();
+
+    let mut index = CodeIndex {
+        root: dir.path().to_path_buf(),
+        files: vec![SourceFile {
+            id: None,
+            path: PathBuf::from("src/lib.rs"),
+            language: Language::Rust,
+            mtime_ms: Some(100),
+            size_bytes: Some(200),
+            content_hash: Some("hash1".to_string()),
+        }],
+        symbols: vec![
+            Symbol {
+                id: Some(SymbolId(1)),
+                file_id: None,
+                name: "a".to_string(),
+                qualified_name: "a".to_string(),
+                kind: SymbolKind::Function,
+                language: Language::Rust,
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 5,
+                    end_col: 1,
+                },
+                body_range: None,
+            },
+            Symbol {
+                id: Some(SymbolId(2)),
+                file_id: None,
+                name: "b".to_string(),
+                qualified_name: "b".to_string(),
+                kind: SymbolKind::Function,
+                language: Language::Rust,
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 6,
+                    start_col: 1,
+                    end_line: 10,
+                    end_col: 1,
+                },
+                body_range: None,
+            },
+            Symbol {
+                id: Some(SymbolId(3)),
+                file_id: None,
+                name: "c".to_string(),
+                qualified_name: "c".to_string(),
+                kind: SymbolKind::Function,
+                language: Language::Rust,
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 11,
+                    start_col: 1,
+                    end_line: 15,
+                    end_col: 1,
+                },
+                body_range: None,
+            },
+            Symbol {
+                id: Some(SymbolId(4)),
+                file_id: None,
+                name: "d".to_string(),
+                qualified_name: "d".to_string(),
+                kind: SymbolKind::Function,
+                language: Language::Rust,
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 16,
+                    start_col: 1,
+                    end_line: 20,
+                    end_col: 1,
+                },
+                body_range: None,
+            },
+        ],
+        call_sites: vec![
+            CallSite {
+                id: Some(CallId(0)),
+                file_id: None,
+                from: Some(SymbolId(0)),
+                from_temp_index: None,
+                raw_name: "b".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 2,
+                    start_col: 1,
+                    end_line: 2,
+                    end_col: 5,
+                },
+            },
+            CallSite {
+                id: Some(CallId(1)),
+                file_id: None,
+                from: Some(SymbolId(1)),
+                from_temp_index: None,
+                raw_name: "c".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 7,
+                    start_col: 1,
+                    end_line: 7,
+                    end_col: 5,
+                },
+            },
+            CallSite {
+                id: Some(CallId(2)),
+                file_id: None,
+                from: Some(SymbolId(2)),
+                from_temp_index: None,
+                raw_name: "d".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 12,
+                    start_col: 1,
+                    end_line: 12,
+                    end_col: 5,
+                },
+            },
+        ],
+        edges: vec![
+            CallEdge {
+                from: SymbolId(0),
+                to: Some(SymbolId(1)),
+                call_site_id: Some(CallId(0)),
+                raw_name: "b".to_string(),
+                call_range: TextRange {
+                    start_line: 2,
+                    start_col: 1,
+                    end_line: 2,
+                    end_col: 5,
+                },
+                confidence: ResolutionConfidence::Exact,
+            },
+            CallEdge {
+                from: SymbolId(1),
+                to: Some(SymbolId(2)),
+                call_site_id: Some(CallId(1)),
+                raw_name: "c".to_string(),
+                call_range: TextRange {
+                    start_line: 7,
+                    start_col: 1,
+                    end_line: 7,
+                    end_col: 5,
+                },
+                confidence: ResolutionConfidence::Exact,
+            },
+            CallEdge {
+                from: SymbolId(2),
+                to: Some(SymbolId(3)),
+                call_site_id: Some(CallId(2)),
+                raw_name: "d".to_string(),
+                call_range: TextRange {
+                    start_line: 12,
+                    start_col: 1,
+                    end_line: 12,
+                    end_col: 5,
+                },
+                confidence: ResolutionConfidence::Exact,
+            },
+        ],
+    };
+    storage::save_index(&mut conn, &mut index).unwrap();
+
+    let service = GraphContextService::load_or_build(dir.path()).unwrap();
+
+    // 1. service на fixture-графе строит context для a в режиме Callees
+    let res_callees = service
+        .build_context_for_symbol(
+            SymbolId(1),
+            GraphContextOptions {
+                mode: GraphContextMode::Callees,
+                max_depth: 2,
+                max_nodes: 10,
+                include_root: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(res_callees.root.name, "a");
+    assert_eq!(res_callees.nodes.len(), 3); // a, b, c
+    assert!(res_callees.nodes.iter().any(|n| n.name == "a"));
+    assert!(res_callees.nodes.iter().any(|n| n.name == "b"));
+    assert!(res_callees.nodes.iter().any(|n| n.name == "c"));
+    assert_eq!(res_callees.edges.len(), 2); // a -> b, b -> c
+
+    // 2. service на fixture-графе строит context для b в режиме Callers
+    let res_callers = service
+        .build_context_for_symbol(
+            SymbolId(2),
+            GraphContextOptions {
+                mode: GraphContextMode::Callers,
+                max_depth: 2,
+                max_nodes: 10,
+                include_root: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(res_callers.root.name, "b");
+    assert_eq!(res_callers.nodes.len(), 2); // b, a (since a calls b)
+    assert!(res_callers.nodes.iter().any(|n| n.name == "b"));
+    assert!(res_callers.nodes.iter().any(|n| n.name == "a"));
+
+    // 3. include_root = false исключает root symbol из nodes, но root остаётся в metadata (res_callees.root)
+    let res_no_root = service
+        .build_context_for_symbol(
+            SymbolId(1),
+            GraphContextOptions {
+                mode: GraphContextMode::Callees,
+                max_depth: 2,
+                max_nodes: 10,
+                include_root: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(res_no_root.root.name, "a");
+    assert_eq!(res_no_root.nodes.len(), 2); // b, c (no a)
+    assert!(!res_no_root.nodes.iter().any(|n| n.name == "a"));
+    assert!(res_no_root.nodes.iter().any(|n| n.name == "b"));
+    assert!(res_no_root.nodes.iter().any(|n| n.name == "c"));
+
+    // 4. max_depth работает
+    let res_depth_1 = service
+        .build_context_for_symbol(
+            SymbolId(1),
+            GraphContextOptions {
+                mode: GraphContextMode::Callees,
+                max_depth: 1,
+                max_nodes: 10,
+                include_root: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(res_depth_1.nodes.len(), 2); // a, b (c is at depth 2)
+    assert!(res_depth_1.nodes.iter().any(|n| n.name == "a"));
+    assert!(res_depth_1.nodes.iter().any(|n| n.name == "b"));
+
+    // 5. max_nodes работает
+    let res_nodes_2 = service
+        .build_context_for_symbol(
+            SymbolId(1),
+            GraphContextOptions {
+                mode: GraphContextMode::Callees,
+                max_depth: 2,
+                max_nodes: 2,
+                include_root: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(res_nodes_2.nodes.len(), 2); // truncated to 2 nodes
+    assert!(!res_nodes_2.diagnostics.is_empty());
+    assert!(
+        res_nodes_2
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == "warning" && d.message.contains("max_nodes limit"))
+    );
+}

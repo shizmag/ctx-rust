@@ -217,3 +217,50 @@ pub enum SymbolResolution {
     Ambiguous(Vec<LanguageObject>),
     NotFound,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GraphContextMode {
+    Callers,
+    Callees,
+    Dependencies,
+    Dependents,
+    ForwardSlice,
+    ReverseSlice,
+    Neighborhood,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphContextOptions {
+    pub mode: GraphContextMode,
+    pub max_depth: usize,
+    pub max_nodes: usize,
+    pub include_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdge {
+    pub from: SymbolId,
+    pub to: SymbolId,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextFileSpan {
+    pub file_path: PathBuf,
+    pub range: SourceRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GraphContextDiagnostic {
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphContextResult {
+    pub root: LanguageObject,
+    pub nodes: Vec<LanguageObject>,
+    pub edges: Vec<GraphEdge>,
+    pub files: Vec<ContextFileSpan>,
+    pub diagnostics: Vec<GraphContextDiagnostic>,
+}
