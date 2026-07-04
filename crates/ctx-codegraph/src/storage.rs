@@ -48,7 +48,7 @@ pub fn validate_index_db(root: &Path, options: &BuildIndexOptions) -> Result<boo
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
-    if schema_version != "1" {
+    if schema_version != "2" {
         return Ok(false);
     }
 
@@ -157,6 +157,7 @@ pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
     std::fs::create_dir_all(&db_dir)?;
     let db_path = db_dir.join("codegraph.sqlite");
     let conn = rusqlite::Connection::open(db_path)?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
     Ok(conn)
 }
 
@@ -233,7 +234,7 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '1')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2')",
         [],
     )?;
     conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('backend', 'tree-sitter-rust+optional-rust-analyzer-lsp')", [])?;
@@ -593,27 +594,427 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
     })
 }
 
+pub fn check_db_compatibility(
+    conn: &rusqlite::Connection,
+    options: &BuildIndexOptions,
+) -> Result<bool, CodeGraphError> {
+    // Check schema version
+    let schema_version: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    if schema_version != "2" {
+        return Ok(false);
+    }
+
+    // Check relevant settings: use_rust_analyzer
+    let db_use_ra: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'use_rust_analyzer'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => "true".to_string(),
+    };
+    if db_use_ra != options.use_rust_analyzer.to_string() {
+        return Ok(false);
+    }
+
+    // Check relevant settings: include_tests
+    let db_inc_tests: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'include_tests'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => "true".to_string(),
+    };
+    if db_inc_tests != options.include_tests.to_string() {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
 pub fn rebuild_index_db(
     root: &Path,
     options: BuildIndexOptions,
-) -> Result<CodeIndex, CodeGraphError> {
+) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
     let workspace_root = find_workspace_root(root);
     let mut conn = open_db(&workspace_root)?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
     init_schema(&conn)?;
 
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('use_rust_analyzer', ?1)",
-        rusqlite::params![options.use_rust_analyzer.to_string()],
-    )?;
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('include_tests', ?1)",
-        rusqlite::params![options.include_tests.to_string()],
+    let is_compatible = check_db_compatibility(&conn, &options)?;
+
+    if !is_compatible {
+        // Perform a full rebuild
+        clear_index(&mut conn)?;
+
+        let mut index = crate::index::build_index(&workspace_root, options.clone())?;
+        save_index(&mut conn, &mut index)?;
+
+        let use_ra_str = options.use_rust_analyzer.to_string();
+        let inc_tests_str = options.include_tests.to_string();
+        conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('use_rust_analyzer', ?1)", [use_ra_str])?;
+        conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('include_tests', ?1)", [inc_tests_str])?;
+
+        let report = crate::model::BuildReport {
+            full_rebuild: true,
+            added_files: index.files.len(),
+            modified_files: 0,
+            deleted_files: 0,
+            unchanged_files: 0,
+            symbols_written: index.symbols.len(),
+            call_sites_written: index.call_sites.len(),
+            edges_written: index.edges.len(),
+        };
+
+        return Ok((index, report));
+    }
+
+    // Incremental update!
+    // 1. Walk files on disk
+    let mut disk_files = std::collections::HashSet::new();
+    let walker = walkdir::WalkDir::new(&workspace_root)
+        .into_iter()
+        .filter_entry(|e| {
+            let path = e.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "target"
+                        || name == ".git"
+                        || name == ".codegraph"
+                        || name == ".ctx-codegraph"
+                    {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_file() {
+            if crate::index::should_index_path(path) {
+                disk_files.insert(path.to_path_buf());
+            }
+        }
+    }
+
+    // 2. Get DB files
+    let mut db_files = std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT id, path, mtime_ms, size_bytes FROM files")?;
+        let db_files_rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let path_str: String = row.get(1)?;
+            let mtime_ms: Option<i64> = row.get(2)?;
+            let size_bytes: Option<i64> = row.get(3)?;
+            Ok((id, PathBuf::from(path_str), mtime_ms, size_bytes))
+        })?;
+
+        for row in db_files_rows {
+            let (id, path, mtime_ms, size_bytes) = row?;
+            db_files.insert(path, (id, mtime_ms, size_bytes));
+        }
+    }
+
+    // 3. Compute diff
+    let mut added = Vec::new();
+    let mut modified = Vec::new();
+    let mut deleted = Vec::new();
+    let mut unchanged = Vec::new();
+
+    for path in &disk_files {
+        let disk_mtime = crate::index::get_mtime_ms(path);
+        let disk_size = crate::index::get_size_bytes(path);
+
+        if let Some(&(db_id, db_mtime, db_size)) = db_files.get(path) {
+            if disk_mtime != db_mtime || disk_size != db_size {
+                modified.push((db_id, path.clone(), disk_mtime, disk_size));
+            } else {
+                unchanged.push((db_id, path.clone()));
+            }
+        } else {
+            added.push((path.clone(), disk_mtime, disk_size));
+        }
+    }
+
+    for (path, &(db_id, _, _)) in &db_files {
+        if !disk_files.contains(path) {
+            deleted.push((db_id, path.clone()));
+        }
+    }
+
+    if added.is_empty() && modified.is_empty() && deleted.is_empty() {
+        let index = load_index(&conn, &workspace_root)?;
+        let report = crate::model::BuildReport {
+            full_rebuild: false,
+            added_files: 0,
+            modified_files: 0,
+            deleted_files: 0,
+            unchanged_files: unchanged.len(),
+            symbols_written: 0,
+            call_sites_written: 0,
+            edges_written: 0,
+        };
+        return Ok((index, report));
+    }
+
+    // Start transaction
+    let tx = conn.transaction()?;
+
+    // 4. Delete deleted and modified files from DB
+    for &(db_id, _) in &deleted {
+        tx.execute("DELETE FROM files WHERE id = ?1", [db_id])?;
+    }
+    for &(db_id, _, _, _) in &modified {
+        tx.execute("DELETE FROM files WHERE id = ?1", [db_id])?;
+    }
+
+    // 5. Parse and insert added and modified files
+    let mut symbols_written = 0;
+    let mut call_sites_written = 0;
+
+    let mut file_insert_stmt = tx.prepare(
+        "INSERT INTO files (path, language, mtime_ms, size_bytes, content_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5)"
     )?;
 
-    let mut index = crate::index::build_index(&workspace_root, options)?;
-    clear_index(&mut conn)?;
-    save_index(&mut conn, &mut index)?;
-    Ok(index)
+    let mut sym_stmt = tx.prepare(
+        "INSERT INTO symbols (
+            file_id, name, qualified_name, kind, language,
+            start_line, start_col, end_line, end_col,
+            body_start_line, body_start_col, body_end_line, body_end_col
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
+    )?;
+
+    let mut cs_stmt = tx.prepare(
+        "INSERT INTO call_sites (
+            file_id, from_symbol_id, raw_name,
+            start_line, start_col, end_line, end_col
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+    )?;
+
+    let files_to_parse: Vec<(PathBuf, Option<i64>, Option<i64>)> = added
+        .iter()
+        .map(|(p, m, s)| (p.clone(), *m, *s))
+        .chain(modified.iter().map(|(_, p, m, s)| (p.clone(), *m, *s)))
+        .collect();
+
+    for (path, mtime_ms, size_bytes) in files_to_parse {
+        let content_hash = crate::index::compute_file_hash(&path);
+        let path_str = path.to_string_lossy().to_string();
+
+        file_insert_stmt.execute(rusqlite::params![
+            path_str,
+            "Rust",
+            mtime_ms,
+            size_bytes,
+            content_hash,
+        ])?;
+        let file_id = tx.last_insert_rowid();
+
+        let (mut file_symbols, mut file_call_sites) = match crate::languages::rust::parse_rust_file(&path) {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                continue;
+            }
+        };
+
+        if !options.include_tests {
+            let mut new_symbols = Vec::new();
+            let mut index_map = std::collections::HashMap::new();
+            for (i, sym) in file_symbols.into_iter().enumerate() {
+                if sym.kind != SymbolKind::Test {
+                    index_map.insert(i, new_symbols.len());
+                    new_symbols.push(sym);
+                }
+            }
+            file_symbols = new_symbols;
+
+            file_call_sites.retain(|cs| {
+                if let Some(old_idx) = cs.from_temp_index {
+                    index_map.contains_key(&old_idx)
+                } else {
+                    true
+                }
+            });
+
+            for cs in &mut file_call_sites {
+                if let Some(ref mut idx) = cs.from_temp_index {
+                    if let Some(&new_idx) = index_map.get(idx) {
+                        *idx = new_idx;
+                    }
+                }
+            }
+        }
+
+        let mut sym_ids = Vec::new();
+        for sym in &file_symbols {
+            let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
+            let body_start_col = sym.body_range.as_ref().map(|r| r.start_col);
+            let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
+            let body_end_col = sym.body_range.as_ref().map(|r| r.end_col);
+
+            sym_stmt.execute(rusqlite::params![
+                file_id,
+                sym.name,
+                sym.qualified_name,
+                sym.kind.as_str(),
+                "Rust",
+                sym.range.start_line,
+                sym.range.start_col,
+                sym.range.end_line,
+                sym.range.end_col,
+                body_start_line,
+                body_start_col,
+                body_end_line,
+                body_end_col,
+            ])?;
+            let sym_db_id = tx.last_insert_rowid();
+            sym_ids.push(sym_db_id);
+            symbols_written += 1;
+        }
+
+        for cs in &file_call_sites {
+            let from_db_id = match cs.from_temp_index {
+                Some(idx) => sym_ids[idx],
+                None => continue,
+            };
+            cs_stmt.execute(rusqlite::params![
+                file_id,
+                from_db_id,
+                cs.raw_name,
+                cs.range.start_line,
+                cs.range.start_col,
+                cs.range.end_line,
+                cs.range.end_col,
+            ])?;
+            call_sites_written += 1;
+        }
+    }
+
+    tx.execute("DELETE FROM call_edges", [])?;
+
+    drop(file_insert_stmt);
+    drop(sym_stmt);
+    drop(cs_stmt);
+
+    let all_index = load_index(&tx, &workspace_root)?;
+    let all_symbols = all_index.symbols;
+    let all_call_sites = all_index.call_sites;
+
+    let mut lsp_client = if options.use_rust_analyzer {
+        match crate::resolver::rust_analyzer_lsp::LspClient::new(&workspace_root) {
+            Ok(client) => Some(client),
+            Err(err) => {
+                eprintln!(
+                    "Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.",
+                    err
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(ref mut client) = lsp_client {
+        if let Some(first_cs) = all_call_sites.first() {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(15);
+            let delay = std::time::Duration::from_millis(200);
+
+            while start.elapsed() < timeout {
+                let res = crate::resolver::rust_analyzer_lsp::resolve_via_lsp(client, first_cs, &all_symbols);
+                match res {
+                    Err(err) if err.contains("-32603") || err.contains("file not found") => {
+                        std::thread::sleep(delay);
+                    }
+                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(5000) => {
+                        std::thread::sleep(delay);
+                    }
+                    _ => {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut edges_written = 0;
+    let mut edge_stmt = tx.prepare(
+        "INSERT INTO call_edges (from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5)"
+    )?;
+
+    for (call_site_idx, cs) in all_call_sites.iter().enumerate() {
+        let from_id = match cs.from {
+            Some(id) => id,
+            None => continue,
+        };
+
+        let mut resolved_idx = None;
+        let mut confidence = ResolutionConfidence::Unresolved;
+
+        if let Some(ref mut client) = lsp_client {
+            match crate::resolver::rust_analyzer_lsp::resolve_via_lsp(client, cs, &all_symbols) {
+                Ok(Some(idx)) => {
+                    resolved_idx = Some(idx);
+                    confidence = ResolutionConfidence::LspExact;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!(
+                        "LSP resolution warning for call to {}: {}",
+                        cs.raw_name, err
+                    );
+                }
+            }
+        }
+
+        if resolved_idx.is_none() {
+            let (fallback_idx, fallback_conf) = crate::resolver::noop::resolve_name_only(&cs.raw_name, &all_symbols, &cs.file);
+            resolved_idx = fallback_idx;
+            confidence = fallback_conf;
+        }
+
+        let to_db_id = resolved_idx.and_then(|idx| all_symbols[idx].id);
+        let cs_id = cs.id.unwrap_or(crate::model::CallId(call_site_idx as i64));
+
+        edge_stmt.execute(rusqlite::params![
+            from_id.0,
+            to_db_id.map(|id| id.0),
+            cs_id.0,
+            cs.raw_name,
+            confidence.as_str(),
+        ])?;
+        edges_written += 1;
+    }
+    drop(edge_stmt);
+
+    tx.commit()?;
+
+    let final_index = load_index(&conn, &workspace_root)?;
+    let report = crate::model::BuildReport {
+        full_rebuild: false,
+        added_files: added.len(),
+        modified_files: modified.len(),
+        deleted_files: deleted.len(),
+        unchanged_files: unchanged.len(),
+        symbols_written,
+        call_sites_written,
+        edges_written,
+    };
+
+    Ok((final_index, report))
 }
 
 
@@ -1194,7 +1595,7 @@ mod tests {
                     end_line: 3,
                     end_col: 10,
                 },
-                confidence: ResolutionConfidence::NameOnly,
+                confidence: ResolutionConfidence::Heuristic,
             }],
         };
 
@@ -1541,7 +1942,7 @@ mod tests {
                         end_line: 3,
                         end_col: 10,
                     },
-                    confidence: ResolutionConfidence::NameOnly,
+                    confidence: ResolutionConfidence::Heuristic,
                 },
                 CallEdge {
                     from: SymbolId(0),
@@ -1554,7 +1955,7 @@ mod tests {
                         end_line: 4,
                         end_col: 15,
                     },
-                    confidence: ResolutionConfidence::NameOnly,
+                    confidence: ResolutionConfidence::Heuristic,
                 },
                 CallEdge {
                     from: SymbolId(3),
@@ -1567,7 +1968,7 @@ mod tests {
                         end_line: 18,
                         end_col: 10,
                     },
-                    confidence: ResolutionConfidence::NameOnly,
+                    confidence: ResolutionConfidence::Heuristic,
                 },
             ],
         };

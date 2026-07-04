@@ -692,7 +692,7 @@ mod tests {
                             end_line: 2,
                             end_col: 8,
                         },
-                        confidence: ctx_codegraph::ResolutionConfidence::Exact,
+                        confidence: ctx_codegraph::ResolutionConfidence::LspExact,
                     },
                     ctx_codegraph::CallEdge {
                         from: ctx_codegraph::SymbolId(1),
@@ -705,7 +705,7 @@ mod tests {
                             end_line: 5,
                             end_col: 8,
                         },
-                        confidence: ctx_codegraph::ResolutionConfidence::Exact,
+                        confidence: ctx_codegraph::ResolutionConfidence::LspExact,
                     },
                 ],
             };

@@ -132,7 +132,7 @@ fn test_integration_rebuild_sqlite_database() {
     fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
 
     // 6.3 Rebuild SQLite database
-    let _index = rebuild_index_db(
+    let (_index, _report) = rebuild_index_db(
         root,
         BuildIndexOptions {
             use_rust_analyzer: false,
@@ -197,7 +197,7 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
     .unwrap();
 
     // Rebuild index
-    let index = rebuild_index_db(
+    let (index, _) = rebuild_index_db(
         root,
         BuildIndexOptions {
             use_rust_analyzer: false,

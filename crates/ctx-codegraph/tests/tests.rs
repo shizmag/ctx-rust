@@ -102,15 +102,16 @@ fn test_name_only_resolution_and_ambiguity() {
         },
     ];
 
-    let (res_idx, res_conf) = resolver::noop::resolve_name_only("foo", &symbols);
+    use std::path::Path;
+    let (res_idx, res_conf) = resolver::noop::resolve_name_only("foo", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx, Some(0));
-    assert_eq!(res_conf, ResolutionConfidence::NameOnly);
+    assert_eq!(res_conf, ResolutionConfidence::Syntax);
 
-    let (res_idx_ambig, res_conf_ambig) = resolver::noop::resolve_name_only("bar", &symbols);
+    let (res_idx_ambig, res_conf_ambig) = resolver::noop::resolve_name_only("bar", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx_ambig, None);
-    assert_eq!(res_conf_ambig, ResolutionConfidence::Ambiguous);
+    assert_eq!(res_conf_ambig, ResolutionConfidence::Unresolved);
 
-    let (res_idx_unres, res_conf_unres) = resolver::noop::resolve_name_only("baz", &symbols);
+    let (res_idx_unres, res_conf_unres) = resolver::noop::resolve_name_only("baz", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx_unres, None);
     assert_eq!(res_conf_unres, ResolutionConfidence::Unresolved);
 }
@@ -192,7 +193,7 @@ fn test_sqlite_and_find_symbols() {
                 end_line: 3,
                 end_col: 15,
             },
-            confidence: ResolutionConfidence::NameOnly,
+            confidence: ResolutionConfidence::Heuristic,
         }],
     };
 
@@ -288,7 +289,7 @@ fn test_slices() {
                     end_line: 1,
                     end_col: 1,
                 },
-                confidence: ResolutionConfidence::NameOnly,
+                confidence: ResolutionConfidence::Heuristic,
             },
             CallEdge {
                 from: SymbolId(1),
@@ -301,7 +302,7 @@ fn test_slices() {
                     end_line: 3,
                     end_col: 1,
                 },
-                confidence: ResolutionConfidence::NameOnly,
+                confidence: ResolutionConfidence::Heuristic,
             },
         ],
     };
@@ -352,7 +353,7 @@ fn test_integration_mini_project() {
     "#;
     fs::write(&file_path, code).unwrap();
 
-    let index = rebuild_index_db(
+    let (index, _) = rebuild_index_db(
         dir.path(),
         BuildIndexOptions {
             use_rust_analyzer: false,
@@ -470,7 +471,7 @@ fn test_integration_with_rust_analyzer() {
     "#;
     fs::write(&file_path, code).unwrap();
 
-    let index = rebuild_index_db(
+    let (index, _) = rebuild_index_db(
         dir.path(),
         BuildIndexOptions {
             use_rust_analyzer: true,
@@ -481,7 +482,7 @@ fn test_integration_with_rust_analyzer() {
     .unwrap();
 
     let load_edge = index.edges.iter().find(|e| e.raw_name == "load").unwrap();
-    assert_eq!(load_edge.confidence, ResolutionConfidence::Exact);
+    assert_eq!(load_edge.confidence, ResolutionConfidence::LspExact);
 }
 
 #[test]
@@ -622,7 +623,7 @@ fn test_service_context_selection() {
                     end_line: 2,
                     end_col: 5,
                 },
-                confidence: ResolutionConfidence::Exact,
+                confidence: ResolutionConfidence::LspExact,
             },
             CallEdge {
                 from: SymbolId(1),
@@ -635,7 +636,7 @@ fn test_service_context_selection() {
                     end_line: 7,
                     end_col: 5,
                 },
-                confidence: ResolutionConfidence::Exact,
+                confidence: ResolutionConfidence::LspExact,
             },
             CallEdge {
                 from: SymbolId(2),
@@ -648,7 +649,7 @@ fn test_service_context_selection() {
                     end_line: 12,
                     end_col: 5,
                 },
-                confidence: ResolutionConfidence::Exact,
+                confidence: ResolutionConfidence::LspExact,
             },
         ],
     };
@@ -807,7 +808,7 @@ fn test_index_lifecycle_validation() {
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2')",
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3')",
             [],
         )
         .unwrap();
@@ -815,3 +816,195 @@ fn test_index_lifecycle_validation() {
     let is_valid_diff_schema = validate_index_db(root, &options).unwrap();
     assert!(!is_valid_diff_schema);
 }
+
+#[test]
+fn test_edge_resolution_quality_variants() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Create Cargo.toml
+    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    // Syntax call (local call) and Unresolved call
+    let lib_code = r#"
+        pub fn a() {
+            b();
+            unresolved_call();
+        }
+        pub fn b() {}
+    "#;
+    fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
+
+    // Heuristic call (cross-file call)
+    let other_code = r#"
+        pub fn d() {
+            b();
+        }
+    "#;
+    fs::write(src_dir.join("other.rs"), other_code).unwrap();
+
+    let (index, report) = rebuild_index_db(
+        root,
+        BuildIndexOptions {
+            use_rust_analyzer: false,
+            max_depth: None,
+            include_tests: true,
+        },
+    )
+    .unwrap();
+
+    assert!(report.full_rebuild);
+
+    let sym_a = index.symbols.iter().find(|s| s.name == "a").unwrap();
+    let sym_d = index.symbols.iter().find(|s| s.name == "d").unwrap();
+
+    // Verify b(); inside a() is Syntax (same file)
+    let edge_a_b = index.edges.iter().find(|e| e.raw_name == "b" && e.from == sym_a.id.unwrap()).unwrap();
+    assert_eq!(edge_a_b.confidence, ResolutionConfidence::Syntax);
+
+    // Verify unresolved_call(); inside a() is Unresolved
+    let edge_unres = index.edges.iter().find(|e| e.raw_name == "unresolved_call" && e.from == sym_a.id.unwrap()).unwrap();
+    assert_eq!(edge_unres.confidence, ResolutionConfidence::Unresolved);
+    assert!(edge_unres.to.is_none());
+
+    // Verify b(); inside d() is Heuristic (different file)
+    let edge_d_b = index.edges.iter().find(|e| e.raw_name == "b" && e.from == sym_d.id.unwrap()).unwrap();
+    assert_eq!(edge_d_b.confidence, ResolutionConfidence::Heuristic);
+}
+
+#[test]
+fn test_incremental_diff_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_lib = src_dir.join("lib.rs");
+    let file_a = src_dir.join("a.rs");
+    let file_b = src_dir.join("b.rs");
+
+    fs::write(&file_lib, "pub fn run() {}").unwrap();
+    fs::write(&file_a, "pub fn a() {}").unwrap();
+    fs::write(&file_b, "pub fn b() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+    };
+
+    // 1. Initial build: all files added
+    let (_, report1) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(report1.full_rebuild);
+    assert_eq!(report1.added_files, 3);
+    assert_eq!(report1.modified_files, 0);
+    assert_eq!(report1.deleted_files, 0);
+    assert_eq!(report1.unchanged_files, 0);
+
+    // 2. Second build: no changes, all files unchanged
+    let (_, report2) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!report2.full_rebuild);
+    assert_eq!(report2.added_files, 0);
+    assert_eq!(report2.modified_files, 0);
+    assert_eq!(report2.deleted_files, 0);
+    assert_eq!(report2.unchanged_files, 3);
+
+    // 3. Modify a.rs: only a.rs is modified
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_a, "pub fn a() { // modified\n }").unwrap();
+    let (_, report3) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!report3.full_rebuild);
+    assert_eq!(report3.added_files, 0);
+    assert_eq!(report3.modified_files, 1);
+    assert_eq!(report3.deleted_files, 0);
+    assert_eq!(report3.unchanged_files, 2);
+
+    // 4. Add c.rs: only c.rs is added
+    let file_c = src_dir.join("c.rs");
+    fs::write(&file_c, "pub fn c() {}").unwrap();
+    let (_, report4) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!report4.full_rebuild);
+    assert_eq!(report4.added_files, 1);
+    assert_eq!(report4.modified_files, 0);
+    assert_eq!(report4.deleted_files, 0);
+    assert_eq!(report4.unchanged_files, 3);
+
+    // 5. Delete b.rs: only b.rs is deleted
+    fs::remove_file(&file_b).unwrap();
+    let (_, report5) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!report5.full_rebuild);
+    assert_eq!(report5.added_files, 0);
+    assert_eq!(report5.modified_files, 0);
+    assert_eq!(report5.deleted_files, 1);
+    assert_eq!(report5.unchanged_files, 3);
+}
+
+#[test]
+fn test_db_correctness_after_incremental_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_lib = src_dir.join("lib.rs");
+    let file_b = src_dir.join("b.rs");
+
+    // Scenario 1: Modify file
+    // Initial: a calls b
+    fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
+    fs::write(&file_b, "pub fn b() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+    };
+
+    let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(index.symbols.iter().any(|s| s.name == "b"));
+    assert!(index.edges.iter().any(|e| e.raw_name == "b" && e.to.is_some()));
+
+    // Modify file: change lib.rs so a calls c instead, and define c in lib.rs
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_lib, "pub fn a() { c(); }\npub fn c() {}").unwrap();
+
+    let (index_mod, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(index_mod.symbols.iter().any(|s| s.name == "c"));
+    assert!(!index_mod.edges.iter().any(|e| e.raw_name == "b")); // old edge b disappeared
+    assert!(index_mod.edges.iter().any(|e| e.raw_name == "c")); // new edge c appeared
+
+    // Scenario 2: Add file
+    // Add file d.rs: d calls a
+    let file_d = src_dir.join("d.rs");
+    fs::write(&file_d, "pub fn d() { a(); }").unwrap();
+
+    let (index_add, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(index_add.symbols.iter().any(|s| s.name == "d"));
+    assert!(index_add.edges.iter().any(|e| e.raw_name == "a" && e.to.is_some()));
+
+    // Scenario 3: Delete file
+    // Delete b.rs
+    fs::remove_file(&file_b).unwrap();
+
+    let (index_del, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!index_del.symbols.iter().any(|s| s.name == "b")); // symbol b is gone
+
+    // Scenario 4: Rename/change symbol
+    // Change lib.rs from defining c to defining new_name, and calling it
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_lib, "pub fn a() { new_name(); }\npub fn new_name() {}").unwrap();
+
+    let (index_rename, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(!index_rename.symbols.iter().any(|s| s.name == "c"));
+    assert!(index_rename.symbols.iter().any(|s| s.name == "new_name"));
+    assert!(!index_rename.edges.iter().any(|e| e.raw_name == "c"));
+    assert!(index_rename.edges.iter().any(|e| e.raw_name == "new_name"));
+}
+

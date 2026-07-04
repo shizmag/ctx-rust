@@ -222,7 +222,7 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
             match resolve_via_lsp(client, cs, &global_symbols) {
                 Ok(Some(idx)) => {
                     resolved_idx = Some(idx);
-                    confidence = crate::model::ResolutionConfidence::Exact;
+                    confidence = crate::model::ResolutionConfidence::LspExact;
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -235,7 +235,7 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
         }
 
         if resolved_idx.is_none() {
-            let (fallback_idx, fallback_conf) = resolve_name_only(&cs.raw_name, &global_symbols);
+            let (fallback_idx, fallback_conf) = resolve_name_only(&cs.raw_name, &global_symbols, &cs.file);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }

@@ -55,32 +55,29 @@ impl SymbolKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ResolutionConfidence {
-    Exact,
-    Local,
-    NameOnly,
-    Ambiguous,
+    Syntax,
+    Heuristic,
+    LspExact,
     Unresolved,
 }
 
 impl ResolutionConfidence {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ResolutionConfidence::Exact => "Exact",
-            ResolutionConfidence::Local => "Local",
-            ResolutionConfidence::NameOnly => "NameOnly",
-            ResolutionConfidence::Ambiguous => "Ambiguous",
+            ResolutionConfidence::Syntax => "Syntax",
+            ResolutionConfidence::Heuristic => "Heuristic",
+            ResolutionConfidence::LspExact => "LspExact",
             ResolutionConfidence::Unresolved => "Unresolved",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "Exact" => Some(ResolutionConfidence::Exact),
-            "Local" => Some(ResolutionConfidence::Local),
-            "NameOnly" => Some(ResolutionConfidence::NameOnly),
-            "Ambiguous" => Some(ResolutionConfidence::Ambiguous),
+            "Syntax" | "Local" => Some(ResolutionConfidence::Syntax),
+            "Heuristic" | "NameOnly" | "Ambiguous" => Some(ResolutionConfidence::Heuristic),
+            "LspExact" | "Exact" => Some(ResolutionConfidence::LspExact),
             "Unresolved" => Some(ResolutionConfidence::Unresolved),
             _ => None,
         }
@@ -263,4 +260,16 @@ pub struct GraphContextResult {
     pub edges: Vec<GraphEdge>,
     pub files: Vec<ContextFileSpan>,
     pub diagnostics: Vec<GraphContextDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct BuildReport {
+    pub full_rebuild: bool,
+    pub added_files: usize,
+    pub modified_files: usize,
+    pub deleted_files: usize,
+    pub unchanged_files: usize,
+    pub symbols_written: usize,
+    pub call_sites_written: usize,
+    pub edges_written: usize,
 }

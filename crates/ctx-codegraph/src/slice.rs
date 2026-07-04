@@ -127,7 +127,7 @@ mod tests {
                 end_line: 1,
                 end_col: 1,
             },
-            confidence: ResolutionConfidence::NameOnly,
+            confidence: ResolutionConfidence::Heuristic,
         }
     }
 

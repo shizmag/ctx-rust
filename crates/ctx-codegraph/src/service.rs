@@ -32,7 +32,7 @@ impl GraphContextService {
             include_tests: true,
         };
         if !crate::storage::validate_index_db(&workspace_root, &options)? {
-            crate::storage::rebuild_index_db(&workspace_root, options)?;
+            let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;
         }
         let conn = crate::storage::open_db(&workspace_root)?;
         Ok(Self {

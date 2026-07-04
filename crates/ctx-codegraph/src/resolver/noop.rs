@@ -1,4 +1,5 @@
 use crate::model::{ResolutionConfidence, Symbol, SymbolKind};
+use std::path::Path;
 
 pub fn parse_raw_name(raw_name: &str) -> &str {
     if let Some(idx) = raw_name.rfind("::") {
@@ -13,6 +14,7 @@ pub fn parse_raw_name(raw_name: &str) -> &str {
 pub fn resolve_name_only(
     raw_name: &str,
     symbols: &[Symbol],
+    call_site_file: &Path,
 ) -> (Option<usize>, ResolutionConfidence) {
     let target_name = parse_raw_name(raw_name);
     let is_method_call = raw_name.contains('.') && !raw_name.contains("::");
@@ -36,9 +38,14 @@ pub fn resolve_name_only(
         .collect();
 
     if candidates.len() == 1 {
-        (Some(candidates[0]), ResolutionConfidence::NameOnly)
-    } else if candidates.len() > 1 {
-        (None, ResolutionConfidence::Ambiguous)
+        let sym_idx = candidates[0];
+        let target_sym = &symbols[sym_idx];
+        let confidence = if target_sym.file == call_site_file {
+            ResolutionConfidence::Syntax
+        } else {
+            ResolutionConfidence::Heuristic
+        };
+        (Some(sym_idx), confidence)
     } else {
         (None, ResolutionConfidence::Unresolved)
     }
@@ -76,9 +83,15 @@ mod tests {
             make_test_symbol("load", SymbolKind::Function),
         ];
 
-        let (res_idx, res_conf) = resolve_name_only("load", &symbols);
+        // Same file -> Syntax
+        let (res_idx, res_conf) = resolve_name_only("load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, Some(1));
-        assert_eq!(res_conf, ResolutionConfidence::NameOnly);
+        assert_eq!(res_conf, ResolutionConfidence::Syntax);
+
+        // Different file -> Heuristic
+        let (res_idx_h, res_conf_h) = resolve_name_only("load", &symbols, Path::new("src/other.rs"));
+        assert_eq!(res_idx_h, Some(1));
+        assert_eq!(res_conf_h, ResolutionConfidence::Heuristic);
     }
 
     #[test]
@@ -88,9 +101,9 @@ mod tests {
             make_test_symbol("load", SymbolKind::Function),
         ];
 
-        let (res_idx, res_conf) = resolve_name_only("crate::pipeline::load", &symbols);
+        let (res_idx, res_conf) = resolve_name_only("crate::pipeline::load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, Some(1));
-        assert_eq!(res_conf, ResolutionConfidence::NameOnly);
+        assert_eq!(res_conf, ResolutionConfidence::Syntax);
     }
 
     #[test]
@@ -100,13 +113,13 @@ mod tests {
             make_test_symbol("load", SymbolKind::Method),
         ];
 
-        let (res_idx, res_conf) = resolve_name_only("self.load", &symbols);
+        let (res_idx, res_conf) = resolve_name_only("self.load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, Some(1));
-        assert_eq!(res_conf, ResolutionConfidence::NameOnly);
+        assert_eq!(res_conf, ResolutionConfidence::Syntax);
 
-        let (res_idx_2, res_conf_2) = resolve_name_only("pipeline.load", &symbols);
+        let (res_idx_2, res_conf_2) = resolve_name_only("pipeline.load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx_2, Some(1));
-        assert_eq!(res_conf_2, ResolutionConfidence::NameOnly);
+        assert_eq!(res_conf_2, ResolutionConfidence::Syntax);
     }
 
     #[test]
@@ -116,16 +129,16 @@ mod tests {
             make_test_symbol("load", SymbolKind::Method),
         ];
 
-        let (res_idx, res_conf) = resolve_name_only("load", &symbols);
+        let (res_idx, res_conf) = resolve_name_only("load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, None);
-        assert_eq!(res_conf, ResolutionConfidence::Ambiguous);
+        assert_eq!(res_conf, ResolutionConfidence::Unresolved);
     }
 
     #[test]
     fn test_unresolved_symbol() {
         let symbols = vec![make_test_symbol("load", SymbolKind::Function)];
 
-        let (res_idx, res_conf) = resolve_name_only("missing", &symbols);
+        let (res_idx, res_conf) = resolve_name_only("missing", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, None);
         assert_eq!(res_conf, ResolutionConfidence::Unresolved);
     }

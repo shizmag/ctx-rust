@@ -343,7 +343,16 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 max_depth: None,
                 include_tests: true,
             };
-            ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
+            let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
+            if report.full_rebuild {
+                println!("Full rebuild completed.");
+            } else {
+                println!("Incremental update completed.");
+            }
+            println!("Files: {} added, {} modified, {} deleted, {} unchanged",
+                     report.added_files, report.modified_files, report.deleted_files, report.unchanged_files);
+            println!("Symbols updated: {}, call sites updated: {}, edges updated: {}",
+                     report.symbols_written, report.call_sites_written, report.edges_written);
             println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
         }
         GraphSubcommand::Symbols { mut query } => {
@@ -580,9 +589,14 @@ fn get_connection_or_rebuild(
         max_depth: None,
         include_tests: true,
     };
-    if !ctx_codegraph::storage::validate_index_db(&workspace_root, &options)? {
-        println!("Index not found. Building codegraph index...");
-        ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
+    let (_index, report) = ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
+    if report.full_rebuild {
+        println!("Index not found or incompatible. Rebuilt codegraph index.");
+    } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+        println!(
+            "Incremental update: {} added, {} modified, {} deleted files.",
+            report.added_files, report.modified_files, report.deleted_files
+        );
     }
     let conn = ctx_codegraph::open_db(&workspace_root)?;
     Ok(conn)
