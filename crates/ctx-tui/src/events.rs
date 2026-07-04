@@ -18,7 +18,121 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != event::KeyEventKind::Release {
-                    if app.screen == TuiScreen::SymbolSearch {
+                    if app.screen == TuiScreen::GraphContext {
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                return Ok(());
+                            }
+                            KeyCode::Esc | KeyCode::Char('s') => {
+                                app.screen = TuiScreen::SymbolSearch;
+                            }
+                            KeyCode::Char('c') => {
+                                match crate::clipboard::copy_graph_context_to_clipboard(app) {
+                                    Ok(success_msg) => {
+                                        app.message =
+                                            Some((success_msg, std::time::Instant::now()));
+                                    }
+                                    Err(e) => {
+                                        app.message = Some((
+                                            format!("Error: {}", e),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.graph_selected_option = (app.graph_selected_option + 1) % 4;
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.graph_selected_option = if app.graph_selected_option == 0 {
+                                    3
+                                } else {
+                                    app.graph_selected_option - 1
+                                };
+                            }
+                            KeyCode::Left
+                            | KeyCode::Char('h')
+                            | KeyCode::Right
+                            | KeyCode::Char('l')
+                            | KeyCode::Enter => {
+                                let cycle_forward = matches!(
+                                    key.code,
+                                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter
+                                );
+                                match app.graph_selected_option {
+                                    0 => {
+                                        // Mode
+                                        const MODES: &[ctx_codegraph::GraphContextMode] = &[
+                                            ctx_codegraph::GraphContextMode::Callers,
+                                            ctx_codegraph::GraphContextMode::Callees,
+                                            ctx_codegraph::GraphContextMode::Dependencies,
+                                            ctx_codegraph::GraphContextMode::Dependents,
+                                            ctx_codegraph::GraphContextMode::ForwardSlice,
+                                            ctx_codegraph::GraphContextMode::ReverseSlice,
+                                            ctx_codegraph::GraphContextMode::Neighborhood,
+                                        ];
+                                        let current_idx = MODES
+                                            .iter()
+                                            .position(|&m| m == app.graph_mode)
+                                            .unwrap_or(0);
+                                        let next_idx = if cycle_forward {
+                                            (current_idx + 1) % MODES.len()
+                                        } else {
+                                            if current_idx == 0 {
+                                                MODES.len() - 1
+                                            } else {
+                                                current_idx - 1
+                                            }
+                                        };
+                                        app.graph_mode = MODES[next_idx];
+                                    }
+                                    1 => {
+                                        // Depth
+                                        const DEPTHS: &[usize] = &[1, 2, 3];
+                                        let current_idx = DEPTHS
+                                            .iter()
+                                            .position(|&d| d == app.graph_depth)
+                                            .unwrap_or(1);
+                                        let next_idx = if cycle_forward {
+                                            (current_idx + 1) % DEPTHS.len()
+                                        } else {
+                                            if current_idx == 0 {
+                                                DEPTHS.len() - 1
+                                            } else {
+                                                current_idx - 1
+                                            }
+                                        };
+                                        app.graph_depth = DEPTHS[next_idx];
+                                    }
+                                    2 => {
+                                        // Max nodes
+                                        const MAX_NODES: &[usize] = &[20, 50, 100];
+                                        let current_idx = MAX_NODES
+                                            .iter()
+                                            .position(|&n| n == app.graph_max_nodes)
+                                            .unwrap_or(1);
+                                        let next_idx = if cycle_forward {
+                                            (current_idx + 1) % MAX_NODES.len()
+                                        } else {
+                                            if current_idx == 0 {
+                                                MAX_NODES.len() - 1
+                                            } else {
+                                                current_idx - 1
+                                            }
+                                        };
+                                        app.graph_max_nodes = MAX_NODES[next_idx];
+                                    }
+                                    3 => {
+                                        // Include root
+                                        app.graph_include_root = !app.graph_include_root;
+                                    }
+                                    _ => {}
+                                }
+                                app.update_graph_preview();
+                            }
+                            _ => {}
+                        }
+                    } else if app.screen == TuiScreen::SymbolSearch {
                         if app.symbol_search_active {
                             match key.code {
                                 KeyCode::Esc | KeyCode::Enter => {
@@ -127,17 +241,21 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                     };
                                             }
                                         }
-                                        KeyCode::Enter => {
+                                        KeyCode::Enter | KeyCode::Char('g') => {
                                             if let Some(selected) = app.symbol_list_state.selected()
                                             {
                                                 if let Some(sym) =
                                                     app.symbol_search_results.get(selected)
                                                 {
-                                                    app.selected_symbol = Some(sym.clone());
+                                                    let sym_clone = sym.clone();
+                                                    app.selected_symbol = Some(sym_clone.clone());
+                                                    app.screen = TuiScreen::GraphContext;
+                                                    app.focused_panel = FocusedPanel::Left;
+                                                    app.update_graph_preview();
                                                     app.message = Some((
                                                         format!(
-                                                            "Selected symbol: {}",
-                                                            sym.qualified_name
+                                                            "Opened graph context for: {}",
+                                                            sym_clone.qualified_name
                                                         ),
                                                         std::time::Instant::now(),
                                                     ));

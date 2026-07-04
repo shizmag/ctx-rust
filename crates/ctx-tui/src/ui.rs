@@ -1057,6 +1057,170 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                 f.render_widget(help_paragraph, main_chunks[1]);
             }
         }
+        TuiScreen::GraphContext => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
+                .split(size);
+
+            let body_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(main_chunks[0]);
+
+            // Configuration Options Panel
+            let options_block = Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    " Graph Context Options ",
+                    Style::default()
+                        .fg(Color::Rgb(122, 162, 247))
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_style(Style::default().fg(Color::Rgb(122, 162, 247)));
+
+            let mode_str = match app.graph_mode {
+                ctx_codegraph::GraphContextMode::Callers => "Callers",
+                ctx_codegraph::GraphContextMode::Callees => "Callees",
+                ctx_codegraph::GraphContextMode::Dependencies => "Dependencies",
+                ctx_codegraph::GraphContextMode::Dependents => "Dependents",
+                ctx_codegraph::GraphContextMode::ForwardSlice => "Forward slice",
+                ctx_codegraph::GraphContextMode::ReverseSlice => "Reverse slice",
+                ctx_codegraph::GraphContextMode::Neighborhood => "Neighborhood",
+            };
+
+            let option_items = vec![
+                ("Mode", mode_str.to_string()),
+                ("Depth", app.graph_depth.to_string()),
+                ("Max nodes", app.graph_max_nodes.to_string()),
+                (
+                    "Include root",
+                    if app.graph_include_root {
+                        "Yes".to_string()
+                    } else {
+                        "No".to_string()
+                    },
+                ),
+            ];
+
+            let items: Vec<ListItem> = option_items
+                .into_iter()
+                .enumerate()
+                .map(|(idx, (name, val))| {
+                    let is_selected = app.graph_selected_option == idx;
+                    let prefix = if is_selected { "❯ " } else { "  " };
+                    let name_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Rgb(224, 175, 104))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Rgb(192, 202, 245))
+                    };
+                    let val_style = Style::default()
+                        .fg(Color::Rgb(158, 206, 106))
+                        .add_modifier(Modifier::BOLD);
+
+                    ListItem::new(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(224, 175, 104))),
+                        Span::styled(format!("{}: ", name), name_style),
+                        Span::styled(val, val_style),
+                    ]))
+                })
+                .collect();
+
+            let options_list = List::new(items).block(options_block);
+            f.render_widget(options_list, body_chunks[0]);
+
+            // Preview Panel
+            let preview_block = Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    " Context Preview ",
+                    Style::default()
+                        .fg(Color::Rgb(122, 162, 247))
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_style(Style::default().fg(Color::Rgb(86, 95, 137)));
+
+            let preview_widget = match app.render_tui_graph_preview() {
+                Ok(text) => Paragraph::new(text)
+                    .block(preview_block)
+                    .wrap(Wrap { trim: false }),
+                Err(err_msg) => {
+                    let err_spans = vec![
+                        Line::from(Span::styled(
+                            "ERROR STATE",
+                            Style::default()
+                                .fg(Color::Rgb(247, 118, 142))
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            err_msg,
+                            Style::default().fg(Color::Rgb(247, 118, 142)),
+                        )),
+                    ];
+                    Paragraph::new(err_spans)
+                        .block(preview_block)
+                        .wrap(Wrap { trim: false })
+                }
+            };
+            f.render_widget(preview_widget, body_chunks[1]);
+
+            // Help bar
+            let help_spans = vec![
+                Span::styled(
+                    " Esc/s",
+                    Style::default()
+                        .fg(Color::Rgb(224, 175, 104))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" Back ", Style::default().fg(Color::Rgb(192, 202, 245))),
+                Span::styled("│", Style::default().fg(Color::Rgb(86, 95, 137))),
+                Span::styled(
+                    " ▲/▼/j/k",
+                    Style::default()
+                        .fg(Color::Rgb(224, 175, 104))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Select Option ",
+                    Style::default().fg(Color::Rgb(192, 202, 245)),
+                ),
+                Span::styled("│", Style::default().fg(Color::Rgb(86, 95, 137))),
+                Span::styled(
+                    " ◄/►/Enter",
+                    Style::default()
+                        .fg(Color::Rgb(224, 175, 104))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Cycle Value ",
+                    Style::default().fg(Color::Rgb(192, 202, 245)),
+                ),
+                Span::styled("│", Style::default().fg(Color::Rgb(86, 95, 137))),
+                Span::styled(
+                    " c",
+                    Style::default()
+                        .fg(Color::Rgb(224, 175, 104))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Copy Context ",
+                    Style::default().fg(Color::Rgb(192, 202, 245)),
+                ),
+                Span::styled("│", Style::default().fg(Color::Rgb(86, 95, 137))),
+                Span::styled(
+                    " q",
+                    Style::default()
+                        .fg(Color::Rgb(224, 175, 104))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" Quit", Style::default().fg(Color::Rgb(192, 202, 245))),
+            ];
+            let help_paragraph = Paragraph::new(Line::from(help_spans));
+            f.render_widget(help_paragraph, main_chunks[1]);
+        }
     }
 
     if let Some((msg, ts)) = &app.message {

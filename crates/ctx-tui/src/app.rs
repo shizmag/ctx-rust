@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub(crate) enum TuiScreen {
     TreePicker,
     SymbolSearch,
+    GraphContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,14 @@ pub(crate) struct TuiApp {
     pub(crate) graph_service: Option<ctx_codegraph::GraphContextService>,
     pub(crate) last_preview_total_lines: usize,
     pub(crate) last_preview_height: usize,
+
+    // Graph Context Flow State
+    pub(crate) graph_mode: ctx_codegraph::GraphContextMode,
+    pub(crate) graph_depth: usize,
+    pub(crate) graph_max_nodes: usize,
+    pub(crate) graph_include_root: bool,
+    pub(crate) graph_selected_option: usize, // 0: mode, 1: depth, 2: max_nodes, 3: include_root
+    pub(crate) graph_preview: Option<Result<ctx_codegraph::GraphContextResult, String>>,
 }
 
 pub(crate) struct VisibleTuiNode {
@@ -92,6 +101,12 @@ impl TuiApp {
             graph_service,
             last_preview_total_lines: 0,
             last_preview_height: 0,
+            graph_mode: ctx_codegraph::GraphContextMode::Callers,
+            graph_depth: 2,
+            graph_max_nodes: 50,
+            graph_include_root: true,
+            graph_selected_option: 0,
+            graph_preview: None,
         };
 
         app.update_visible_items();
@@ -247,6 +262,102 @@ impl TuiApp {
     ) {
         let max_offset = total_lines.saturating_sub(visible_height);
         self.preview_scroll_offset = std::cmp::min(self.preview_scroll_offset + step, max_offset);
+    }
+
+    pub(crate) fn update_graph_preview(&mut self) {
+        let symbol = match &self.selected_symbol {
+            Some(sym) => sym,
+            None => {
+                self.graph_preview = None;
+                return;
+            }
+        };
+        let service = match &self.graph_service {
+            Some(srv) => srv,
+            None => {
+                self.graph_preview = Some(Err("Graph database not initialized".to_string()));
+                return;
+            }
+        };
+        let options = ctx_codegraph::GraphContextOptions {
+            mode: self.graph_mode,
+            max_depth: self.graph_depth,
+            max_nodes: self.graph_max_nodes,
+            include_root: self.graph_include_root,
+        };
+        match service.build_context_for_symbol(symbol.id, options) {
+            Ok(res) => {
+                self.graph_preview = Some(Ok(res));
+            }
+            Err(e) => {
+                self.graph_preview = Some(Err(format!("Error building graph context: {}", e)));
+            }
+        }
+    }
+
+    pub(crate) fn render_tui_graph_preview(&self) -> Result<String, String> {
+        let result = match &self.graph_preview {
+            Some(Ok(res)) => res,
+            Some(Err(err)) => return Err(err.clone()),
+            None => return Err("No preview generated".to_string()),
+        };
+
+        let mut out = String::new();
+        let root_kind = match result.root.kind {
+            ctx_codegraph::LanguageObjectKind::Function => "fn",
+            ctx_codegraph::LanguageObjectKind::Method => "fn",
+            ctx_codegraph::LanguageObjectKind::Struct => "struct",
+            ctx_codegraph::LanguageObjectKind::Enum => "enum",
+            ctx_codegraph::LanguageObjectKind::Trait => "trait",
+            ctx_codegraph::LanguageObjectKind::Impl => "impl",
+            ctx_codegraph::LanguageObjectKind::Module => "mod",
+            _ => "symbol",
+        };
+        let root_rel_path = result
+            .root
+            .file_path
+            .strip_prefix(&self.path)
+            .unwrap_or(&result.root.file_path);
+
+        out.push_str("Root:\n");
+        out.push_str(&format!(
+            "  {} {} at {}:{}\n\n",
+            root_kind,
+            result.root.name,
+            root_rel_path.display(),
+            result.root.range.start_line
+        ));
+
+        let mode_str = match self.graph_mode {
+            ctx_codegraph::GraphContextMode::Callers => "Callers",
+            ctx_codegraph::GraphContextMode::Callees => "Callees",
+            ctx_codegraph::GraphContextMode::Dependencies => "Dependencies",
+            ctx_codegraph::GraphContextMode::Dependents => "Dependents",
+            ctx_codegraph::GraphContextMode::ForwardSlice => "Forward slice",
+            ctx_codegraph::GraphContextMode::ReverseSlice => "Reverse slice",
+            ctx_codegraph::GraphContextMode::Neighborhood => "Neighborhood",
+        };
+        out.push_str("Mode:\n");
+        out.push_str(&format!("  {}, depth {}\n\n", mode_str, self.graph_depth));
+
+        let symbols_count = result.nodes.len();
+        let files_count = result.files.len();
+        let mut lines_count = 0;
+        for file_span in &result.files {
+            if let Ok(content) = std::fs::read_to_string(&file_span.file_path) {
+                let lines: Vec<&str> = content.lines().collect();
+                let end = std::cmp::min(file_span.range.end_line, lines.len());
+                if file_span.range.start_line > 0 && file_span.range.start_line <= end {
+                    lines_count += end - file_span.range.start_line + 1;
+                }
+            }
+        }
+        out.push_str("Included:\n");
+        out.push_str(&format!("  {} symbols\n", symbols_count));
+        out.push_str(&format!("  {} files\n", files_count));
+        out.push_str(&format!("  {} lines\n", lines_count));
+
+        Ok(out)
     }
 }
 
@@ -442,6 +553,259 @@ mod tests {
             app.selected_symbol.as_ref().unwrap().name,
             "my_awesome_test_function"
         );
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_graph_context_flow_integration() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ctx_tui_test_graph_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create .git marker so find_workspace_root stops here
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+
+        // 1. Create source file with 3 functions (lines must match symbol ranges below)
+        let file_path = temp_dir.join("lib.rs");
+        fs::write(
+            &file_path,
+            "fn a() {\n    b();\n}\nfn b() {\n    c();\n}\nfn c() {\n}\n",
+        )
+        .unwrap();
+
+        // 2. Initialize TuiApp first (load_or_build may rebuild the index from tree-sitter
+        //    which produces symbols but no call edges). We'll replace graph_service below.
+        let mut app = TuiApp::new(temp_dir.clone()).unwrap();
+
+        // 3. Manually populate the codegraph SQLite DB with mock symbols AND call edges.
+        //    Clear whatever load_or_build wrote and insert our test fixture data.
+        {
+            let mut conn = ctx_codegraph::open_db(&temp_dir).unwrap();
+            ctx_codegraph::storage::clear_index(&mut conn).unwrap();
+
+            let mut index = ctx_codegraph::CodeIndex {
+                root: temp_dir.clone(),
+                files: vec![ctx_codegraph::SourceFile {
+                    id: None,
+                    path: std::path::PathBuf::from("lib.rs"),
+                    language: ctx_codegraph::Language::Rust,
+                    mtime_ms: Some(100),
+                    size_bytes: Some(200),
+                    content_hash: Some("hash_test".to_string()),
+                }],
+                symbols: vec![
+                    ctx_codegraph::Symbol {
+                        id: Some(ctx_codegraph::SymbolId(0)),
+                        file_id: None,
+                        name: "a".to_string(),
+                        qualified_name: "a".to_string(),
+                        kind: ctx_codegraph::SymbolKind::Function,
+                        language: ctx_codegraph::Language::Rust,
+                        file: std::path::PathBuf::from("lib.rs"),
+                        range: ctx_codegraph::TextRange {
+                            start_line: 1,
+                            start_col: 1,
+                            end_line: 3,
+                            end_col: 1,
+                        },
+                        body_range: None,
+                    },
+                    ctx_codegraph::Symbol {
+                        id: Some(ctx_codegraph::SymbolId(1)),
+                        file_id: None,
+                        name: "b".to_string(),
+                        qualified_name: "b".to_string(),
+                        kind: ctx_codegraph::SymbolKind::Function,
+                        language: ctx_codegraph::Language::Rust,
+                        file: std::path::PathBuf::from("lib.rs"),
+                        range: ctx_codegraph::TextRange {
+                            start_line: 4,
+                            start_col: 1,
+                            end_line: 6,
+                            end_col: 1,
+                        },
+                        body_range: None,
+                    },
+                    ctx_codegraph::Symbol {
+                        id: Some(ctx_codegraph::SymbolId(2)),
+                        file_id: None,
+                        name: "c".to_string(),
+                        qualified_name: "c".to_string(),
+                        kind: ctx_codegraph::SymbolKind::Function,
+                        language: ctx_codegraph::Language::Rust,
+                        file: std::path::PathBuf::from("lib.rs"),
+                        range: ctx_codegraph::TextRange {
+                            start_line: 7,
+                            start_col: 1,
+                            end_line: 8,
+                            end_col: 1,
+                        },
+                        body_range: None,
+                    },
+                ],
+                call_sites: vec![
+                    ctx_codegraph::CallSite {
+                        id: Some(ctx_codegraph::CallId(0)),
+                        file_id: None,
+                        from: Some(ctx_codegraph::SymbolId(0)),
+                        from_temp_index: None,
+                        raw_name: "b".to_string(),
+                        file: std::path::PathBuf::from("lib.rs"),
+                        range: ctx_codegraph::TextRange {
+                            start_line: 2,
+                            start_col: 5,
+                            end_line: 2,
+                            end_col: 8,
+                        },
+                    },
+                    ctx_codegraph::CallSite {
+                        id: Some(ctx_codegraph::CallId(1)),
+                        file_id: None,
+                        from: Some(ctx_codegraph::SymbolId(1)),
+                        from_temp_index: None,
+                        raw_name: "c".to_string(),
+                        file: std::path::PathBuf::from("lib.rs"),
+                        range: ctx_codegraph::TextRange {
+                            start_line: 5,
+                            start_col: 5,
+                            end_line: 5,
+                            end_col: 8,
+                        },
+                    },
+                ],
+                edges: vec![
+                    ctx_codegraph::CallEdge {
+                        from: ctx_codegraph::SymbolId(0),
+                        to: Some(ctx_codegraph::SymbolId(1)),
+                        call_site_id: Some(ctx_codegraph::CallId(0)),
+                        raw_name: "b".to_string(),
+                        call_range: ctx_codegraph::TextRange {
+                            start_line: 2,
+                            start_col: 5,
+                            end_line: 2,
+                            end_col: 8,
+                        },
+                        confidence: ctx_codegraph::ResolutionConfidence::Exact,
+                    },
+                    ctx_codegraph::CallEdge {
+                        from: ctx_codegraph::SymbolId(1),
+                        to: Some(ctx_codegraph::SymbolId(2)),
+                        call_site_id: Some(ctx_codegraph::CallId(1)),
+                        raw_name: "c".to_string(),
+                        call_range: ctx_codegraph::TextRange {
+                            start_line: 5,
+                            start_col: 5,
+                            end_line: 5,
+                            end_col: 8,
+                        },
+                        confidence: ctx_codegraph::ResolutionConfidence::Exact,
+                    },
+                ],
+            };
+            ctx_codegraph::storage::save_index(&mut conn, &mut index).unwrap();
+        }
+
+        // 4. Inject a fresh GraphContextService that reads our mock data
+        let conn = ctx_codegraph::open_db(&temp_dir).unwrap();
+        app.graph_service = Some(ctx_codegraph::GraphContextService::new(&temp_dir, conn));
+
+        // 5. Search and select symbol 'b' via the service
+        let results = app
+            .graph_service
+            .as_ref()
+            .unwrap()
+            .search_symbols("b", 10)
+            .unwrap();
+        assert!(!results.is_empty());
+        let sym_b = results.iter().find(|s| s.name == "b").unwrap().clone();
+        app.selected_symbol = Some(sym_b.clone());
+
+        // 5. Configure GraphContext flow state
+        app.screen = TuiScreen::GraphContext;
+        app.graph_mode = ctx_codegraph::GraphContextMode::Callers;
+        app.graph_depth = 2;
+        app.graph_max_nodes = 50;
+        app.graph_include_root = true;
+
+        // 6. Test: selected symbol + mode + depth produce a preview state
+        app.update_graph_preview();
+        assert!(app.graph_preview.is_some());
+        let preview_result = app.graph_preview.as_ref().unwrap();
+        assert!(
+            preview_result.is_ok(),
+            "Expected Ok, got: {:?}",
+            preview_result
+        );
+
+        // 7. Test: preview shows root, mode, and counts
+        let preview_text = app.render_tui_graph_preview().unwrap();
+        assert!(
+            preview_text.contains("Root:"),
+            "missing Root in: {}",
+            preview_text
+        );
+        assert!(
+            preview_text.contains("fn b at lib.rs:4"),
+            "missing 'fn b at lib.rs:4' in: {}",
+            preview_text
+        );
+        assert!(
+            preview_text.contains("Mode:\n  Callers, depth 2"),
+            "missing mode in: {}",
+            preview_text
+        );
+        assert!(preview_text.contains("Included:"));
+        assert!(preview_text.contains("symbols"));
+        assert!(preview_text.contains("files"));
+        assert!(preview_text.contains("lines"));
+
+        // 8. Test: rendered context for clipboard contains graph edges
+        let rendered_ctx = crate::clipboard::render_graph_context_output(
+            preview_result.as_ref().unwrap(),
+            &app.path,
+            app.graph_mode,
+            app.graph_depth,
+            app.graph_max_nodes,
+        )
+        .unwrap();
+        assert!(rendered_ctx.contains("# Graph Context"));
+        assert!(rendered_ctx.contains("Root: fn b"));
+        assert!(rendered_ctx.contains("Mode: Callers"));
+        assert!(rendered_ctx.contains("## Graph"));
+        assert!(
+            rendered_ctx.contains("a -> b"),
+            "missing 'a -> b' in: {}",
+            rendered_ctx
+        );
+
+        // 9. Test: nonexistent symbol shows error state
+        app.selected_symbol = Some(ctx_codegraph::LanguageObject {
+            id: ctx_codegraph::SymbolId(99999),
+            name: "nonexistent".to_string(),
+            qualified_name: "nonexistent".to_string(),
+            kind: ctx_codegraph::LanguageObjectKind::Function,
+            file_path: file_path.clone(),
+            range: ctx_codegraph::SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 1,
+            },
+            signature: None,
+            language: Some("rust".to_string()),
+        });
+        app.update_graph_preview();
+        assert!(app.graph_preview.is_some());
+        assert!(app.graph_preview.as_ref().unwrap().is_err());
+        let err_text = app.render_tui_graph_preview().unwrap_err();
+        assert!(err_text.contains("Error building graph context"));
 
         // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
