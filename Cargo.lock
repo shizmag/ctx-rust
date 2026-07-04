@@ -407,6 +407,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "crossterm",
+ "ctx-codegraph",
  "ctx-core",
  "ctx-models",
  "ctx-render",

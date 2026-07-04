@@ -4,6 +4,18 @@ use ratatui::widgets::ListState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TuiScreen {
+    TreePicker,
+    SymbolSearch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusedPanel {
+    Left,
+    Right,
+}
+
 pub(crate) struct TuiApp {
     pub(crate) path: PathBuf,
     pub(crate) scan_result: ctx_models::ScanResult,
@@ -15,6 +27,19 @@ pub(crate) struct TuiApp {
     pub(crate) message: Option<(String, std::time::Instant)>,
     pub(crate) search_active: bool,
     pub(crate) search_query: String,
+
+    // Symbol Search and TUI screens
+    pub(crate) screen: TuiScreen,
+    pub(crate) focused_panel: FocusedPanel,
+    pub(crate) symbol_search_query: String,
+    pub(crate) symbol_search_results: Vec<ctx_codegraph::LanguageObject>,
+    pub(crate) symbol_list_state: ListState,
+    pub(crate) symbol_search_active: bool,
+    pub(crate) selected_symbol: Option<ctx_codegraph::LanguageObject>,
+    pub(crate) preview_scroll_offset: usize,
+    pub(crate) graph_service: Option<ctx_codegraph::GraphContextService>,
+    pub(crate) last_preview_total_lines: usize,
+    pub(crate) last_preview_height: usize,
 }
 
 pub(crate) struct VisibleTuiNode {
@@ -43,6 +68,8 @@ impl TuiApp {
 
         expanded_dirs.insert(scan_result.root.path.clone());
 
+        let graph_service = ctx_codegraph::GraphContextService::load_or_build(&path).ok();
+
         let mut app = Self {
             path,
             scan_result,
@@ -54,6 +81,17 @@ impl TuiApp {
             message: None,
             search_active: false,
             search_query: String::new(),
+            screen: TuiScreen::TreePicker,
+            focused_panel: FocusedPanel::Left,
+            symbol_search_query: String::new(),
+            symbol_search_results: Vec::new(),
+            symbol_list_state: ListState::default(),
+            symbol_search_active: false,
+            selected_symbol: None,
+            preview_scroll_offset: 0,
+            graph_service,
+            last_preview_total_lines: 0,
+            last_preview_height: 0,
         };
 
         app.update_visible_items();
@@ -152,6 +190,63 @@ impl TuiApp {
         } else {
             self.list_state.select(Some(selected));
         }
+    }
+
+    pub(crate) fn set_symbol_search_query(&mut self, query: String) {
+        self.symbol_search_query = query;
+        self.update_symbol_search();
+    }
+
+    pub(crate) fn update_symbol_search(&mut self) {
+        if let Some(ref service) = self.graph_service {
+            if !self.symbol_search_query.is_empty() {
+                if let Ok(results) = service.search_symbols(&self.symbol_search_query, 100) {
+                    self.symbol_search_results = results;
+                } else {
+                    self.symbol_search_results = Vec::new();
+                }
+            } else {
+                self.symbol_search_results = Vec::new();
+            }
+        } else {
+            self.symbol_search_results = Vec::new();
+        }
+
+        let selected = self.symbol_list_state.selected().unwrap_or(0);
+        if self.symbol_search_results.is_empty() {
+            self.symbol_list_state.select(None);
+        } else if selected >= self.symbol_search_results.len() {
+            self.symbol_list_state
+                .select(Some(self.symbol_search_results.len() - 1));
+        } else {
+            self.symbol_list_state.select(Some(selected));
+        }
+        self.preview_scroll_offset = 0;
+    }
+
+    pub(crate) fn preview_scroll_up(&mut self) {
+        self.preview_scroll_offset = self.preview_scroll_offset.saturating_sub(1);
+    }
+
+    pub(crate) fn preview_scroll_down(&mut self, total_lines: usize, visible_height: usize) {
+        let max_offset = total_lines.saturating_sub(visible_height);
+        if self.preview_scroll_offset < max_offset {
+            self.preview_scroll_offset += 1;
+        }
+    }
+
+    pub(crate) fn preview_page_up(&mut self, step: usize) {
+        self.preview_scroll_offset = self.preview_scroll_offset.saturating_sub(step);
+    }
+
+    pub(crate) fn preview_page_down(
+        &mut self,
+        step: usize,
+        total_lines: usize,
+        visible_height: usize,
+    ) {
+        let max_offset = total_lines.saturating_sub(visible_height);
+        self.preview_scroll_offset = std::cmp::min(self.preview_scroll_offset + step, max_offset);
     }
 }
 
@@ -267,5 +362,88 @@ pub(crate) fn sum_all_bytes(node: &TreeNode) -> u64 {
         node.stats.bytes
     } else {
         node.children.iter().map(sum_all_bytes).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_symbol_search_and_preview_logic() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ctx_tui_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. Create a dummy rust file
+        let file_path = temp_dir.join("lib.rs");
+        fs::write(
+            &file_path,
+            "fn my_awesome_test_function() {\n    let x = 1;\n    let y = 2;\n}\n",
+        )
+        .unwrap();
+
+        // 2. Build codegraph index so search works
+        let options = ctx_codegraph::BuildIndexOptions {
+            use_rust_analyzer: false, // fast tree-sitter fallback
+            max_depth: None,
+            include_tests: true,
+        };
+        ctx_codegraph::rebuild_index_db(&temp_dir, options).unwrap();
+
+        // 3. Initialize TuiApp
+        let mut app = TuiApp::new(temp_dir.clone()).unwrap();
+        assert!(app.graph_service.is_some());
+
+        // Test 1: Search query updates candidates
+        app.screen = TuiScreen::SymbolSearch;
+        app.set_symbol_search_query("my_awesome".to_string());
+
+        assert!(
+            !app.symbol_search_results.is_empty(),
+            "Candidates list should be updated and not empty"
+        );
+        let found = &app.symbol_search_results[0];
+        assert_eq!(found.name, "my_awesome_test_function");
+        assert_eq!(app.symbol_list_state.selected(), Some(0));
+
+        // Test 2: Selection saves selected symbol (LanguageObject)
+        app.selected_symbol = Some(found.clone());
+        assert_eq!(
+            app.selected_symbol.as_ref().unwrap().name,
+            "my_awesome_test_function"
+        );
+
+        // Test 3: File preview scroll down/up
+        app.preview_scroll_offset = 0;
+        app.preview_scroll_down(100, 10);
+        assert_eq!(app.preview_scroll_offset, 1);
+
+        app.preview_scroll_up();
+        assert_eq!(app.preview_scroll_offset, 0);
+
+        app.preview_page_down(5, 100, 10);
+        assert_eq!(app.preview_scroll_offset, 5);
+
+        app.preview_page_up(2);
+        assert_eq!(app.preview_scroll_offset, 3);
+
+        // Test 4: Selected symbol remains associated with preview
+        // Even after scrolling or query changes, we check if the selected symbol is retained
+        app.set_symbol_search_query("another_query".to_string());
+        assert!(app.symbol_search_results.is_empty());
+        assert_eq!(
+            app.selected_symbol.as_ref().unwrap().name,
+            "my_awesome_test_function"
+        );
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

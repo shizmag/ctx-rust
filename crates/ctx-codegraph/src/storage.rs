@@ -7,8 +7,6 @@ use crate::model::{
 };
 use std::path::{Path, PathBuf};
 
-
-
 pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
     let mut current = match start_dir.canonicalize() {
         Ok(path) => path,
