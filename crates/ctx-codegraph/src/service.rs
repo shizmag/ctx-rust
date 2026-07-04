@@ -57,7 +57,7 @@ impl GraphContextService {
             let kind = LanguageObjectKind::from(sym.kind);
             let file_path = sym.file;
             let range = SourceRange::from(sym.range);
-            let language = Some(sym.language.0.clone());
+            let language = Some(sym.language.as_str().to_string());
 
             results.push(LanguageObject {
                 id,
@@ -101,7 +101,7 @@ impl GraphContextService {
             file_path: root_sym.file.clone(),
             range: SourceRange::from(root_sym.range.clone()),
             signature: None,
-            language: Some(root_sym.language.0.clone()),
+            language: Some(root_sym.language.as_str().to_string()),
         };
 
         let mut visited = HashSet::new();
@@ -147,7 +147,7 @@ impl GraphContextService {
                     file_path: sym.file.clone(),
                     range: SourceRange::from(sym.range.clone()),
                     signature: None,
-                    language: Some(sym.language.0.clone()),
+                    language: Some(sym.language.as_str().to_string()),
                 };
                 nodes.push(obj);
             }

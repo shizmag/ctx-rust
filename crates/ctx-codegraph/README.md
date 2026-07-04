@@ -82,3 +82,11 @@ To add support for a new programming language backend:
    ```rust
    reg.register(Box::new(MyLanguageBackend::new()));
    ```
+
+---
+
+## 📖 Architecture & Design Documentation
+
+For details on the extensible language backend architecture:
+- [CodeGraph Backend Architecture](docs/codegraph-backend-architecture.md)
+- [ADR 0001: Language Backend Boundary](docs/adr/0001-language-backend-boundary.md)

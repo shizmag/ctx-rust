@@ -20,7 +20,7 @@ impl RustResolver {
 
 impl ResolverBackend for RustResolver {
     fn resolver_id(&self) -> ResolverId {
-        ResolverId("rust-analyzer-lsp".to_string())
+        ResolverId::new("rust-analyzer-lsp")
     }
 
     fn resolver_version(&self) -> String {

@@ -54,7 +54,7 @@ pub fn resolve_name_only(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Language, TextRange};
+    use crate::model::{LanguageId, TextRange};
     use std::path::PathBuf;
 
     fn make_test_symbol(name: &str, kind: SymbolKind) -> Symbol {
@@ -64,7 +64,7 @@ mod tests {
             name: name.to_string(),
             qualified_name: format!("mod::{}", name),
             kind,
-            language: Language::rust(),
+            language: LanguageId::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 1,

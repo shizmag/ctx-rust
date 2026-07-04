@@ -93,7 +93,7 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallEdge, Language, ResolutionConfidence, Symbol, TextRange};
+    use crate::model::{CallEdge, LanguageId, ResolutionConfidence, Symbol, TextRange};
     use std::path::PathBuf;
 
     fn make_test_symbol(id: i64, name: &str, kind: SymbolKind) -> Symbol {
@@ -103,7 +103,7 @@ mod tests {
             name: name.to_string(),
             qualified_name: name.to_string(),
             kind,
-            language: Language::rust(),
+            language: LanguageId::rust(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 1,
