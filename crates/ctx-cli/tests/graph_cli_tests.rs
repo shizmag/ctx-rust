@@ -14,6 +14,12 @@ fn create_temp_project(root: &Path) {
     fs::create_dir_all(&src_dir).unwrap();
 
     let lib_code = r#"
+        pub fn a() {
+            b();
+        }
+
+        fn b() {}
+
         pub fn run_pipeline() {
             let value = load();
             process(value);
@@ -280,4 +286,88 @@ fn test_cli_g_alias_execution() {
     assert!(stdout.contains("run_pipeline"));
     assert!(stdout.contains("load"));
     assert!(stdout.contains("process"));
+}
+
+#[test]
+fn test_cli_graph_context_happy_case() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "context",
+            "a",
+            "--mode",
+            "callees",
+            "--depth",
+            "2",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph context");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Check output contains '# Graph Context'
+    assert!(stdout.contains("# Graph Context"), "Stdout: {}", stdout);
+
+    // Check output contains root symbol
+    assert!(stdout.contains("Root: fn a"), "Stdout: {}", stdout);
+
+    // Check output contains included symbols
+    assert!(stdout.contains("- fn b"), "Stdout: {}", stdout);
+}
+
+#[test]
+fn test_cli_graph_context_ambiguous() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+
+    let cargo_content = r#"
+        [package]
+        name = "temp_project"
+        version = "0.1.0"
+        edition = "2024"
+    "#;
+    fs::write(root.join("Cargo.toml"), cargo_content).unwrap();
+
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_code = r#"
+        pub mod m1 {
+            pub fn ambig() {}
+        }
+        pub mod m2 {
+            pub fn ambig() {}
+        }
+    "#;
+    fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "context",
+            "ambig",
+            "--mode",
+            "callees",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph context ambig");
+
+    // It should exit with code 1 (failure)
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Ambiguous symbol: ambig"));
+    assert!(stderr.contains("Candidates:"));
+    assert!(stderr.contains("m1::ambig"));
+    assert!(stderr.contains("m2::ambig"));
 }

@@ -268,6 +268,18 @@ struct GraphCommand {
     no_rust_analyzer: bool,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "kebab-case")]
+pub enum CliGraphContextMode {
+    Callers,
+    Callees,
+    Dependencies,
+    Dependents,
+    ForwardSlice,
+    ReverseSlice,
+    Neighborhood,
+}
+
 #[derive(clap::Subcommand, Debug)]
 enum GraphSubcommand {
     /// Build or rebuild the codegraph SQLite index database
@@ -296,6 +308,20 @@ enum GraphSubcommand {
     Slice {
         /// The name or qualified path of the target symbol
         symbol: String,
+    },
+    /// Extract a graph context around a target symbol and render it
+    Context {
+        /// The target symbol query
+        symbol: String,
+        /// Traversal mode
+        #[arg(long)]
+        mode: CliGraphContextMode,
+        /// Maximum traversal depth
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+        /// Maximum number of nodes to include in the context
+        #[arg(long, default_value = "50")]
+        max_nodes: usize,
     },
 }
 
@@ -477,6 +503,56 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             visited.insert(sym.id.unwrap());
             print_slice_tree_helper(&index, sym.id.unwrap(), 0, 10, &mut visited);
         }
+        GraphSubcommand::Context {
+            symbol,
+            mode,
+            depth,
+            max_nodes,
+        } => {
+            let _conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let service = ctx_codegraph::GraphContextService::load_or_build(&graph_args.path)?;
+
+            match service.resolve_symbol(&symbol)? {
+                ctx_codegraph::SymbolResolution::Unique(obj) => {
+                    let options = ctx_codegraph::GraphContextOptions {
+                        mode: mode.into(),
+                        max_depth: depth,
+                        max_nodes,
+                        include_root: true,
+                    };
+                    let result = service.build_context_for_symbol(obj.id, options)?;
+                    let rendered = render_graph_context(
+                        &result,
+                        &graph_args.path,
+                        mode.into(),
+                        depth,
+                        max_nodes,
+                    )?;
+                    print!("{}", rendered);
+                }
+                ctx_codegraph::SymbolResolution::Ambiguous(objs) => {
+                    eprintln!("Ambiguous symbol: {}", symbol);
+                    eprintln!("\nCandidates:");
+                    for cand in objs {
+                        let rel_path = cand
+                            .file_path
+                            .strip_prefix(&graph_args.path)
+                            .unwrap_or(&cand.file_path);
+                        eprintln!(
+                            "  {:<30} {}:{}",
+                            cand.qualified_name,
+                            rel_path.display(),
+                            cand.range.start_line
+                        );
+                    }
+                    std::process::exit(1);
+                }
+                ctx_codegraph::SymbolResolution::NotFound => {
+                    eprintln!("Symbol not found: {}", symbol);
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     Ok(())
@@ -559,4 +635,213 @@ fn print_slice_tree_helper(
             }
         }
     }
+}
+
+impl From<CliGraphContextMode> for ctx_codegraph::GraphContextMode {
+    fn from(mode: CliGraphContextMode) -> Self {
+        match mode {
+            CliGraphContextMode::Callers => ctx_codegraph::GraphContextMode::Callers,
+            CliGraphContextMode::Callees => ctx_codegraph::GraphContextMode::Callees,
+            CliGraphContextMode::Dependencies => ctx_codegraph::GraphContextMode::Dependencies,
+            CliGraphContextMode::Dependents => ctx_codegraph::GraphContextMode::Dependents,
+            CliGraphContextMode::ForwardSlice => ctx_codegraph::GraphContextMode::ForwardSlice,
+            CliGraphContextMode::ReverseSlice => ctx_codegraph::GraphContextMode::ReverseSlice,
+            CliGraphContextMode::Neighborhood => ctx_codegraph::GraphContextMode::Neighborhood,
+        }
+    }
+}
+
+fn kind_to_str(kind: ctx_codegraph::LanguageObjectKind) -> &'static str {
+    match kind {
+        ctx_codegraph::LanguageObjectKind::Function => "fn",
+        ctx_codegraph::LanguageObjectKind::Method => "fn",
+        ctx_codegraph::LanguageObjectKind::Struct => "struct",
+        ctx_codegraph::LanguageObjectKind::Enum => "enum",
+        ctx_codegraph::LanguageObjectKind::Trait => "trait",
+        ctx_codegraph::LanguageObjectKind::Impl => "impl",
+        ctx_codegraph::LanguageObjectKind::Module => "mod",
+        ctx_codegraph::LanguageObjectKind::Class => "class",
+        ctx_codegraph::LanguageObjectKind::Interface => "interface",
+        ctx_codegraph::LanguageObjectKind::TypeAlias => "type",
+        ctx_codegraph::LanguageObjectKind::Constant => "const",
+        ctx_codegraph::LanguageObjectKind::Variable => "var",
+        ctx_codegraph::LanguageObjectKind::Unknown => "unknown",
+    }
+}
+
+fn get_file_span_content(
+    path: &Path,
+    start_line: usize,
+    end_line: usize,
+) -> Result<String, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    if start_line == 0 || start_line > lines.len() {
+        return Ok("".to_string());
+    }
+    let end = std::cmp::min(end_line, lines.len());
+    if start_line > end {
+        return Ok("".to_string());
+    }
+    let mut result = String::new();
+    for i in (start_line - 1)..end {
+        result.push_str(lines[i]);
+        result.push('\n');
+    }
+    Ok(result)
+}
+
+fn get_markdown_lang(path: &Path) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("js") => "javascript",
+        Some("ts") => "typescript",
+        Some("tsx") => "tsx",
+        Some("jsx") => "jsx",
+        Some("html") => "html",
+        Some("css") => "css",
+        Some("json") => "json",
+        Some("toml") => "toml",
+        Some("md") => "markdown",
+        Some("sh") => "bash",
+        Some("yaml") | Some("yml") => "yaml",
+        Some("go") => "go",
+        Some("c") => "c",
+        Some("cpp") | Some("cc") | Some("h") | Some("hpp") => "cpp",
+        Some("java") => "java",
+        Some("kt") => "kotlin",
+        Some("swift") => "swift",
+        Some("txt") => "text",
+        _ => "",
+    }
+}
+
+fn render_graph_context(
+    result: &ctx_codegraph::GraphContextResult,
+    root_path: &Path,
+    mode: ctx_codegraph::GraphContextMode,
+    depth: usize,
+    max_nodes: usize,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut out = String::new();
+
+    // Header
+    out.push_str("# Graph Context\n\n");
+    let root_kind = kind_to_str(result.root.kind);
+    let root_rel_path = result
+        .root
+        .file_path
+        .strip_prefix(root_path)
+        .unwrap_or(&result.root.file_path);
+    out.push_str(&format!("Root: {} {}\n", root_kind, result.root.name));
+    out.push_str(&format!(
+        "Path: {}:{}-{}\n",
+        root_rel_path.display(),
+        result.root.range.start_line,
+        result.root.range.end_line
+    ));
+    out.push_str(&format!("Mode: {:?}\n", mode));
+    out.push_str(&format!("Depth: {}\n", depth));
+    out.push_str(&format!("Max nodes: {}\n\n", max_nodes));
+
+    // Graph
+    out.push_str("## Graph\n\n");
+    let mut symbol_names = std::collections::HashMap::new();
+    symbol_names.insert(result.root.id, result.root.qualified_name.clone());
+    for node in &result.nodes {
+        symbol_names.insert(node.id, node.qualified_name.clone());
+    }
+
+    let mut edge_lines = Vec::new();
+    for edge in &result.edges {
+        let from_name = symbol_names
+            .get(&edge.from)
+            .cloned()
+            .unwrap_or_else(|| format!("unknown_{:?}", edge.from));
+        let to_name = symbol_names
+            .get(&edge.to)
+            .cloned()
+            .unwrap_or_else(|| format!("unknown_{:?}", edge.to));
+        edge_lines.push(format!("{} -> {}", from_name, to_name));
+    }
+    edge_lines.sort();
+    for line in edge_lines {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+
+    // Included Symbols
+    out.push_str("## Included Symbols\n\n");
+    let mut symbols_list = Vec::new();
+
+    let format_symbol = |obj: &ctx_codegraph::LanguageObject| -> String {
+        let kind = kind_to_str(obj.kind);
+        let rel_path = obj
+            .file_path
+            .strip_prefix(root_path)
+            .unwrap_or(&obj.file_path);
+        format!(
+            "- {} {} \u{2014} {}:{}-{}",
+            kind,
+            obj.name,
+            rel_path.display(),
+            obj.range.start_line,
+            obj.range.end_line
+        )
+    };
+
+    symbols_list.push(format_symbol(&result.root));
+    for node in &result.nodes {
+        symbols_list.push(format_symbol(node));
+    }
+    symbols_list.sort();
+
+    for sym_line in symbols_list {
+        out.push_str(&sym_line);
+        out.push('\n');
+    }
+    out.push('\n');
+
+    // Files
+    out.push_str("## Files\n\n");
+
+    let mut sorted_files = result.files.clone();
+    sorted_files.sort_by(|a, b| match a.file_path.cmp(&b.file_path) {
+        std::cmp::Ordering::Equal => a.range.start_line.cmp(&b.range.start_line),
+        other => other,
+    });
+
+    for file_span in sorted_files {
+        let rel_path = file_span
+            .file_path
+            .strip_prefix(root_path)
+            .unwrap_or(&file_span.file_path);
+        out.push_str(&format!(
+            "### {}:{}-{}\n\n",
+            rel_path.display(),
+            file_span.range.start_line,
+            file_span.range.end_line
+        ));
+
+        let content = match get_file_span_content(
+            &file_span.file_path,
+            file_span.range.start_line,
+            file_span.range.end_line,
+        ) {
+            Ok(c) => c,
+            Err(e) => format!("Error reading file: {}\n", e),
+        };
+
+        let lang = get_markdown_lang(&file_span.file_path);
+        out.push_str(&format!("```{}\n", lang));
+        out.push_str(&content);
+        if !content.ends_with('\n') && !content.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+
+    Ok(out)
 }
