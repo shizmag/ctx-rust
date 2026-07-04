@@ -20,7 +20,7 @@ pub struct BuildIndexOptions {
 impl Default for BuildIndexOptions {
     fn default() -> Self {
         Self {
-            use_rust_analyzer: true,
+            use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
         }
@@ -70,9 +70,23 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
     let mut global_call_sites = Vec::new();
 
     // Find files
-    let walker = WalkDir::new(root);
+    let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
+        let path = e.path();
+        if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name == "target"
+                    || name == ".git"
+                    || name == ".codegraph"
+                    || name == ".ctx-codegraph"
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    });
     let mut rust_files = Vec::new();
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+    for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
         if should_index_path(path) {
             rust_files.push(path.to_path_buf());

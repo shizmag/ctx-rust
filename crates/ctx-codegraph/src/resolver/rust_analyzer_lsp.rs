@@ -191,14 +191,14 @@ fn is_inside_range(range: &crate::model::TextRange, line: usize, col: usize) -> 
 
 fn matches_definition(
     sym: &Symbol,
-    target_file: &Path,
+    target_canon: &Path,
     target_line_1: usize,
     target_col_1: usize,
+    canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> bool {
-    let sym_canon = sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone());
-    let target_canon = target_file
-        .canonicalize()
-        .unwrap_or_else(|_| target_file.to_path_buf());
+    let sym_canon = canon_cache
+        .entry(sym.file.clone())
+        .or_insert_with(|| sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone()));
     if sym_canon != target_canon {
         return false;
     }
@@ -233,13 +233,23 @@ pub fn find_matching_symbol(
     target_line_1: usize,
     target_col_1: usize,
 ) -> Option<usize> {
+    let target_canon = target_file
+        .canonicalize()
+        .unwrap_or_else(|_| target_file.to_path_buf());
     let mut best_match: Option<(usize, usize)> = None;
+    let mut canon_cache = std::collections::HashMap::new();
 
     for (i, sym) in symbols.iter().enumerate() {
         if sym.kind == SymbolKind::Impl {
             continue;
         }
-        if matches_definition(sym, target_file, target_line_1, target_col_1) {
+        if matches_definition(
+            sym,
+            &target_canon,
+            target_line_1,
+            target_col_1,
+            &mut canon_cache,
+        ) {
             let range_size = sym.range.end_line - sym.range.start_line;
             match best_match {
                 None => best_match = Some((i, range_size)),

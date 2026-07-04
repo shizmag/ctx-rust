@@ -266,6 +266,10 @@ struct GraphCommand {
     /// Disable rust-analyzer database fallback (forces tree-sitter fallback only)
     #[arg(long, global = true)]
     no_rust_analyzer: bool,
+
+    /// Enable rust-analyzer database fallback (slow but precise call resolution)
+    #[arg(long, global = true)]
+    with_lsp: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -329,7 +333,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
     use ctx_codegraph::BuildIndexOptions;
     use std::collections::HashMap;
 
-    let use_rust_analyzer = !graph_args.no_rust_analyzer;
+    let use_rust_analyzer = graph_args.with_lsp && !graph_args.no_rust_analyzer;
 
     match graph_args.command {
         GraphSubcommand::Build => {
@@ -501,7 +505,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             println!("Forward slice tree for {}:", sym.qualified_name);
             let mut visited = HashSet::new();
             visited.insert(sym.id.unwrap());
-            print_slice_tree_helper(&index, sym.id.unwrap(), 0, 10, &mut visited);
+            let mut printed_count = 0;
+            print_slice_tree_helper(
+                &index,
+                sym.id.unwrap(),
+                0,
+                10,
+                &mut visited,
+                &mut printed_count,
+            );
         }
         GraphSubcommand::Context {
             symbol,
@@ -596,7 +608,18 @@ fn print_slice_tree_helper(
     depth: usize,
     max_depth: usize,
     visited: &mut HashSet<ctx_codegraph::SymbolId>,
+    printed_count: &mut usize,
 ) {
+    if *printed_count >= 100 {
+        if *printed_count == 100 {
+            let indent = "  ".repeat(depth);
+            println!("{}└─ ... (truncated)", indent);
+            *printed_count += 1;
+        }
+        return;
+    }
+    *printed_count += 1;
+
     let sym = match index.symbols.iter().find(|s| s.id == Some(curr_id)) {
         Some(s) => s,
         None => return,
@@ -622,7 +645,14 @@ fn print_slice_tree_helper(
                 }
                 if !visited.contains(&to_id) {
                     visited.insert(to_id);
-                    print_slice_tree_helper(index, to_id, depth + 1, max_depth, visited);
+                    print_slice_tree_helper(
+                        index,
+                        to_id,
+                        depth + 1,
+                        max_depth,
+                        visited,
+                        printed_count,
+                    );
                     visited.remove(&to_id);
                 } else {
                     if let Some(target_sym) = index.symbols.iter().find(|s| s.id == Some(to_id)) {

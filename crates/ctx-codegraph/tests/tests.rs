@@ -765,7 +765,7 @@ fn test_index_lifecycle_validation() {
     assert!(db_path.exists());
 
     let options = BuildIndexOptions {
-        use_rust_analyzer: true,
+        use_rust_analyzer: false,
         max_depth: None,
         include_tests: true,
     };
@@ -796,7 +796,7 @@ fn test_index_lifecycle_validation() {
     assert!(validate_index_db(root, &options).unwrap());
 
     let different_options = BuildIndexOptions {
-        use_rust_analyzer: false,
+        use_rust_analyzer: true,
         max_depth: None,
         include_tests: true,
     };

@@ -27,7 +27,7 @@ impl GraphContextService {
     pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
         let workspace_root = crate::storage::find_workspace_root(repo_root);
         let options = crate::index::BuildIndexOptions {
-            use_rust_analyzer: true,
+            use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
         };
