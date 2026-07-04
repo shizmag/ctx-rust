@@ -390,17 +390,47 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 if report.full_rebuild {
                     if let Some(reason) = report.full_rebuild_reason {
                         match reason {
-                            ctx_codegraph::model::FullRebuildReason::MissingDatabase => {
+                            ctx_codegraph::model::RebuildReason::MissingDatabase => {
                                 println!("Full rebuild completed (Index not found).");
                             }
-                            ctx_codegraph::model::FullRebuildReason::IncompatibleSchema => {
-                                println!("Full rebuild completed (Incompatible schema).");
-                            }
-                            ctx_codegraph::model::FullRebuildReason::IncompatibleConfig => {
-                                println!("Full rebuild completed (Incompatible configuration).");
-                            }
-                            ctx_codegraph::model::FullRebuildReason::CorruptDatabase => {
+                            ctx_codegraph::model::RebuildReason::CorruptDatabase => {
                                 println!("Full rebuild completed (Database corrupted).");
+                            }
+                            ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
+                                println!("Full rebuild completed (Schema version changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
+                                println!("Full rebuild completed (Indexer version changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::BackendSetChanged => {
+                                println!("Full rebuild completed (Backend set changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
+                                println!("Full rebuild completed (Backend version changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
+                                println!("Full rebuild completed (Parser version changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
+                                println!("Full rebuild completed (Parser configuration changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
+                                println!("Full rebuild completed (Resolver version changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
+                                println!("Full rebuild completed (Resolver configuration changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
+                                println!("Full rebuild completed (Discovery configuration changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
+                                println!("Full rebuild completed (Change detection strategy changed).");
+                            }
+                            ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
+                                println!("Full rebuild completed (Previous run was incomplete).");
+                            }
+                            ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
+                                println!("Full rebuild completed (Previous run failed).");
                             }
                         }
                     } else {
@@ -698,17 +728,47 @@ fn get_connection_or_rebuild(
         if report.full_rebuild {
             if let Some(reason) = report.full_rebuild_reason {
                 match reason {
-                    ctx_codegraph::model::FullRebuildReason::MissingDatabase => {
+                    ctx_codegraph::model::RebuildReason::MissingDatabase => {
                         println!("Index not found. Built codegraph index.");
                     }
-                    ctx_codegraph::model::FullRebuildReason::IncompatibleSchema => {
-                        println!("Incompatible schema. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::FullRebuildReason::IncompatibleConfig => {
-                        println!("Incompatible configuration. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::FullRebuildReason::CorruptDatabase => {
+                    ctx_codegraph::model::RebuildReason::CorruptDatabase => {
                         println!("Database corrupted. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
+                        println!("Schema version changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
+                        println!("Indexer version changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::BackendSetChanged => {
+                        println!("Backend set changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
+                        println!("Backend version changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
+                        println!("Parser version changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
+                        println!("Parser configuration changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
+                        println!("Resolver version changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
+                        println!("Resolver configuration changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
+                        println!("Discovery configuration changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
+                        println!("Change detection strategy changed. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
+                        println!("Previous index run was incomplete. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
+                        println!("Previous index run failed. Rebuilt codegraph index cleanly.");
                     }
                 }
             } else {

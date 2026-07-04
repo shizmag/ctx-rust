@@ -593,13 +593,21 @@ mod tests {
 
             let mut index = ctx_codegraph::CodeIndex {
                 root: temp_dir.clone(),
-                files: vec![ctx_codegraph::SourceFile {
-                    id: None,
-                    path: std::path::PathBuf::from("lib.rs"),
-                    language: ctx_codegraph::Language::Rust,
-                    mtime_ms: Some(100),
-                    size_bytes: Some(200),
+                files: vec![ctx_codegraph::FileSnapshot {
+                    file_id: None,
+                    rel_path: std::path::PathBuf::from("lib.rs"),
+                    abs_path: temp_dir.join("lib.rs"),
+                    language: "rust".to_string(),
+                    backend_id: "tree-sitter-rust".to_string(),
+                    size_bytes: 200,
+                    mtime_ms: 100,
+                    mtime_ns: None,
                     content_hash: Some("hash_test".to_string()),
+                    parser_id: "tree-sitter-rust".to_string(),
+                    parser_version: "0.20.0".to_string(),
+                    parser_config_hash: "".to_string(),
+                    indexed_at_ms: None,
+                    parse_status: ctx_codegraph::FileParseStatus::Success,
                 }],
                 symbols: vec![
                     ctx_codegraph::Symbol {

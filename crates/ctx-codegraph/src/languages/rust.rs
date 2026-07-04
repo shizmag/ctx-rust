@@ -282,6 +282,10 @@ pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), Code
         .parse(source, None)
         .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", path.display())))?;
 
+    if tree.root_node().has_error() {
+        return Err(CodeGraphError::Parse(format!("Syntax error in {}", path.display())));
+    }
+
     let file_stem = path
         .file_stem()
         .and_then(|s| s.to_str())

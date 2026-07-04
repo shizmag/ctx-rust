@@ -1,10 +1,13 @@
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
 use crate::model::{
-    CallEdge, CallSite, CodeIndex, FileChangeDetection, FileId, FileSnapshot, FullRebuildReason,
+    CallEdge, CallSite, CodeIndex, FileChangeDetection, FileId, FileSnapshot, RebuildReason,
     IndexDiff, IndexState, Language, LanguageObject, LanguageObjectKind, ResolutionConfidence,
-    SourceFile, SourceRange, Symbol, SymbolId, SymbolKind, SymbolResolution, TextRange,
+    SourceRange, Symbol, SymbolId, SymbolKind, SymbolResolution, TextRange, FileParseStatus,
+    EdgeKind, AffectedSet, CallId,
 };
+use crate::resolver::noop::resolve_name_only;
+use crate::resolver::rust_analyzer_lsp::resolve_via_lsp;
 use std::path::{Path, PathBuf};
 
 pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
@@ -30,7 +33,7 @@ pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
 pub fn check_db_compatibility(
     conn: &rusqlite::Connection,
     options: &BuildIndexOptions,
-) -> Result<Option<FullRebuildReason>, CodeGraphError> {
+) -> Result<Option<RebuildReason>, CodeGraphError> {
     // Check if metadata table exists
     let table_exists: bool = conn
         .query_row(
@@ -42,46 +45,93 @@ pub fn check_db_compatibility(
         .unwrap_or(false);
 
     if !table_exists {
-        return Ok(Some(FullRebuildReason::IncompatibleSchema));
+        return Ok(Some(RebuildReason::MissingDatabase));
     }
 
-    // Check schema version
-    let schema_version: String = match conn.query_row(
-        "SELECT value FROM metadata WHERE key = 'schema_version'",
-        [],
-        |row| row.get(0),
-    ) {
-        Ok(v) => v,
-        Err(_) => return Ok(Some(FullRebuildReason::IncompatibleSchema)),
+    let get_meta = |key: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM metadata WHERE key = ?",
+            [key],
+            |row| row.get::<_, String>(0),
+        ).ok()
     };
-    if schema_version != "2" {
-        return Ok(Some(FullRebuildReason::IncompatibleSchema));
+
+    // 1. Schema version
+    let schema_version = get_meta("schema_version");
+    if schema_version.as_deref() != Some("3") {
+        return Ok(Some(RebuildReason::SchemaVersionChanged));
     }
 
-    // Check base_index_ready
-    let base_index_ready: String = match conn.query_row(
-        "SELECT value FROM metadata WHERE key = 'base_index_ready'",
-        [],
-        |row| row.get(0),
-    ) {
-        Ok(v) => v,
-        Err(_) => "false".to_string(),
-    };
-    if base_index_ready != "true" {
-        return Ok(Some(FullRebuildReason::IncompatibleConfig));
+    // 2. Indexer version
+    let indexer_version = get_meta("indexer_version");
+    if indexer_version.as_deref() != Some("0.1.0") {
+        return Ok(Some(RebuildReason::IndexerVersionChanged));
     }
 
-    // Check relevant settings: include_tests
-    let db_inc_tests: String = match conn.query_row(
-        "SELECT value FROM metadata WHERE key = 'include_tests'",
-        [],
-        |row| row.get(0),
-    ) {
-        Ok(v) => v,
-        Err(_) => "true".to_string(),
+    // 3. Backend set
+    let backend_id = get_meta("backend_id");
+    if backend_id.as_deref() != Some("tree-sitter-rust") {
+        return Ok(Some(RebuildReason::BackendSetChanged));
+    }
+
+    // 4. Parser version & config
+    let parser_version = get_meta("parser_version");
+    if parser_version.as_deref() != Some("0.20.0") {
+        return Ok(Some(RebuildReason::ParserVersionChanged));
+    }
+
+    let expected_parser_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
+        format!("{:x}", hasher.finalize())
     };
-    if db_inc_tests != options.include_tests.to_string() {
-        return Ok(Some(FullRebuildReason::IncompatibleConfig));
+    let parser_config_hash = get_meta("parser_config_hash");
+    if parser_config_hash.as_deref() != Some(&expected_parser_config_hash) {
+        return Ok(Some(RebuildReason::ParserConfigChanged));
+    }
+
+    // 5. Resolver id, version & config
+    let expected_resolver_id = if options.use_rust_analyzer {
+        "rust-analyzer-lsp"
+    } else {
+        "noop"
+    };
+    let resolver_id = get_meta("resolver_id");
+    if resolver_id.as_deref() != Some(expected_resolver_id) {
+        return Ok(Some(RebuildReason::ResolverConfigChanged));
+    }
+
+    let resolver_version = get_meta("resolver_version");
+    if resolver_version.as_deref() != Some("0.1.0") {
+        return Ok(Some(RebuildReason::ResolverVersionChanged));
+    }
+
+    let expected_resolver_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+    let resolver_config_hash = get_meta("resolver_config_hash");
+    if resolver_config_hash.as_deref() != Some(&expected_resolver_config_hash) {
+        return Ok(Some(RebuildReason::ResolverConfigChanged));
+    }
+
+    // 6. Change detection strategy
+    let expected_change_detection = match options.change_detection {
+        FileChangeDetection::MtimeAndSize => "MtimeAndSize",
+        FileChangeDetection::ContentHash => "ContentHash",
+    };
+    let change_detection = get_meta("change_detection_strategy");
+    if change_detection.as_deref() != Some(expected_change_detection) {
+        return Ok(Some(RebuildReason::ChangeDetectionStrategyChanged));
+    }
+
+    // 7. Base index status
+    let base_index_ready = get_meta("base_index_ready");
+    if base_index_ready.as_deref() != Some("true") {
+        return Ok(Some(RebuildReason::PreviousRunIncomplete));
     }
 
     Ok(None)
@@ -122,18 +172,25 @@ pub fn compute_index_diff(
     let mut db_files = std::collections::HashMap::new();
     {
         let mut stmt =
-            conn.prepare("SELECT path, mtime_ms, size_bytes, content_hash FROM files")?;
+            conn.prepare("SELECT path, rel_path, mtime_ms, size_bytes, content_hash, parse_status FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'")?;
         let db_files_rows = stmt.query_map([], |row| {
             let path_str: String = row.get(0)?;
-            let mtime_ms: Option<i64> = row.get(1)?;
-            let size_bytes: Option<i64> = row.get(2)?;
-            let content_hash: Option<String> = row.get(3)?;
-            Ok((PathBuf::from(path_str), mtime_ms, size_bytes, content_hash))
+            let rel_path_str: String = row.get(1)?;
+            let mtime_ms: i64 = row.get(2)?;
+            let size_bytes: u64 = row.get(3)?;
+            let content_hash: Option<String> = row.get(4)?;
+            let parse_status_str: String = row.get(5)?;
+            let parse_status = FileParseStatus::from_str(&parse_status_str)
+                .unwrap_or(FileParseStatus::Success);
+            Ok((
+                PathBuf::from(path_str),
+                (PathBuf::from(rel_path_str), mtime_ms, size_bytes, content_hash, parse_status),
+            ))
         })?;
 
         for row in db_files_rows {
-            let (path, mtime_ms, size_bytes, content_hash) = row?;
-            db_files.insert(path, (mtime_ms, size_bytes, content_hash));
+            let (path, (rel_path, mtime_ms, size_bytes, content_hash, parse_status)) = row?;
+            db_files.insert(path, (rel_path, mtime_ms, size_bytes, content_hash, parse_status));
         }
     }
 
@@ -146,26 +203,34 @@ pub fn compute_index_diff(
         let disk_mtime = crate::index::get_mtime_ms(path).unwrap_or(0);
         let disk_size = crate::index::get_size_bytes(path).unwrap_or(0) as u64;
 
-        if let Some((db_mtime, db_size, db_hash)) = db_files.get(path) {
+        if let Some((rel_path, db_mtime, db_size, db_hash, db_parse_status)) = db_files.get(path) {
             let mut disk_hash = None;
             let is_modified = match options.change_detection {
                 FileChangeDetection::MtimeAndSize => {
-                    let db_mtime_val = db_mtime.unwrap_or(0);
-                    let db_size_val = db_size.unwrap_or(0) as u64;
-                    disk_mtime != db_mtime_val || disk_size != db_size_val
+                    disk_mtime != *db_mtime || disk_size != *db_size || *db_parse_status == FileParseStatus::Failed
                 }
                 FileChangeDetection::ContentHash => {
                     let computed = crate::index::compute_file_hash(path);
                     disk_hash = computed.clone();
-                    computed != *db_hash
+                    computed != *db_hash || *db_parse_status == FileParseStatus::Failed
                 }
             };
 
             let snapshot = FileSnapshot {
-                path: path.clone(),
-                size: disk_size,
+                file_id: None,
+                rel_path: rel_path.clone(),
+                abs_path: path.clone(),
+                language: "rust".to_string(),
+                backend_id: "tree-sitter-rust".to_string(),
+                size_bytes: disk_size,
                 mtime_ms: disk_mtime,
+                mtime_ns: None,
                 content_hash: disk_hash.or_else(|| db_hash.clone()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: *db_parse_status,
             };
 
             if is_modified {
@@ -174,17 +239,13 @@ pub fn compute_index_diff(
                 unchanged.push(snapshot);
             }
         } else {
-            let disk_hash = if options.change_detection == FileChangeDetection::ContentHash {
-                crate::index::compute_file_hash(path)
-            } else {
-                None
-            };
-            added.push(FileSnapshot {
-                path: path.clone(),
-                size: disk_size,
-                mtime_ms: disk_mtime,
-                content_hash: disk_hash,
-            });
+            let snapshot = crate::index::create_file_snapshot(
+                workspace_root,
+                path,
+                options.change_detection,
+                options.include_tests,
+            );
+            added.push(snapshot);
         }
     }
 
@@ -210,7 +271,7 @@ pub fn get_index_state(
     let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
     if !db_path.exists() {
         return Ok(IndexState::NeedsFullRebuild(
-            FullRebuildReason::MissingDatabase,
+            RebuildReason::MissingDatabase,
         ));
     }
 
@@ -218,14 +279,14 @@ pub fn get_index_state(
         Ok(c) => c,
         Err(_) => {
             return Ok(IndexState::NeedsFullRebuild(
-                FullRebuildReason::CorruptDatabase,
+                RebuildReason::CorruptDatabase,
             ));
         }
     };
 
     if let Err(_) = conn.execute("PRAGMA foreign_keys = ON;", []) {
         return Ok(IndexState::NeedsFullRebuild(
-            FullRebuildReason::CorruptDatabase,
+            RebuildReason::CorruptDatabase,
         ));
     }
 
@@ -236,15 +297,12 @@ pub fn get_index_state(
     let diff = compute_index_diff(&conn, &workspace_root, options)?;
     if diff.added.is_empty() && diff.modified.is_empty() && diff.deleted.is_empty() {
         if options.use_rust_analyzer {
-            let lsp_enrichment: String = match conn.query_row(
-                "SELECT value FROM metadata WHERE key = 'lsp_enrichment'",
+            let lsp_status = conn.query_row(
+                "SELECT value FROM metadata WHERE key = 'resolver_status_rust-analyzer-lsp'",
                 [],
-                |row| row.get(0),
-            ) {
-                Ok(v) => v,
-                Err(_) => "none".to_string(),
-            };
-            if lsp_enrichment != "complete" {
+                |row| row.get::<_, String>(0),
+            ).unwrap_or_else(|_| "none".to_string());
+            if lsp_status == "none" {
                 return Ok(IndexState::NeedsIncrementalUpdate(diff));
             }
         }
@@ -286,10 +344,17 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY,
             path TEXT NOT NULL UNIQUE,
+            rel_path TEXT NOT NULL,
             language TEXT NOT NULL,
-            mtime_ms INTEGER,
-            size_bytes INTEGER,
-            content_hash TEXT
+            backend_id TEXT NOT NULL,
+            mtime_ms INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            content_hash TEXT,
+            parser_id TEXT NOT NULL,
+            parser_version TEXT NOT NULL,
+            parser_config_hash TEXT NOT NULL,
+            indexed_at_ms INTEGER,
+            parse_status TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS symbols (
@@ -348,7 +413,7 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3')",
         [],
     )?;
     conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('backend', 'tree-sitter-rust+optional-rust-analyzer-lsp')", [])?;
@@ -358,10 +423,7 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
 
 pub fn clear_index(conn: &mut rusqlite::Connection) -> Result<(), CodeGraphError> {
     let tx = conn.transaction()?;
-    tx.execute("DELETE FROM call_edges", [])?;
-    tx.execute("DELETE FROM call_sites", [])?;
-    tx.execute("DELETE FROM symbols", [])?;
-    tx.execute("DELETE FROM files", [])?;
+    tx.execute("DELETE FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'", [])?;
     tx.commit()?;
     Ok(())
 }
@@ -376,22 +438,41 @@ pub fn save_index(
     {
         let mut stmt = tx.prepare(
             "
-            INSERT INTO files (path, language, mtime_ms, size_bytes, content_hash)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO files (
+                path, rel_path, language, backend_id, mtime_ms, size_bytes,
+                content_hash, parser_id, parser_version, parser_config_hash,
+                indexed_at_ms, parse_status
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ",
         )?;
         for file in &mut index.files {
-            let path_str = file.path.to_string_lossy().to_string();
+            let abs_path_str = file.abs_path.to_string_lossy().to_string();
+            let rel_path_str = file.rel_path.to_string_lossy().to_string();
+            let mtime_ms = file.mtime_ms;
+            let size_bytes = file.size_bytes;
+            let content_hash = file.content_hash.clone();
+            let parse_status_str = file.parse_status.as_str();
+
             let row_id = stmt.insert(rusqlite::params![
-                path_str,
-                "Rust",
-                file.mtime_ms,
-                file.size_bytes,
-                file.content_hash,
+                abs_path_str,
+                rel_path_str,
+                "rust",
+                file.backend_id,
+                mtime_ms,
+                size_bytes,
+                content_hash,
+                file.parser_id,
+                file.parser_version,
+                file.parser_config_hash,
+                file.indexed_at_ms.or_else(|| {
+                    Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+                }),
+                parse_status_str,
             ])?;
             let file_id = FileId(row_id);
-            file.id = Some(file_id);
-            path_to_file_id.insert(file.path.clone(), file_id);
+            file.file_id = Some(file_id);
+            path_to_file_id.insert(file.abs_path.clone(), file_id);
         }
     }
 
@@ -407,9 +488,15 @@ pub fn save_index(
         ",
         )?;
         for (i, sym) in index.symbols.iter_mut().enumerate() {
-            let file_id = path_to_file_id.get(&sym.file).copied().ok_or_else(|| {
-                CodeGraphError::Parse(format!("File not found for symbol: {}", sym.file.display()))
-            })?;
+            let file_id = path_to_file_id
+                .get(&sym.file)
+                .copied()
+                .or_else(|| {
+                    index.files.iter().find(|f| f.rel_path == sym.file || f.abs_path == sym.file).and_then(|f| f.file_id)
+                })
+                .ok_or_else(|| {
+                    CodeGraphError::Parse(format!("File not found for symbol: {}", sym.file.display()))
+                })?;
             sym.file_id = Some(file_id);
 
             let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
@@ -451,12 +538,18 @@ pub fn save_index(
         ",
         )?;
         for (i, cs) in index.call_sites.iter_mut().enumerate() {
-            let file_id = path_to_file_id.get(&cs.file).copied().ok_or_else(|| {
-                CodeGraphError::Parse(format!(
-                    "File not found for call site: {}",
-                    cs.file.display()
-                ))
-            })?;
+            let file_id = path_to_file_id
+                .get(&cs.file)
+                .copied()
+                .or_else(|| {
+                    index.files.iter().find(|f| f.rel_path == cs.file || f.abs_path == cs.file).and_then(|f| f.file_id)
+                })
+                .ok_or_else(|| {
+                    CodeGraphError::Parse(format!(
+                        "File not found for call site: {}",
+                        cs.file.display()
+                    ))
+                })?;
             cs.file_id = Some(file_id);
 
             let from_temp_id = cs.from.ok_or_else(|| {
@@ -537,28 +630,44 @@ pub fn save_index(
 
 pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
-    let mut stmt =
-        conn.prepare("SELECT id, path, language, mtime_ms, size_bytes, content_hash FROM files")?;
+    let mut stmt = conn.prepare("SELECT id, path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, indexed_at_ms, parse_status FROM files WHERE language = 'rust' AND backend_id = 'tree-sitter-rust'")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let path_str: String = row.get(1)?;
-        let mtime_ms: Option<i64> = row.get(3)?;
-        let size_bytes: Option<i64> = row.get(4)?;
-        let content_hash: Option<String> = row.get(5)?;
-        files.push(SourceFile {
-            id: Some(FileId(id)),
-            path: PathBuf::from(path_str),
-            language: Language::Rust,
-            mtime_ms,
+        let rel_path_str: String = row.get(2)?;
+        let language: String = row.get(3)?;
+        let backend_id: String = row.get(4)?;
+        let mtime_ms: i64 = row.get(5)?;
+        let size_bytes: u64 = row.get(6)?;
+        let content_hash: Option<String> = row.get(7)?;
+        let parser_id: String = row.get(8)?;
+        let parser_version: String = row.get(9)?;
+        let parser_config_hash: String = row.get(10)?;
+        let indexed_at_ms: Option<i64> = row.get(11)?;
+        let parse_status_str: String = row.get(12)?;
+
+        files.push(FileSnapshot {
+            file_id: Some(FileId(id)),
+            abs_path: PathBuf::from(path_str),
+            rel_path: PathBuf::from(rel_path_str),
+            language,
+            backend_id,
             size_bytes,
+            mtime_ms,
+            mtime_ns: None,
             content_hash,
+            parser_id,
+            parser_version,
+            parser_config_hash,
+            indexed_at_ms,
+            parse_status: FileParseStatus::from_str(&parse_status_str).unwrap_or(FileParseStatus::Success),
         });
     }
 
     let file_map: std::collections::HashMap<FileId, PathBuf> = files
         .iter()
-        .filter_map(|f| f.id.map(|id| (id, f.path.clone())))
+        .filter_map(|f| f.file_id.map(|id| (id, f.abs_path.clone())))
         .collect();
 
     let mut symbols = Vec::new();
@@ -729,7 +838,7 @@ pub fn rebuild_index_db(
                 &mut conn,
                 &workspace_root,
                 options,
-                Some(FullRebuildReason::MissingDatabase),
+                Some(RebuildReason::MissingDatabase),
             )?;
             Ok((index, report))
         }
@@ -778,140 +887,353 @@ pub fn rebuild_index_db(
     }
 }
 
-fn run_lsp_enrichment(
-    conn: &mut rusqlite::Connection,
-    workspace_root: &Path,
-    symbols: &[crate::model::Symbol],
-    edges: &mut [crate::model::CallEdge],
-) -> Result<usize, CodeGraphError> {
-    let mut client = match crate::resolver::rust_analyzer_lsp::LspClient::new(workspace_root) {
-        Ok(c) => c,
-        Err(e) => return Err(CodeGraphError::RustAnalyzer(e)),
-    };
-
-    // Load call sites to match them
-    let index = load_index(conn, workspace_root)?;
-    let all_call_sites = index.call_sites;
-
-    // Warm up LSP
-    if let Some(first_cs) = all_call_sites.first() {
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(30);
-        let delay = std::time::Duration::from_millis(200);
-
-        while start.elapsed() < timeout {
-            let res =
-                crate::resolver::rust_analyzer_lsp::resolve_via_lsp(&mut client, first_cs, symbols);
-            match res {
-                Err(err) if err.contains("-32603") || err.contains("file not found") => {
-                    std::thread::sleep(delay);
-                }
-                Ok(None) if start.elapsed() < std::time::Duration::from_millis(30000) => {
-                    std::thread::sleep(delay);
-                }
-                _ => {
-                    break;
-                }
-            }
-        }
-    }
-
-    let tx = conn.transaction()?;
-    let mut exact_count = 0;
-
-    {
-        let mut update_stmt = tx.prepare(
-            "UPDATE call_edges SET to_symbol_id = ?1, confidence = 'LspExact' WHERE call_site_id = ?2"
-        )?;
-
-        for cs in &all_call_sites {
-            match crate::resolver::rust_analyzer_lsp::resolve_via_lsp(&mut client, cs, symbols) {
-                Ok(Some(idx)) => {
-                    let to_sym = &symbols[idx];
-                    let to_db_id = to_sym.id.map(|id| id.0);
-                    let cs_id = cs.id.map(|id| id.0).unwrap_or(0);
-                    update_stmt.execute(rusqlite::params![to_db_id, cs_id])?;
-
-                    if let Some(edge) = edges.iter_mut().find(|e| e.call_site_id == cs.id) {
-                        edge.to = to_sym.id;
-                        edge.confidence = ResolutionConfidence::LspExact;
-                    }
-                    exact_count += 1;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    tx.commit()?;
-    Ok(exact_count)
+#[derive(Debug, Clone)]
+pub struct ParsedFile {
+    pub symbols: Vec<Symbol>,
+    pub call_sites: Vec<CallSite>,
 }
 
-fn run_lsp_enrichment_in_tx(
+#[derive(Debug, Clone)]
+pub struct StagedFileUpdate {
+    pub snapshot: FileSnapshot,
+    pub parse_result: Result<ParsedFile, String>,
+    pub previous_file_id: Option<FileId>,
+}
+
+pub fn compute_affected_set(
+    conn: &rusqlite::Connection,
+    diff: &IndexDiff,
+    staged: &[StagedFileUpdate],
+) -> Result<AffectedSet, CodeGraphError> {
+    let mut files = std::collections::HashSet::new();
+    let mut symbols = std::collections::HashSet::new();
+    let mut occurrences = std::collections::HashSet::new();
+    let mut edge_kinds = std::collections::HashSet::new();
+    let mut resolvers = std::collections::HashSet::new();
+
+    // Default edge kind and resolver
+    edge_kinds.insert(EdgeKind::Call);
+    resolvers.insert("noop".to_string());
+    resolvers.insert("rust-analyzer-lsp".to_string());
+
+    let mut get_file_id_stmt = conn.prepare("SELECT id FROM files WHERE path = ?1")?;
+    for path in &diff.deleted {
+        if let Ok(id) = get_file_id_stmt.query_row([path.to_string_lossy().to_string()], |row| row.get::<_, i64>(0)) {
+            files.insert(FileId(id));
+        }
+    }
+    for update in staged {
+        if let Some(prev_id) = update.previous_file_id {
+            files.insert(prev_id);
+        }
+    }
+    drop(get_file_id_stmt);
+
+    for &file_id in &files {
+        let mut stmt = conn.prepare("SELECT id FROM symbols WHERE file_id = ?1")?;
+        let rows = stmt.query_map([file_id.0], |row| row.get::<_, i64>(0))?;
+        for row in rows {
+            if let Ok(id) = row {
+                symbols.insert(SymbolId(id));
+            }
+        }
+    }
+
+    for &sym_id in &symbols {
+        let mut stmt = conn.prepare("SELECT call_site_id FROM call_edges WHERE to_symbol_id = ?1")?;
+        let rows = stmt.query_map([sym_id.0], |row| row.get::<_, i64>(0))?;
+        for row in rows {
+            if let Ok(cs_id) = row {
+                occurrences.insert(CallId(cs_id));
+            }
+        }
+    }
+
+    Ok(AffectedSet {
+        files,
+        symbols,
+        occurrences,
+        edge_kinds,
+        resolvers,
+    })
+}
+
+fn load_all_symbols(conn: &rusqlite::Connection) -> Result<Vec<Symbol>, CodeGraphError> {
+    let mut stmt = conn.prepare("
+        SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
+               s.start_line, s.start_col, s.end_line, s.end_col, f.path
+        FROM symbols s
+        JOIN files f ON s.file_id = f.id
+        WHERE f.language = 'rust' AND f.backend_id = 'tree-sitter-rust'
+    ")?;
+    let rows = stmt.query_map([], |row| {
+        let id: i64 = row.get(0)?;
+        let file_id: i64 = row.get(1)?;
+        let name: String = row.get(2)?;
+        let qualified_name: String = row.get(3)?;
+        let kind_str: String = row.get(4)?;
+        let start_line: usize = row.get(6)?;
+        let start_col: usize = row.get(7)?;
+        let end_line: usize = row.get(8)?;
+        let end_col: usize = row.get(9)?;
+        let file_path: String = row.get(10)?;
+
+        Ok(Symbol {
+            id: Some(SymbolId(id)),
+            file_id: Some(FileId(file_id)),
+            name,
+            qualified_name,
+            kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
+            language: Language::Rust,
+            file: PathBuf::from(file_path),
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
+            body_range: None,
+        })
+    })?;
+    let mut symbols = Vec::new();
+    for r in rows {
+        symbols.push(r?);
+    }
+    Ok(symbols)
+}
+
+fn load_call_sites_to_resolve(
+    conn: &rusqlite::Connection,
+    new_file_ids: &[i64],
+    affected_occurrences: &std::collections::HashSet<CallId>,
+) -> Result<Vec<CallSite>, CodeGraphError> {
+    let mut call_sites = Vec::new();
+    if new_file_ids.is_empty() && affected_occurrences.is_empty() {
+        return Ok(call_sites);
+    }
+
+    let mut sql = "
+        SELECT cs.id, cs.file_id, cs.from_symbol_id, cs.raw_name,
+               cs.start_line, cs.start_col, cs.end_line, cs.end_col, f.path
+        FROM call_sites cs
+        JOIN files f ON cs.file_id = f.id
+        WHERE 1=0
+    ".to_string();
+
+    if !new_file_ids.is_empty() {
+        let placeholders: Vec<String> = new_file_ids.iter().map(|id| id.to_string()).collect();
+        sql.push_str(&format!(" OR cs.file_id IN ({})", placeholders.join(",")));
+    }
+
+    if !affected_occurrences.is_empty() {
+        let placeholders: Vec<String> = affected_occurrences.iter().map(|id| id.0.to_string()).collect();
+        sql.push_str(&format!(" OR cs.id IN ({})", placeholders.join(",")));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let id: i64 = row.get(0)?;
+        let file_id: i64 = row.get(1)?;
+        let from_symbol_id: i64 = row.get(2)?;
+        let raw_name: String = row.get(3)?;
+        let start_line: usize = row.get(4)?;
+        let start_col: usize = row.get(5)?;
+        let end_line: usize = row.get(6)?;
+        let end_col: usize = row.get(7)?;
+        let file_path: String = row.get(8)?;
+
+        Ok(CallSite {
+            id: Some(CallId(id)),
+            file_id: Some(FileId(file_id)),
+            from: Some(SymbolId(from_symbol_id)),
+            from_temp_index: None,
+            raw_name,
+            file: PathBuf::from(file_path),
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
+        })
+    })?;
+
+    for r in rows {
+        call_sites.push(r?);
+    }
+    Ok(call_sites)
+}
+
+fn rebuild_affected_edges_in_tx(
     tx: &rusqlite::Transaction,
     workspace_root: &Path,
-    symbols: &[crate::model::Symbol],
-    all_call_sites: &[crate::model::CallSite],
-    edges: &mut [crate::model::CallEdge],
-) -> Result<usize, CodeGraphError> {
-    let mut client = match crate::resolver::rust_analyzer_lsp::LspClient::new(workspace_root) {
-        Ok(c) => c,
-        Err(e) => return Err(CodeGraphError::RustAnalyzer(e)),
+    options: &BuildIndexOptions,
+    affected_files: &[FileId],
+    affected_occurrences: &std::collections::HashSet<CallId>,
+) -> Result<(), CodeGraphError> {
+    let mut file_ids = Vec::new();
+    for fid in affected_files {
+        file_ids.push(fid.0);
+    }
+
+    let call_sites = load_call_sites_to_resolve(tx, &file_ids, affected_occurrences)?;
+    if call_sites.is_empty() {
+        return Ok(());
+    }
+
+    let cs_ids: Vec<String> = call_sites.iter().map(|cs| cs.id.unwrap().0.to_string()).collect();
+    let sql = format!("DELETE FROM call_edges WHERE call_site_id IN ({})", cs_ids.join(","));
+    tx.execute(&sql, [])?;
+
+    let all_symbols = load_all_symbols(tx)?;
+
+    let mut lsp_client = if options.use_rust_analyzer {
+        match crate::resolver::rust_analyzer_lsp::LspClient::new(workspace_root) {
+            Ok(client) => Some(client),
+            Err(err) => {
+                eprintln!(
+                    "Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.",
+                    err
+                );
+                None
+            }
+        }
+    } else {
+        None
     };
 
-    if let Some(first_cs) = all_call_sites.first() {
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(30);
-        let delay = std::time::Duration::from_millis(200);
+    if let Some(ref mut client) = lsp_client {
+        if let Some(first_cs) = call_sites.first() {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(30);
+            let delay = std::time::Duration::from_millis(200);
 
-        while start.elapsed() < timeout {
-            let res =
-                crate::resolver::rust_analyzer_lsp::resolve_via_lsp(&mut client, first_cs, symbols);
-            match res {
-                Err(err) if err.contains("-32603") || err.contains("file not found") => {
-                    std::thread::sleep(delay);
-                }
-                Ok(None) if start.elapsed() < std::time::Duration::from_millis(30000) => {
-                    std::thread::sleep(delay);
-                }
-                _ => {
-                    break;
+            while start.elapsed() < timeout {
+                let res = resolve_via_lsp(client, first_cs, &all_symbols);
+                match res {
+                    Err(err) if err.contains("-32603") || err.contains("file not found") => {
+                        std::thread::sleep(delay);
+                    }
+                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(5000) => {
+                        std::thread::sleep(delay);
+                    }
+                    _ => {
+                        break;
+                    }
                 }
             }
         }
     }
 
-    let mut exact_count = 0;
-    let mut update_stmt = tx.prepare(
-        "UPDATE call_edges SET to_symbol_id = ?1, confidence = 'LspExact' WHERE call_site_id = ?2",
+    let mut edge_stmt = tx.prepare(
+        "INSERT INTO call_edges (from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
 
-    for cs in all_call_sites {
-        match crate::resolver::rust_analyzer_lsp::resolve_via_lsp(&mut client, cs, symbols) {
-            Ok(Some(idx)) => {
-                let to_sym = &symbols[idx];
-                let to_db_id = to_sym.id.map(|id| id.0);
-                let cs_id = cs.id.map(|id| id.0).unwrap_or(0);
-                update_stmt.execute(rusqlite::params![to_db_id, cs_id])?;
+    for cs in &call_sites {
+        let from_id = match cs.from {
+            Some(id) => id,
+            None => continue,
+        };
 
-                if let Some(edge) = edges.iter_mut().find(|e| e.call_site_id == cs.id) {
-                    edge.to = to_sym.id;
-                    edge.confidence = ResolutionConfidence::LspExact;
+        let mut resolved_idx = None;
+        let mut confidence = ResolutionConfidence::Unresolved;
+
+        if let Some(ref mut client) = lsp_client {
+            match resolve_via_lsp(client, cs, &all_symbols) {
+                Ok(Some(idx)) => {
+                    resolved_idx = Some(idx);
+                    confidence = ResolutionConfidence::LspExact;
                 }
-                exact_count += 1;
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!(
+                        "LSP resolution warning for call to {}: {}",
+                        cs.raw_name, err
+                    );
+                }
             }
-            _ => {}
         }
+
+        if resolved_idx.is_none() {
+            let (fallback_idx, fallback_conf) =
+                resolve_name_only(&cs.raw_name, &all_symbols, &cs.file);
+            resolved_idx = fallback_idx;
+            confidence = fallback_conf;
+        }
+
+        let to_db_id = resolved_idx.and_then(|idx| all_symbols[idx].id);
+        let cs_id = cs.id.unwrap();
+
+        edge_stmt.execute(rusqlite::params![
+            from_id.0,
+            to_db_id.map(|id| id.0),
+            cs_id.0,
+            cs.raw_name,
+            confidence.as_str(),
+        ])?;
     }
 
-    Ok(exact_count)
+    Ok(())
+}
+
+pub fn validate_index_invariants(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
+    let invalid_symbols: i64 = conn.query_row(
+        "SELECT count(*) FROM symbols WHERE file_id NOT IN (SELECT id FROM files)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid_symbols > 0 {
+        return Err(CodeGraphError::Parse(format!(
+            "Invariant violation: {} symbols with invalid file_id",
+            invalid_symbols
+        )));
+    }
+
+    let invalid_call_sites: i64 = conn.query_row(
+        "SELECT count(*) FROM call_sites WHERE file_id NOT IN (SELECT id FROM files)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid_call_sites > 0 {
+        return Err(CodeGraphError::Parse(format!(
+            "Invariant violation: {} call sites with invalid file_id",
+            invalid_call_sites
+        )));
+    }
+
+    let invalid_edges_source: i64 = conn.query_row(
+        "SELECT count(*) FROM call_edges WHERE from_symbol_id NOT IN (SELECT id FROM symbols)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid_edges_source > 0 {
+        return Err(CodeGraphError::Parse(format!(
+            "Invariant violation: {} call edges with invalid source symbol id",
+            invalid_edges_source
+        )));
+    }
+
+    let invalid_edges_target: i64 = conn.query_row(
+        "SELECT count(*) FROM call_edges WHERE to_symbol_id IS NOT NULL AND to_symbol_id NOT IN (SELECT id FROM symbols)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid_edges_target > 0 {
+        return Err(CodeGraphError::Parse(format!(
+            "Invariant violation: {} call edges pointing to non-existent symbol",
+            invalid_edges_target
+        )));
+    }
+
+    Ok(())
 }
 
 fn run_full_rebuild(
     conn: &mut rusqlite::Connection,
     workspace_root: &Path,
     options: BuildIndexOptions,
-    reason: Option<FullRebuildReason>,
+    reason: Option<RebuildReason>,
 ) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
     clear_index(conn)?;
 
@@ -921,58 +1243,87 @@ fn run_full_rebuild(
 
     save_index(conn, &mut index)?;
 
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2')",
-        [],
-    )?;
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('include_tests', ?1)",
-        [options.include_tests.to_string()],
-    )?;
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('base_index_ready', 'true')",
-        [],
-    )?;
+    let tx = conn.transaction()?;
 
-    let mut lsp_edges_exact = 0;
-    if options.use_rust_analyzer {
-        match run_lsp_enrichment(conn, workspace_root, &index.symbols, &mut index.edges) {
-            Ok(count) => {
-                lsp_edges_exact = count;
-                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'complete')", [])?;
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: LSP enrichment failed: {}. Keeping syntax/heuristic edges.",
-                    e
-                );
-                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'failed')", [])?;
-            }
+    let write_meta = |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
+        tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [key, value])?;
+        Ok(())
+    };
+    write_meta(&tx, "schema_version", "3")?;
+    write_meta(&tx, "indexer_version", "0.1.0")?;
+    write_meta(&tx, "backend_id", "tree-sitter-rust")?;
+    write_meta(&tx, "parser_id", "tree-sitter-rust")?;
+    write_meta(&tx, "parser_version", "0.20.0")?;
+    let parser_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+    write_meta(&tx, "parser_config_hash", &parser_config_hash)?;
+
+    let resolver_id = if options.use_rust_analyzer { "rust-analyzer-lsp" } else { "noop" };
+    write_meta(&tx, "resolver_id", resolver_id)?;
+    write_meta(&tx, "resolver_version", "0.1.0")?;
+    let resolver_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+    write_meta(&tx, "resolver_config_hash", &resolver_config_hash)?;
+
+    let change_detection = match options.change_detection {
+        FileChangeDetection::MtimeAndSize => "MtimeAndSize",
+        FileChangeDetection::ContentHash => "ContentHash",
+    };
+    write_meta(&tx, "change_detection_strategy", change_detection)?;
+    write_meta(&tx, "base_index_ready", "true")?;
+
+    let mut affected_files = std::collections::HashSet::new();
+    {
+        let mut stmt = tx.prepare("SELECT id FROM files")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            affected_files.insert(FileId(row.get(0)?));
         }
-    } else {
-        conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'none')",
-            [],
-        )?;
     }
+
+    let affected = AffectedSet {
+        files: affected_files,
+        symbols: std::collections::HashSet::new(),
+        occurrences: std::collections::HashSet::new(),
+        edge_kinds: {
+            let mut s = std::collections::HashSet::new();
+            s.insert(EdgeKind::Call);
+            s
+        },
+        resolvers: {
+            let mut s = std::collections::HashSet::new();
+            s.insert(resolver_id.to_string());
+            s
+        },
+    };
+
+    let affected_files_vec: Vec<FileId> = affected.files.iter().copied().collect();
+    rebuild_affected_edges_in_tx(&tx, workspace_root, &options, &affected_files_vec, &affected.occurrences)?;
+
+    if options.use_rust_analyzer {
+        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "complete")?;
+    } else {
+        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "none")?;
+    }
+
+    tx.commit()?;
+
+    validate_index_invariants(conn)?;
 
     let loaded = load_index(conn, workspace_root)?;
 
-    let syntax_count = loaded
-        .edges
-        .iter()
-        .filter(|e| e.confidence == ResolutionConfidence::Syntax)
-        .count();
-    let heuristic_count = loaded
-        .edges
-        .iter()
-        .filter(|e| e.confidence == ResolutionConfidence::Heuristic)
-        .count();
-    let unresolved_count = loaded
-        .edges
-        .iter()
-        .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
-        .count();
+    let lsp_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::LspExact).count();
+    let syntax_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Syntax).count();
+    let heuristic_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Heuristic).count();
+    let unresolved_count = loaded.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Unresolved).count();
 
     let report = crate::model::BuildReport {
         full_rebuild: true,
@@ -986,7 +1337,7 @@ fn run_full_rebuild(
         symbols_written: loaded.symbols.len(),
         call_sites_written: loaded.call_sites.len(),
         edges_written: loaded.edges.len(),
-        lsp_edges_exact,
+        lsp_edges_exact: lsp_count,
         syntax_edges: syntax_count,
         heuristic_edges: heuristic_count,
         unresolved_edges: unresolved_count,
@@ -995,35 +1346,73 @@ fn run_full_rebuild(
     Ok((loaded, report))
 }
 
-fn run_incremental_update(
+pub fn run_incremental_update(
     conn: &mut rusqlite::Connection,
     workspace_root: &Path,
     options: BuildIndexOptions,
     diff: IndexDiff,
 ) -> Result<(CodeIndex, crate::model::BuildReport), CodeGraphError> {
+    let mut staged_updates = Vec::new();
+    let mut get_file_id_stmt = conn.prepare("SELECT id FROM files WHERE path = ?1")?;
+
+    for snapshot in &diff.added {
+        let path = &snapshot.abs_path;
+        let parse_res = crate::languages::rust::parse_rust_file(path)
+            .map(|(symbols, call_sites)| ParsedFile { symbols, call_sites })
+            .map_err(|e| e.to_string());
+
+        staged_updates.push(StagedFileUpdate {
+            snapshot: snapshot.clone(),
+            parse_result: parse_res,
+            previous_file_id: None,
+        });
+    }
+
+    for snapshot in &diff.modified {
+        let path = &snapshot.abs_path;
+        let prev_id: Option<i64> = get_file_id_stmt
+            .query_row([path.to_string_lossy().to_string()], |row| row.get(0))
+            .ok();
+
+        let parse_res = crate::languages::rust::parse_rust_file(path)
+            .map(|(symbols, call_sites)| ParsedFile { symbols, call_sites })
+            .map_err(|e| e.to_string());
+
+        staged_updates.push(StagedFileUpdate {
+            snapshot: snapshot.clone(),
+            parse_result: parse_res,
+            previous_file_id: prev_id.map(FileId),
+        });
+    }
+    drop(get_file_id_stmt);
+
+    let affected = compute_affected_set(conn, &diff, &staged_updates)?;
+
     let tx = conn.transaction()?;
 
     let mut symbols_written = 0;
     let mut call_sites_written = 0;
+    let mut parsed_files_count = 0;
 
-    // 1. Delete deleted files
     let mut delete_file_stmt = tx.prepare("DELETE FROM files WHERE path = ?1")?;
     for path in &diff.deleted {
         delete_file_stmt.execute(rusqlite::params![path.to_string_lossy().to_string()])?;
     }
-
-    // 2. Delete modified files
-    for snapshot in &diff.modified {
-        delete_file_stmt.execute(rusqlite::params![
-            snapshot.path.to_string_lossy().to_string()
-        ])?;
-    }
     drop(delete_file_stmt);
 
-    // 3. Parse and insert added and modified files
     let mut file_insert_stmt = tx.prepare(
-        "INSERT INTO files (path, language, mtime_ms, size_bytes, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO files (
+            path, rel_path, language, backend_id, mtime_ms, size_bytes,
+            content_hash, parser_id, parser_version, parser_config_hash,
+            indexed_at_ms, parse_status
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+    )?;
+
+    let mut file_update_meta_stmt = tx.prepare(
+        "UPDATE files SET 
+            mtime_ms = ?1, size_bytes = ?2, content_hash = ?3,
+            indexed_at_ms = ?4, parse_status = ?5
+         WHERE id = ?6",
     )?;
 
     let mut sym_stmt = tx.prepare(
@@ -1041,220 +1430,216 @@ fn run_incremental_update(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
 
-    let files_to_parse: Vec<&FileSnapshot> =
-        diff.added.iter().chain(diff.modified.iter()).collect();
-    let mut parsed_files_count = 0;
+    let mut delete_file_contents_stmt = tx.prepare("DELETE FROM symbols WHERE file_id = ?1")?;
 
-    for snapshot in files_to_parse {
-        let path = &snapshot.path;
-        let mtime_ms = snapshot.mtime_ms;
-        let size_bytes = snapshot.size as i64;
-        let content_hash = snapshot
-            .content_hash
-            .clone()
-            .or_else(|| crate::index::compute_file_hash(path));
-        let path_str = path.to_string_lossy().to_string();
+    let mut successfully_parsed_file_ids = Vec::new();
 
-        file_insert_stmt.execute(rusqlite::params![
-            path_str,
-            "Rust",
-            mtime_ms,
-            size_bytes,
-            content_hash,
-        ])?;
-        let file_id = tx.last_insert_rowid();
-        parsed_files_count += 1;
+    for update in &staged_updates {
+        let path_str = update.snapshot.abs_path.to_string_lossy().to_string();
+        let rel_path_str = update.snapshot.rel_path.to_string_lossy().to_string();
+        let current_time = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64);
 
-        let (mut file_symbols, mut file_call_sites) =
-            match crate::languages::rust::parse_rust_file(path) {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                    continue;
+        match &update.parse_result {
+            Ok(parsed) => {
+                if let Some(prev_id) = update.previous_file_id {
+                    file_update_meta_stmt.execute(rusqlite::params![
+                        update.snapshot.mtime_ms,
+                        update.snapshot.size_bytes,
+                        update.snapshot.content_hash,
+                        current_time,
+                        FileParseStatus::Success.as_str(),
+                        prev_id.0,
+                    ])?;
+                    delete_file_contents_stmt.execute(rusqlite::params![prev_id.0])?;
                 }
-            };
 
-        if !options.include_tests {
-            let mut new_symbols = Vec::new();
-            let mut index_map = std::collections::HashMap::new();
-            for (i, sym) in file_symbols.into_iter().enumerate() {
-                if sym.kind != SymbolKind::Test {
-                    index_map.insert(i, new_symbols.len());
-                    new_symbols.push(sym);
-                }
-            }
-            file_symbols = new_symbols;
-
-            file_call_sites.retain(|cs| {
-                if let Some(old_idx) = cs.from_temp_index {
-                    index_map.contains_key(&old_idx)
+                let file_id = if let Some(prev_id) = update.previous_file_id {
+                    prev_id.0
                 } else {
-                    true
-                }
-            });
+                    file_insert_stmt.execute(rusqlite::params![
+                        path_str,
+                        rel_path_str,
+                        "rust",
+                        update.snapshot.backend_id,
+                        update.snapshot.mtime_ms,
+                        update.snapshot.size_bytes,
+                        update.snapshot.content_hash,
+                        update.snapshot.parser_id,
+                        update.snapshot.parser_version,
+                        update.snapshot.parser_config_hash,
+                        current_time,
+                        FileParseStatus::Success.as_str(),
+                    ])?;
+                    tx.last_insert_rowid()
+                };
+                successfully_parsed_file_ids.push(FileId(file_id));
+                parsed_files_count += 1;
 
-            for cs in &mut file_call_sites {
-                if let Some(ref mut idx) = cs.from_temp_index {
-                    if let Some(&new_idx) = index_map.get(idx) {
-                        *idx = new_idx;
+                let mut file_symbols = parsed.symbols.clone();
+                let mut file_call_sites = parsed.call_sites.clone();
+
+                if !options.include_tests {
+                    let mut new_symbols = Vec::new();
+                    let mut index_map = std::collections::HashMap::new();
+                    for (i, sym) in file_symbols.into_iter().enumerate() {
+                        if sym.kind != SymbolKind::Test {
+                            index_map.insert(i, new_symbols.len());
+                            new_symbols.push(sym);
+                        }
+                    }
+                    file_symbols = new_symbols;
+
+                    file_call_sites.retain(|cs| {
+                        if let Some(old_idx) = cs.from_temp_index {
+                            index_map.contains_key(&old_idx)
+                        } else {
+                            true
+                        }
+                    });
+
+                    for cs in &mut file_call_sites {
+                        if let Some(ref mut idx) = cs.from_temp_index {
+                            if let Some(&new_idx) = index_map.get(idx) {
+                                *idx = new_idx;
+                            }
+                        }
                     }
                 }
+
+                let mut sym_ids = Vec::new();
+                for sym in &file_symbols {
+                    let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
+                    let body_start_col = sym.body_range.as_ref().map(|r| r.start_col);
+                    let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
+                    let body_end_col = sym.body_range.as_ref().map(|r| r.end_col);
+
+                    sym_stmt.execute(rusqlite::params![
+                        file_id,
+                        sym.name,
+                        sym.qualified_name,
+                        sym.kind.as_str(),
+                        "Rust",
+                        sym.range.start_line,
+                        sym.range.start_col,
+                        sym.range.end_line,
+                        sym.range.end_col,
+                        body_start_line,
+                        body_start_col,
+                        body_end_line,
+                        body_end_col,
+                    ])?;
+                    let sym_db_id = tx.last_insert_rowid();
+                    sym_ids.push(sym_db_id);
+                    symbols_written += 1;
+                }
+
+                for cs in &file_call_sites {
+                    let from_db_id = match cs.from_temp_index {
+                        Some(idx) => sym_ids[idx],
+                        None => continue,
+                    };
+                    cs_stmt.execute(rusqlite::params![
+                        file_id,
+                        from_db_id,
+                        cs.raw_name,
+                        cs.range.start_line,
+                        cs.range.start_col,
+                        cs.range.end_line,
+                        cs.range.end_col,
+                    ])?;
+                    call_sites_written += 1;
+                }
             }
-        }
-
-        let mut sym_ids = Vec::new();
-        for sym in &file_symbols {
-            let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
-            let body_start_col = sym.body_range.as_ref().map(|r| r.start_col);
-            let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
-            let body_end_col = sym.body_range.as_ref().map(|r| r.end_col);
-
-            sym_stmt.execute(rusqlite::params![
-                file_id,
-                sym.name,
-                sym.qualified_name,
-                sym.kind.as_str(),
-                "Rust",
-                sym.range.start_line,
-                sym.range.start_col,
-                sym.range.end_line,
-                sym.range.end_col,
-                body_start_line,
-                body_start_col,
-                body_end_line,
-                body_end_col,
-            ])?;
-            let sym_db_id = tx.last_insert_rowid();
-            sym_ids.push(sym_db_id);
-            symbols_written += 1;
-        }
-
-        for cs in &file_call_sites {
-            let from_db_id = match cs.from_temp_index {
-                Some(idx) => sym_ids[idx],
-                None => continue,
-            };
-            cs_stmt.execute(rusqlite::params![
-                file_id,
-                from_db_id,
-                cs.raw_name,
-                cs.range.start_line,
-                cs.range.start_col,
-                cs.range.end_line,
-                cs.range.end_col,
-            ])?;
-            call_sites_written += 1;
+            Err(_) => {
+                if let Some(prev_id) = update.previous_file_id {
+                    file_update_meta_stmt.execute(rusqlite::params![
+                        update.snapshot.mtime_ms,
+                        update.snapshot.size_bytes,
+                        update.snapshot.content_hash,
+                        current_time,
+                        FileParseStatus::Failed.as_str(),
+                        prev_id.0,
+                    ])?;
+                } else {
+                    file_insert_stmt.execute(rusqlite::params![
+                        path_str,
+                        rel_path_str,
+                        "rust",
+                        update.snapshot.backend_id,
+                        update.snapshot.mtime_ms,
+                        update.snapshot.size_bytes,
+                        update.snapshot.content_hash,
+                        update.snapshot.parser_id,
+                        update.snapshot.parser_version,
+                        update.snapshot.parser_config_hash,
+                        current_time,
+                        FileParseStatus::Failed.as_str(),
+                    ])?;
+                }
+            }
         }
     }
 
     drop(file_insert_stmt);
+    drop(file_update_meta_stmt);
     drop(sym_stmt);
     drop(cs_stmt);
+    drop(delete_file_contents_stmt);
 
-    // 4. Delete old call edges
-    tx.execute("DELETE FROM call_edges", [])?;
+    rebuild_affected_edges_in_tx(&tx, workspace_root, &options, &successfully_parsed_file_ids, &affected.occurrences)?;
 
-    // Load all symbols and call sites currently persisted to resolve edges globally
-    let all_index = load_index(&tx, workspace_root)?;
-    let all_symbols = all_index.symbols;
-    let all_call_sites = all_index.call_sites;
+    let write_meta = |tx: &rusqlite::Transaction, key: &str, value: &str| -> Result<(), CodeGraphError> {
+        tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [key, value])?;
+        Ok(())
+    };
+    write_meta(&tx, "schema_version", "3")?;
+    write_meta(&tx, "indexer_version", "0.1.0")?;
+    write_meta(&tx, "backend_id", "tree-sitter-rust")?;
+    write_meta(&tx, "parser_id", "tree-sitter-rust")?;
+    write_meta(&tx, "parser_version", "0.20.0")?;
+    let parser_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("include_tests:{}", options.include_tests).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+    write_meta(&tx, "parser_config_hash", &parser_config_hash)?;
 
-    // 5. Recompute call edges globally (fast resolution first)
-    // We incrementally update files/symbols/call_sites, then conservatively rebuild call_edges globally.
-    // This is intentionally simpler and safer than partial edge invalidation. If edge resolution becomes
-    // a bottleneck, we can later add affected-edge recomputation.
-    let mut edge_stmt = tx.prepare(
-        "INSERT INTO call_edges (from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+    let resolver_id = if options.use_rust_analyzer { "rust-analyzer-lsp" } else { "noop" };
+    write_meta(&tx, "resolver_id", resolver_id)?;
+    write_meta(&tx, "resolver_version", "0.1.0")?;
+    let resolver_config_hash = {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("use_rust_analyzer:{:?},max_depth:{:?}", options.use_rust_analyzer, options.max_depth).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+    write_meta(&tx, "resolver_config_hash", &resolver_config_hash)?;
 
-    let mut edges = Vec::new();
-    let mut syntax_count = 0;
-    let mut heuristic_count = 0;
-    let mut unresolved_count = 0;
+    let change_detection = match options.change_detection {
+        FileChangeDetection::MtimeAndSize => "MtimeAndSize",
+        FileChangeDetection::ContentHash => "ContentHash",
+    };
+    write_meta(&tx, "change_detection_strategy", change_detection)?;
+    write_meta(&tx, "base_index_ready", "true")?;
 
-    for (call_site_idx, cs) in all_call_sites.iter().enumerate() {
-        let from_id = match cs.from {
-            Some(id) => id,
-            None => continue,
-        };
-
-        let (resolved_idx, confidence) =
-            crate::resolver::noop::resolve_name_only(&cs.raw_name, &all_symbols, &cs.file);
-        let to_db_id = resolved_idx.and_then(|idx| all_symbols[idx].id);
-        let cs_id = cs.id.unwrap_or(crate::model::CallId(call_site_idx as i64));
-
-        edge_stmt.execute(rusqlite::params![
-            from_id.0,
-            to_db_id.map(|id| id.0),
-            cs_id.0,
-            cs.raw_name,
-            confidence.as_str(),
-        ])?;
-
-        edges.push(crate::model::CallEdge {
-            from: from_id,
-            to: to_db_id,
-            call_site_id: Some(cs_id),
-            raw_name: cs.raw_name.clone(),
-            call_range: cs.range.clone(),
-            confidence,
-        });
-
-        match confidence {
-            ResolutionConfidence::Syntax => syntax_count += 1,
-            ResolutionConfidence::Heuristic => heuristic_count += 1,
-            ResolutionConfidence::Unresolved => unresolved_count += 1,
-            _ => {}
-        }
-    }
-    drop(edge_stmt);
-
-    let mut lsp_edges_exact = 0;
-    // 6. Optional LSP enrichment
     if options.use_rust_analyzer {
-        match run_lsp_enrichment_in_tx(
-            &tx,
-            workspace_root,
-            &all_symbols,
-            &all_call_sites,
-            &mut edges,
-        ) {
-            Ok(count) => {
-                lsp_edges_exact = count;
-                syntax_count = edges
-                    .iter()
-                    .filter(|e| e.confidence == ResolutionConfidence::Syntax)
-                    .count();
-                heuristic_count = edges
-                    .iter()
-                    .filter(|e| e.confidence == ResolutionConfidence::Heuristic)
-                    .count();
-                unresolved_count = edges
-                    .iter()
-                    .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
-                    .count();
-
-                tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'complete')", [])?;
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: LSP enrichment failed: {}. Keeping syntax/heuristic edges.",
-                    e
-                );
-                tx.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'failed')", [])?;
-            }
-        }
+        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "complete")?;
     } else {
-        tx.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('lsp_enrichment', 'none')",
-            [],
-        )?;
+        write_meta(&tx, "resolver_status_rust-analyzer-lsp", "none")?;
     }
 
     tx.commit()?;
 
+    validate_index_invariants(conn)?;
+
     let final_index = load_index(conn, workspace_root)?;
+
+    let lsp_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::LspExact).count();
+    let syntax_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Syntax).count();
+    let heuristic_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Heuristic).count();
+    let unresolved_count = final_index.edges.iter().filter(|e| e.confidence == ResolutionConfidence::Unresolved).count();
+
     let report = crate::model::BuildReport {
         full_rebuild: false,
         full_rebuild_reason: None,
@@ -1267,7 +1652,7 @@ fn run_incremental_update(
         symbols_written,
         call_sites_written,
         edges_written: final_index.edges.len(),
-        lsp_edges_exact,
+        lsp_edges_exact: lsp_count,
         syntax_edges: syntax_count,
         heuristic_edges: heuristic_count,
         unresolved_edges: unresolved_count,
@@ -1785,13 +2170,21 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![SourceFile {
-                id: None,
-                path: PathBuf::from("src/lib.rs"),
-                language: Language::Rust,
-                mtime_ms: Some(100),
-                size_bytes: Some(200),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/lib.rs"),
+                abs_path: dir.path().join("src/lib.rs"),
+                language: "rust".to_string(),
+                backend_id: "tree-sitter-rust".to_string(),
+                size_bytes: 200,
+                mtime_ms: 100,
+                mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
                 Symbol {
@@ -1889,13 +2282,21 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![SourceFile {
-                id: None,
-                path: PathBuf::from("src/lib.rs"),
-                language: Language::Rust,
-                mtime_ms: Some(100),
-                size_bytes: Some(200),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/lib.rs"),
+                abs_path: dir.path().join("src/lib.rs"),
+                language: "rust".to_string(),
+                backend_id: "tree-sitter-rust".to_string(),
+                size_bytes: 200,
+                mtime_ms: 100,
+                mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
             }],
             symbols: vec![Symbol {
                 id: None,
@@ -1941,13 +2342,21 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![SourceFile {
-                id: None,
-                path: PathBuf::from("src/lib.rs"),
-                language: Language::Rust,
-                mtime_ms: Some(100),
-                size_bytes: Some(200),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/lib.rs"),
+                abs_path: dir.path().join("src/lib.rs"),
+                language: "rust".to_string(),
+                backend_id: "tree-sitter-rust".to_string(),
+                size_bytes: 200,
+                mtime_ms: 100,
+                mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
                 Symbol {
@@ -2069,13 +2478,21 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![SourceFile {
-                id: None,
-                path: PathBuf::from("src/lib.rs"),
-                language: Language::Rust,
-                mtime_ms: Some(100),
-                size_bytes: Some(200),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/lib.rs"),
+                abs_path: dir.path().join("src/lib.rs"),
+                language: "rust".to_string(),
+                backend_id: "tree-sitter-rust".to_string(),
+                size_bytes: 200,
+                mtime_ms: 100,
+                mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
                 Symbol {

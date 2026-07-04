@@ -99,16 +99,6 @@ pub struct TextRange {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SourceFile {
-    pub id: Option<FileId>,
-    pub path: PathBuf,
-    pub language: Language,
-    pub mtime_ms: Option<i64>,
-    pub size_bytes: Option<i64>,
-    pub content_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     pub id: Option<SymbolId>,
     pub file_id: Option<FileId>,
@@ -145,7 +135,7 @@ pub struct CallEdge {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CodeIndex {
     pub root: PathBuf,
-    pub files: Vec<SourceFile>,
+    pub files: Vec<FileSnapshot>,
     pub symbols: Vec<Symbol>,
     pub call_sites: Vec<CallSite>,
     pub edges: Vec<CallEdge>,
@@ -269,19 +259,93 @@ pub struct GraphContextResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FullRebuildReason {
+pub enum RebuildReason {
     MissingDatabase,
-    IncompatibleSchema,
-    IncompatibleConfig,
     CorruptDatabase,
+    SchemaVersionChanged,
+    IndexerVersionChanged,
+    BackendSetChanged,
+    BackendVersionChanged,
+    ParserVersionChanged,
+    ParserConfigChanged,
+    ResolverVersionChanged,
+    ResolverConfigChanged,
+    DiscoveryConfigChanged,
+    ChangeDetectionStrategyChanged,
+    PreviousRunIncomplete,
+    PreviousRunFailed,
+}
+
+impl RebuildReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RebuildReason::MissingDatabase => "MissingDatabase",
+            RebuildReason::CorruptDatabase => "CorruptDatabase",
+            RebuildReason::SchemaVersionChanged => "SchemaVersionChanged",
+            RebuildReason::IndexerVersionChanged => "IndexerVersionChanged",
+            RebuildReason::BackendSetChanged => "BackendSetChanged",
+            RebuildReason::BackendVersionChanged => "BackendVersionChanged",
+            RebuildReason::ParserVersionChanged => "ParserVersionChanged",
+            RebuildReason::ParserConfigChanged => "ParserConfigChanged",
+            RebuildReason::ResolverVersionChanged => "ResolverVersionChanged",
+            RebuildReason::ResolverConfigChanged => "ResolverConfigChanged",
+            RebuildReason::DiscoveryConfigChanged => "DiscoveryConfigChanged",
+            RebuildReason::ChangeDetectionStrategyChanged => "ChangeDetectionStrategyChanged",
+            RebuildReason::PreviousRunIncomplete => "PreviousRunIncomplete",
+            RebuildReason::PreviousRunFailed => "PreviousRunFailed",
+        }
+    }
+}
+
+pub type LanguageId = String;
+pub type BackendId = String;
+pub type ParserId = String;
+pub type ResolverId = String;
+pub type OccurrenceId = CallId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FileParseStatus {
+    Success,
+    Failed,
+}
+
+impl FileParseStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FileParseStatus::Success => "Success",
+            FileParseStatus::Failed => "Failed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Success" => Some(FileParseStatus::Success),
+            "Failed" => Some(FileParseStatus::Failed),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileSnapshot {
-    pub path: PathBuf,
-    pub size: u64,
+    pub file_id: Option<FileId>,
+    pub rel_path: PathBuf,
+    pub abs_path: PathBuf,
+
+    pub language: LanguageId,
+    pub backend_id: BackendId,
+
+    pub size_bytes: u64,
     pub mtime_ms: i64,
+    pub mtime_ns: Option<i128>,
     pub content_hash: Option<String>,
+
+    pub parser_id: ParserId,
+    pub parser_version: String,
+    pub parser_config_hash: String,
+
+    pub indexed_at_ms: Option<i64>,
+    pub parse_status: FileParseStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -303,13 +367,13 @@ pub enum IndexState {
     Missing,
     Ready,
     NeedsIncrementalUpdate(IndexDiff),
-    NeedsFullRebuild(FullRebuildReason),
+    NeedsFullRebuild(RebuildReason),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuildReport {
     pub full_rebuild: bool,
-    pub full_rebuild_reason: Option<FullRebuildReason>,
+    pub full_rebuild_reason: Option<RebuildReason>,
     pub added_files: usize,
     pub modified_files: usize,
     pub deleted_files: usize,
@@ -323,4 +387,74 @@ pub struct BuildReport {
     pub syntax_edges: usize,
     pub heuristic_edges: usize,
     pub unresolved_edges: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum EdgeKind {
+    Call,
+    Reference,
+    Import,
+    Export,
+    TypeUse,
+    DataFlow,
+}
+
+impl EdgeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeKind::Call => "Call",
+            EdgeKind::Reference => "Reference",
+            EdgeKind::Import => "Import",
+            EdgeKind::Export => "Export",
+            EdgeKind::TypeUse => "TypeUse",
+            EdgeKind::DataFlow => "DataFlow",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Call" => Some(EdgeKind::Call),
+            "Reference" => Some(EdgeKind::Reference),
+            "Import" => Some(EdgeKind::Import),
+            "Export" => Some(EdgeKind::Export),
+            "TypeUse" => Some(EdgeKind::TypeUse),
+            "DataFlow" => Some(EdgeKind::DataFlow),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct EdgeId(pub i64);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdgeRecord {
+    pub id: Option<EdgeId>,
+    pub kind: EdgeKind,
+    pub from_file_id: FileId,
+    pub from_symbol_id: Option<SymbolId>,
+    pub to_symbol_id: Option<SymbolId>,
+    pub to_external: Option<String>,
+    pub occurrence_id: Option<OccurrenceId>,
+    pub range: TextRange,
+    pub label: Option<String>,
+    pub confidence: ResolutionConfidence,
+    pub produced_by: ResolverId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AffectedSet {
+    pub files: std::collections::HashSet<FileId>,
+    pub symbols: std::collections::HashSet<SymbolId>,
+    pub occurrences: std::collections::HashSet<OccurrenceId>,
+    pub edge_kinds: std::collections::HashSet<EdgeKind>,
+    pub resolvers: std::collections::HashSet<ResolverId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UpdatePlan {
+    Ready,
+    PartialRebuild(IndexDiff),
+    EdgeOnlyRebuild(AffectedSet),
+    FullRebuild(RebuildReason),
 }

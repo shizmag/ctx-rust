@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 
 use crate::error::CodeGraphError;
 use crate::languages::rust::parse_rust_file;
-use crate::model::{CallEdge, CodeIndex, Language, SourceFile, SymbolId, SymbolKind};
+use crate::model::{CallEdge, CodeIndex, FileSnapshot, FileParseStatus, SymbolId, SymbolKind};
 use crate::resolver::noop::resolve_name_only;
 use crate::resolver::rust_analyzer_lsp::{LspClient, resolve_via_lsp};
 
@@ -43,16 +43,58 @@ pub(crate) fn compute_file_hash(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-pub(crate) fn get_mtime_ms(path: &Path) -> Option<i64> {
+pub fn get_mtime_ms(path: &Path) -> Option<i64> {
     let metadata = std::fs::metadata(path).ok()?;
     let mtime = metadata.modified().ok()?;
     let duration = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(duration.as_millis() as i64)
 }
 
-pub(crate) fn get_size_bytes(path: &Path) -> Option<i64> {
+pub fn get_size_bytes(path: &Path) -> Option<i64> {
     let metadata = std::fs::metadata(path).ok()?;
     Some(metadata.len() as i64)
+}
+
+pub fn create_file_snapshot(
+    workspace_root: &Path,
+    abs_path: &Path,
+    change_detection: crate::model::FileChangeDetection,
+    include_tests: bool,
+) -> FileSnapshot {
+    let rel_path = abs_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(abs_path)
+        .to_path_buf();
+    let size_bytes = get_size_bytes(abs_path).unwrap_or(0) as u64;
+    let mtime_ms = get_mtime_ms(abs_path).unwrap_or(0);
+    let content_hash = if change_detection == crate::model::FileChangeDetection::ContentHash {
+        compute_file_hash(abs_path)
+    } else {
+        None
+    };
+
+    let parser_config_hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("include_tests:{}", include_tests).as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+
+    FileSnapshot {
+        file_id: None,
+        rel_path,
+        abs_path: abs_path.to_path_buf(),
+        language: "rust".to_string(),
+        backend_id: "tree-sitter-rust".to_string(),
+        size_bytes,
+        mtime_ms,
+        mtime_ns: None,
+        content_hash,
+        parser_id: "tree-sitter-rust".to_string(),
+        parser_version: "0.20.0".to_string(),
+        parser_config_hash,
+        indexed_at_ms: None,
+        parse_status: FileParseStatus::Success,
+    }
 }
 
 pub(crate) fn should_index_path(path: &Path) -> bool {
@@ -97,19 +139,8 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
 
     // Process each file
     for path in rust_files {
-        let mtime_ms = get_mtime_ms(&path);
-        let size_bytes = get_size_bytes(&path);
-        let content_hash = compute_file_hash(&path);
-
-        let source_file = SourceFile {
-            id: None,
-            path: path.clone(),
-            language: Language::Rust,
-            mtime_ms,
-            size_bytes,
-            content_hash,
-        };
-        files.push(source_file);
+        let source_file = create_file_snapshot(root, &path, options.change_detection, options.include_tests);
+        files.push(source_file.clone());
 
         let (mut file_symbols, mut file_call_sites) = match parse_rust_file(&path) {
             Ok(res) => res,

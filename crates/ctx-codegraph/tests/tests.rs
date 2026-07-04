@@ -131,13 +131,21 @@ fn test_sqlite_and_find_symbols() {
 
     let mut index = CodeIndex {
         root: PathBuf::from("."),
-        files: vec![SourceFile {
-            id: None,
-            path: PathBuf::from("src/lib.rs"),
-            language: Language::Rust,
-            mtime_ms: Some(12345),
-            size_bytes: Some(100),
+        files: vec![FileSnapshot {
+            file_id: None,
+            rel_path: PathBuf::from("src/lib.rs"),
+            abs_path: PathBuf::from("src/lib.rs"),
+            language: "rust".to_string(),
+            backend_id: "tree-sitter-rust".to_string(),
+            size_bytes: 100,
+            mtime_ms: 12345,
+            mtime_ns: None,
             content_hash: Some("abc".to_string()),
+            parser_id: "tree-sitter-rust".to_string(),
+            parser_version: "0.20.0".to_string(),
+            parser_config_hash: "".to_string(),
+            indexed_at_ms: None,
+            parse_status: FileParseStatus::Success,
         }],
         symbols: vec![
             Symbol {
@@ -501,13 +509,21 @@ fn test_service_context_selection() {
 
     let mut index = CodeIndex {
         root: dir.path().to_path_buf(),
-        files: vec![SourceFile {
-            id: None,
-            path: PathBuf::from("src/lib.rs"),
-            language: Language::Rust,
-            mtime_ms: Some(100),
-            size_bytes: Some(200),
+        files: vec![FileSnapshot {
+            file_id: None,
+            rel_path: PathBuf::from("src/lib.rs"),
+            abs_path: dir.path().join("src/lib.rs"),
+            language: "rust".to_string(),
+            backend_id: "tree-sitter-rust".to_string(),
+            size_bytes: 200,
+            mtime_ms: 100,
+            mtime_ns: None,
             content_hash: Some("hash1".to_string()),
+            parser_id: "tree-sitter-rust".to_string(),
+            parser_version: "0.20.0".to_string(),
+            parser_config_hash: "".to_string(),
+            indexed_at_ms: None,
+            parse_status: FileParseStatus::Success,
         }],
         symbols: vec![
             Symbol {
@@ -818,7 +834,7 @@ fn test_index_lifecycle_validation() {
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3')",
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '99')",
             [],
         )
         .unwrap();
@@ -1181,3 +1197,551 @@ while True:
     assert_eq!(edge.confidence, ResolutionConfidence::LspExact);
     assert!(edge.to.is_some());
 }
+
+#[test]
+fn test_parse_failure_preserves_old_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_path = src_dir.join("lib.rs");
+    fs::write(&file_path, "pub fn a() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    // 1. Initial build: success
+    let (index, report) = rebuild_index_db(root, options.clone()).unwrap();
+    assert_eq!(report.parsed_files, 1);
+    assert!(index.symbols.iter().any(|s| s.name == "a"));
+
+    // 2. Modify file to have invalid Rust syntax (e.g. "fn a( {")
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_path, "fn a( {").unwrap();
+
+    // Run incremental update (through rebuild_index_db)
+    let (index2, report2) = rebuild_index_db(root, options.clone()).unwrap();
+    // Parse should have failed, so the old symbol graph is preserved
+    assert_eq!(report2.parsed_files, 0); // it attempted but failed to parse successfully, wait, it failed so symbols/sites were not overwritten
+    assert!(index2.symbols.iter().any(|s| s.name == "a"));
+
+    // Check IndexState in the DB. Since lib.rs has parse_status = 'Failed', the index state should be NeedsIncrementalUpdate, not Ready!
+    let state = get_index_state(root, &options).unwrap();
+    match state {
+        IndexState::NeedsIncrementalUpdate(_) => {}
+        other => panic!("Expected NeedsIncrementalUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_content_hash_detection() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_path = src_dir.join("lib.rs");
+    fs::write(&file_path, "pub fn a() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::ContentHash,
+    };
+
+    // 1. Initial build
+    let (_, report) = rebuild_index_db(root, options.clone()).unwrap();
+    assert_eq!(report.parsed_files, 1);
+
+    // 2. Modify the file on disk (size changes)
+    fs::write(&file_path, "pub fn b() { let longer = 123; }").unwrap();
+
+    // Get the new disk mtime and size
+    let disk_mtime = index::get_mtime_ms(&file_path).unwrap();
+    let disk_size = fs::metadata(&file_path).unwrap().len();
+
+    // Update the database file record so that size and mtime match disk, but keep the old content hash
+    let db_path = root.join(".ctx-codegraph").join("codegraph.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE files SET size_bytes = ?1, mtime_ms = ?2 WHERE rel_path = 'src/lib.rs'",
+            rusqlite::params![disk_size, disk_mtime],
+        )
+        .unwrap();
+    }
+
+
+    // Now, run with change_detection = ContentHash. It should detect it as MODIFIED because the content hash differs!
+    let state_hash = get_index_state(root, &options).unwrap();
+    if let IndexState::NeedsIncrementalUpdate(diff) = state_hash {
+        assert_eq!(diff.modified.len(), 1);
+        assert_eq!(diff.modified[0].rel_path, PathBuf::from("src/lib.rs"));
+    } else {
+        panic!("Expected NeedsIncrementalUpdate for ContentHash, got {:?}", state_hash);
+    }
+
+    // Run incremental build, verify the symbol is updated
+    let (index2, report2) = rebuild_index_db(root, options.clone()).unwrap();
+    assert_eq!(report2.modified_files, 1);
+    assert!(index2.symbols.iter().any(|s| s.name == "b"));
+    assert!(!index2.symbols.iter().any(|s| s.name == "a"));
+}
+
+#[test]
+fn test_rebuild_triggers_on_config_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    // Build the initial index
+    rebuild_index_db(root, options.clone()).unwrap();
+
+    // 1. Change detection strategy changes
+    let options_diff_strat = BuildIndexOptions {
+        change_detection: crate::model::FileChangeDetection::ContentHash,
+        ..options.clone()
+    };
+    let state1 = get_index_state(root, &options_diff_strat).unwrap();
+    match state1 {
+        IndexState::NeedsFullRebuild(RebuildReason::ChangeDetectionStrategyChanged) => {}
+        other => panic!("Expected ChangeDetectionStrategyChanged, got {:?}", other),
+    }
+
+    // 2. Parser config hash changes (e.g. include_tests changes)
+    let options_diff_parser = BuildIndexOptions {
+        include_tests: false,
+        ..options.clone()
+    };
+    let state2 = get_index_state(root, &options_diff_parser).unwrap();
+    match state2 {
+        IndexState::NeedsFullRebuild(RebuildReason::ParserConfigChanged) => {}
+        other => panic!("Expected ParserConfigChanged, got {:?}", other),
+    }
+
+    // 3. Resolver config changes (e.g. use_rust_analyzer changes)
+    let options_diff_resolver = BuildIndexOptions {
+        use_rust_analyzer: true,
+        ..options.clone()
+    };
+    let state3 = get_index_state(root, &options_diff_resolver).unwrap();
+    match state3 {
+        IndexState::NeedsFullRebuild(RebuildReason::ResolverConfigChanged) => {}
+        other => panic!("Expected ResolverConfigChanged, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_affected_set_callee_pulls_callers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_lib = src_dir.join("lib.rs");
+    let file_b = src_dir.join("b.rs");
+
+    fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
+    fs::write(&file_b, "pub fn b() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    // Build the initial index
+    let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
+    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    assert!(edge.to.is_some()); // resolved to b()
+
+    // Now modify b.rs
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_b, "pub fn b() { let modified = 1; }").unwrap();
+
+    // Run incremental build
+    let (index2, report) = rebuild_index_db(root, options.clone()).unwrap();
+    assert_eq!(report.modified_files, 1); // b.rs modified
+    assert_eq!(report.unchanged_files, 1); // lib.rs unchanged
+
+    // Check if the edge calling b is still resolved correctly
+    let edge2 = index2.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    assert!(edge2.to.is_some());
+}
+
+#[test]
+fn test_other_languages_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    // 1. Build initial Rust index
+    rebuild_index_db(root, options.clone()).unwrap();
+
+    // 2. Insert a fake Python file into the database
+    let db_path = root.join(".ctx-codegraph").join("codegraph.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO files (
+                path, rel_path, language, backend_id, mtime_ms, size_bytes,
+                content_hash, parser_id, parser_version, parser_config_hash,
+                indexed_at_ms, parse_status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                "/abs/path/main.py",
+                "main.py",
+                "python",
+                "jedi",
+                1234,
+                567,
+                "pyhash",
+                "jedi-parser",
+                "0.1.0",
+                "pyconfig",
+                1000,
+                "Success",
+            ],
+        )
+        .unwrap();
+    }
+
+    // 3. Trigger a full rebuild of the Rust index (e.g. by changing parser config/options)
+    let options_diff = BuildIndexOptions {
+        include_tests: false,
+        ..options.clone()
+    };
+    rebuild_index_db(root, options_diff).unwrap();
+
+    // 4. Verify that the Python file is still in the database!
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let py_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE language = 'python')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(py_exists, "Python file was deleted during full rebuild!");
+    }
+}
+
+#[test]
+fn test_lsp_failure_fallback() {
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    // Write a mock rust-analyzer that returns a JSON-RPC Error instead of a definition
+    let script_path = bin_dir.join("rust-analyzer");
+    let script_content = r#"#!/usr/bin/env python3
+import sys
+import json
+
+content_buf = ""
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    if line.startswith("Content-Length:"):
+        length = int(line.split(":")[1].strip())
+        sys.stdin.readline()
+        content = sys.stdin.read(length)
+        req = json.loads(content)
+        method = req.get("method")
+        req_id = req.get("id")
+        
+        if method == "initialize":
+            sys.stdout.write(f"Content-Length: {len(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'capabilities': {}}}))}\r\n\r\n{json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'capabilities': {}}})}")
+            sys.stdout.flush()
+        elif method == "textDocument/definition":
+            err_response = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32603,
+                    "message": "Internal error in rust-analyzer"
+                }
+            }
+            msg = json.dumps(err_response)
+            sys.stdout.write(f"Content-Length: {len(msg)}\r\n\r\n{msg}")
+            sys.stdout.flush()
+"#;
+
+    {
+        let mut file = File::create(&script_path).unwrap();
+        file.write_all(script_content.as_bytes()).unwrap();
+    }
+
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    unsafe {
+        std::env::set_var("PATH", &new_path);
+    }
+
+    let proj_dir = temp_dir.path().join("mock_project");
+    fs::create_dir_all(&proj_dir).unwrap();
+    fs::write(
+        proj_dir.join("Cargo.toml"),
+        "[package]\nname=\"mock_project\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+
+    let src_dir = proj_dir.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("lib.rs"), "fn a() { b(); }\nfn b() {}\n").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: true,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
+
+    unsafe {
+        std::env::set_var("PATH", old_path);
+    }
+
+    assert!(report.full_rebuild);
+    assert_eq!(report.lsp_edges_exact, 0);
+
+    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    assert_eq!(edge.confidence, ResolutionConfidence::Syntax);
+    assert!(edge.to.is_some());
+}
+
+#[test]
+fn test_db_transaction_rollback_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open_db(dir.path()).unwrap();
+    storage::init_schema(&conn).unwrap();
+
+    let mut index = CodeIndex {
+        root: dir.path().to_path_buf(),
+        files: vec![FileSnapshot {
+            file_id: None,
+            rel_path: PathBuf::from("lib.rs"),
+            abs_path: dir.path().join("lib.rs"),
+            language: "rust".to_string(),
+            backend_id: "tree-sitter-rust".to_string(),
+            size_bytes: 100,
+            mtime_ms: 100,
+            mtime_ns: None,
+            content_hash: Some("hash1".to_string()),
+            parser_id: "tree-sitter-rust".to_string(),
+            parser_version: "0.20.0".to_string(),
+            parser_config_hash: "".to_string(),
+            indexed_at_ms: None,
+            parse_status: FileParseStatus::Success,
+        }],
+        symbols: vec![],
+        call_sites: vec![],
+        edges: vec![],
+    };
+    storage::save_index(&mut conn, &mut index).unwrap();
+
+    let run_failed_transaction = |conn: &mut rusqlite::Connection| -> Result<(), crate::error::CodeGraphError> {
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO symbols (file_id, name, qualified_name, kind, language, start_line, start_col, end_line, end_col) VALUES (1, 'foo', 'foo', 'function', 'rust', 1, 1, 1, 1)", [])?;
+        tx.execute("INSERT INTO files (path, rel_path, language, backend_id, mtime_ms, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", 
+                   rusqlite::params![dir.path().join("lib.rs").to_string_lossy().to_string(), "lib.rs", "rust", "tree-sitter-rust", 100, 100])?;
+        tx.commit()?;
+        Ok(())
+    };
+
+    let res = run_failed_transaction(&mut conn);
+    assert!(res.is_err());
+
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM symbols WHERE name = 'foo'", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 0, "Changes were committed despite error!");
+}
+
+#[test]
+fn test_empty_and_whitespace_only_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file1 = src_dir.join("lib.rs");
+    let file2 = src_dir.join("empty.rs");
+    let file3 = src_dir.join("whitespace.rs");
+
+    fs::write(&file1, "pub fn a() {}").unwrap();
+    fs::write(&file2, "").unwrap();
+    fs::write(&file3, "   \n  \n\t ").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    let (index, report) = rebuild_index_db(root, options).unwrap();
+    assert_eq!(report.parsed_files, 3);
+    assert!(index.symbols.iter().any(|s| s.name == "a"));
+    assert_eq!(index.symbols.len(), 1);
+}
+
+#[test]
+fn test_multiple_simultaneous_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_a = src_dir.join("a.rs");
+    let file_b = src_dir.join("b.rs");
+    let file_c = src_dir.join("c.rs");
+
+    fs::write(&file_a, "pub fn a() {}").unwrap();
+    fs::write(&file_b, "pub fn b() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    rebuild_index_db(root, options.clone()).unwrap();
+
+    fs::remove_file(&file_a).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_b, "pub fn b_new() {}").unwrap();
+    fs::write(&file_c, "pub fn c() {}").unwrap();
+
+    let (index2, report) = rebuild_index_db(root, options).unwrap();
+
+    assert_eq!(report.deleted_files, 1);
+    assert_eq!(report.modified_files, 1);
+    assert_eq!(report.added_files, 1);
+
+    let symbol_names: std::collections::HashSet<String> = index2.symbols.iter().map(|s| s.name.clone()).collect();
+    assert!(!symbol_names.contains("a"));
+    assert!(!symbol_names.contains("b"));
+    assert!(symbol_names.contains("b_new"));
+    assert!(symbol_names.contains("c"));
+}
+
+#[test]
+fn test_parse_failure_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_path = src_dir.join("lib.rs");
+    fs::write(&file_path, "pub fn a() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    let (index1, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(index1.symbols.iter().any(|s| s.name == "a"));
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_path, "fn a( {").unwrap();
+    let (index2, _) = rebuild_index_db(root, options.clone()).unwrap();
+    assert!(index2.symbols.iter().any(|s| s.name == "a"));
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_path, "pub fn b() {}").unwrap();
+    let (index3, report3) = rebuild_index_db(root, options.clone()).unwrap();
+    assert_eq!(report3.modified_files, 1);
+    
+    assert!(index3.symbols.iter().any(|s| s.name == "b"));
+    assert!(!index3.symbols.iter().any(|s| s.name == "a"));
+}
+
+
