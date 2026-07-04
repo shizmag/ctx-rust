@@ -235,28 +235,60 @@ mod tests {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
+    /// Analyze the project and query dependency or symbol relationships
+    #[command(visible_alias = "g")]
     Graph(GraphCommand),
 }
 
 #[derive(clap::Args, Debug)]
+#[command(
+    about = "Analyze the project and build/query a symbol and call graph",
+    long_about = "The graph command scans the selected project files and builds a local SQLite index of \
+                 modules, symbols, calls, and dependencies. You can build this index and query it to \
+                 find all symbols, view callers/callees of a symbol, or compute a call slice tree \
+                 to understand how functions are connected.",
+    after_help = "Examples:\n  \
+                  ctx graph build\n  \
+                  ctx graph symbols\n  \
+                  ctx graph calls my_function\n  \
+                  ctx graph callers my_function\n  \
+                  ctx graph slice my_function\n  \
+                  ctx g symbols"
+)]
 struct GraphCommand {
     #[command(subcommand)]
     command: GraphSubcommand,
 
+    /// Target directory path containing the project to analyze
     #[arg(default_value = ".", global = true)]
     path: PathBuf,
 
+    /// Disable rust-analyzer database fallback (forces tree-sitter fallback only)
     #[arg(long, global = true)]
     no_rust_analyzer: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
 enum GraphSubcommand {
+    /// Build or rebuild the codegraph SQLite index database
     Build,
+    /// List all indexed symbols grouped by their files
     Symbols,
-    Calls { symbol: String },
-    Callers { symbol: String },
-    Slice { symbol: String },
+    /// List the direct callees (called functions/symbols) of a target symbol
+    Calls {
+        /// The name or qualified path of the target symbol
+        symbol: String,
+    },
+    /// List the direct callers of a target symbol
+    Callers {
+        /// The name or qualified path of the target symbol
+        symbol: String,
+    },
+    /// Compute and display the forward call slice tree starting from a target symbol
+    Slice {
+        /// The name or qualified path of the target symbol
+        symbol: String,
+    },
 }
 
 fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::error::Error>> {

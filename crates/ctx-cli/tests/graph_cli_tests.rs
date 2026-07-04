@@ -224,3 +224,60 @@ fn existing_plain_scan_still_works_after_graph_subcommands() {
     assert!(stdout.contains("lib.rs"));
     assert!(stdout.contains("Project Summary:"));
 }
+
+#[test]
+fn test_cli_graph_help_and_alias() {
+    // 1. Test ctx graph --help
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["graph", "--help"])
+        .output()
+        .expect("failed to run ctx graph --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Analyze the project and query dependency or symbol relationships"));
+    assert!(stdout.contains("build"));
+    assert!(stdout.contains("symbols"));
+    assert!(stdout.contains("calls"));
+    assert!(stdout.contains("callers"));
+    assert!(stdout.contains("slice"));
+    assert!(stdout.contains("Examples:"));
+    assert!(stdout.contains("ctx g symbols"));
+
+    // 2. Test ctx g --help
+    let mut cmd_g = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_g = cmd_g
+        .args(["g", "--help"])
+        .output()
+        .expect("failed to run ctx g --help");
+    assert!(output_g.status.success());
+    let stdout_g = String::from_utf8(output_g.stdout).unwrap();
+    assert!(stdout_g.contains("Analyze the project and query dependency or symbol relationships"));
+    assert!(stdout_g.contains("build"));
+    assert!(stdout_g.contains("symbols"));
+    assert!(stdout_g.contains("calls"));
+    assert!(stdout_g.contains("callers"));
+    assert!(stdout_g.contains("slice"));
+    assert!(stdout_g.contains("Examples:"));
+    assert!(stdout_g.contains("ctx g symbols"));
+}
+
+#[test]
+fn test_cli_g_alias_execution() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    // Verify symbols output via 'g' alias
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["g", "symbols", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .output()
+        .expect("failed to run ctx g symbols");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("run_pipeline"));
+    assert!(stdout.contains("load"));
+    assert!(stdout.contains("process"));
+}
