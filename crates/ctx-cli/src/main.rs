@@ -562,17 +562,17 @@ fn get_connection_or_rebuild(
     path: &Path,
     use_rust_analyzer: bool,
 ) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
-    let db_path = path.join(".ctx-codegraph/codegraph.sqlite");
-    if !db_path.exists() {
+    let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
+    let options = ctx_codegraph::BuildIndexOptions {
+        use_rust_analyzer,
+        max_depth: None,
+        include_tests: true,
+    };
+    if !ctx_codegraph::storage::validate_index_db(&workspace_root, &options)? {
         println!("Index not found. Building codegraph index...");
-        let options = ctx_codegraph::BuildIndexOptions {
-            use_rust_analyzer,
-            max_depth: None,
-            include_tests: true,
-        };
-        ctx_codegraph::rebuild_index_db(path, options)?;
+        ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
     }
-    let conn = ctx_codegraph::open_db(path)?;
+    let conn = ctx_codegraph::open_db(&workspace_root)?;
     Ok(conn)
 }
 

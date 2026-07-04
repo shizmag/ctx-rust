@@ -7,50 +7,139 @@ use crate::model::{
 };
 use std::path::{Path, PathBuf};
 
-fn ensure_gitignore_entries(root: &Path) {
-    let gitignore_path = root.join(".gitignore");
-    let has_git = root.join(".git").exists();
 
-    if gitignore_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
-            let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-            let mut changed = false;
 
-            let has_codegraph = lines.iter().any(|l| {
-                let trimmed = l.trim();
-                trimmed == ".ctx-codegraph" || trimmed == ".ctx-codegraph/"
-            });
-            let has_ctx_wildcard = lines.iter().any(|l| {
-                let trimmed = l.trim();
-                trimmed == ".ctx_*" || trimmed == ".ctx_*/"
-            });
+pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
+    let mut current = match start_dir.canonicalize() {
+        Ok(path) => path,
+        Err(_) => start_dir.to_path_buf(),
+    };
+    loop {
+        if current.join(".git").exists()
+            || current.join(".ctxconfig").exists()
+            || current.join("Cargo.toml").exists()
+        {
+            return current;
+        }
+        match current.parent() {
+            Some(parent) => current = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    start_dir.to_path_buf()
+}
 
-            if !has_codegraph {
-                lines.push(".ctx-codegraph/".to_string());
-                changed = true;
-            }
-            if !has_ctx_wildcard {
-                lines.push(".ctx_*/".to_string());
-                changed = true;
-            }
+pub fn validate_index_db(root: &Path, options: &BuildIndexOptions) -> Result<bool, CodeGraphError> {
+    let workspace_root = find_workspace_root(root);
+    let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+    if !db_path.exists() {
+        return Ok(false);
+    }
 
-            if changed {
-                let mut new_content = lines.join("\n");
-                if !new_content.ends_with('\n') {
-                    new_content.push('\n');
-                }
-                let _ = std::fs::write(&gitignore_path, new_content);
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+
+    // Check schema version
+    let schema_version: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    if schema_version != "1" {
+        return Ok(false);
+    }
+
+    // Check relevant settings: use_rust_analyzer
+    let db_use_ra: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'use_rust_analyzer'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => "true".to_string(),
+    };
+    if db_use_ra != options.use_rust_analyzer.to_string() {
+        return Ok(false);
+    }
+
+    // Check relevant settings: include_tests
+    let db_inc_tests: String = match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'include_tests'",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => "true".to_string(),
+    };
+    if db_inc_tests != options.include_tests.to_string() {
+        return Ok(false);
+    }
+
+    // Get files on disk
+    let mut disk_files = std::collections::HashSet::new();
+    let walker = walkdir::WalkDir::new(&workspace_root);
+    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_file() {
+            if crate::index::should_index_path(path) {
+                disk_files.insert(path.to_path_buf());
             }
         }
-    } else if has_git {
-        let content = ".ctx-codegraph/\n.ctx_*/\n";
-        let _ = std::fs::write(&gitignore_path, content);
     }
+
+    // Get files from DB
+    let mut stmt = match conn.prepare("SELECT path, mtime_ms, size_bytes FROM files") {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+    let db_files_rows = stmt.query_map([], |row| {
+        let path_str: String = row.get(0)?;
+        let mtime_ms: Option<i64> = row.get(1)?;
+        let size_bytes: Option<i64> = row.get(2)?;
+        Ok((path_str, mtime_ms, size_bytes))
+    });
+
+    let db_files_rows = match db_files_rows {
+        Ok(rows) => rows,
+        Err(_) => return Ok(false),
+    };
+
+    let mut db_files = std::collections::HashMap::new();
+    for row in db_files_rows {
+        if let Ok((path_str, mtime_ms, size_bytes)) = row {
+            db_files.insert(PathBuf::from(path_str), (mtime_ms, size_bytes));
+        } else {
+            return Ok(false);
+        }
+    }
+
+    // Compare file sets
+    if disk_files.len() != db_files.len() {
+        return Ok(false);
+    }
+
+    for path in disk_files {
+        let Some((db_mtime, db_size)) = db_files.get(&path) else {
+            return Ok(false);
+        };
+        let disk_mtime = crate::index::get_mtime_ms(&path);
+        let disk_size = crate::index::get_size_bytes(&path);
+        if disk_mtime != *db_mtime || disk_size != *db_size {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
-    ensure_gitignore_entries(root);
-    let db_dir = root.join(".ctx-codegraph");
+    let workspace_root = find_workspace_root(root);
+    let db_dir = workspace_root.join(".ctx-codegraph");
     std::fs::create_dir_all(&db_dir)?;
     let db_path = db_dir.join("codegraph.sqlite");
     let conn = rusqlite::Connection::open(db_path)?;
@@ -493,9 +582,20 @@ pub fn rebuild_index_db(
     root: &Path,
     options: BuildIndexOptions,
 ) -> Result<CodeIndex, CodeGraphError> {
-    let mut conn = open_db(root)?;
+    let workspace_root = find_workspace_root(root);
+    let mut conn = open_db(&workspace_root)?;
     init_schema(&conn)?;
-    let mut index = crate::index::build_index(root, options)?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('use_rust_analyzer', ?1)",
+        rusqlite::params![options.use_rust_analyzer.to_string()],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('include_tests', ?1)",
+        rusqlite::params![options.include_tests.to_string()],
+    )?;
+
+    let mut index = crate::index::build_index(&workspace_root, options)?;
     clear_index(&mut conn)?;
     save_index(&mut conn, &mut index)?;
     Ok(index)

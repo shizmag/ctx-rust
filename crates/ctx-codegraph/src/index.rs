@@ -27,7 +27,7 @@ impl Default for BuildIndexOptions {
     }
 }
 
-fn compute_file_hash(path: &Path) -> Option<String> {
+pub(crate) fn compute_file_hash(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 4096];
@@ -41,19 +41,19 @@ fn compute_file_hash(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-fn get_mtime_ms(path: &Path) -> Option<i64> {
+pub(crate) fn get_mtime_ms(path: &Path) -> Option<i64> {
     let metadata = std::fs::metadata(path).ok()?;
     let mtime = metadata.modified().ok()?;
     let duration = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(duration.as_millis() as i64)
 }
 
-fn get_size_bytes(path: &Path) -> Option<i64> {
+pub(crate) fn get_size_bytes(path: &Path) -> Option<i64> {
     let metadata = std::fs::metadata(path).ok()?;
     Some(metadata.len() as i64)
 }
 
-fn should_index_path(path: &Path) -> bool {
+pub(crate) fn should_index_path(path: &Path) -> bool {
     for component in path.components() {
         if let Some(s) = component.as_os_str().to_str() {
             if s == "target" || s == ".git" || s == ".codegraph" || s == ".ctx-codegraph" {

@@ -17,19 +17,26 @@ pub struct GraphContextService {
 }
 
 impl GraphContextService {
-    pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
-        let db_path = repo_root.join(".ctx-codegraph/codegraph.sqlite");
-        if !db_path.exists() {
-            let options = crate::index::BuildIndexOptions {
-                use_rust_analyzer: true,
-                max_depth: None,
-                include_tests: true,
-            };
-            crate::storage::rebuild_index_db(repo_root, options)?;
-        }
-        let conn = crate::storage::open_db(repo_root)?;
-        Ok(Self {
+    pub fn new(repo_root: &Path, conn: rusqlite::Connection) -> Self {
+        Self {
             repo_root: repo_root.to_path_buf(),
+            conn: Mutex::new(conn),
+        }
+    }
+
+    pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
+        let workspace_root = crate::storage::find_workspace_root(repo_root);
+        let options = crate::index::BuildIndexOptions {
+            use_rust_analyzer: true,
+            max_depth: None,
+            include_tests: true,
+        };
+        if !crate::storage::validate_index_db(&workspace_root, &options)? {
+            crate::storage::rebuild_index_db(&workspace_root, options)?;
+        }
+        let conn = crate::storage::open_db(&workspace_root)?;
+        Ok(Self {
+            repo_root: workspace_root,
             conn: Mutex::new(conn),
         })
     }

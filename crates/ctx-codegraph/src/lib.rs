@@ -13,6 +13,6 @@ pub use model::*;
 pub use service::GraphContextService;
 pub use slice::{SliceOptions, forward_slice, reverse_slice};
 pub use storage::{
-    find_symbols, load_callees, load_callers, load_index, load_symbols_for_file, open_db,
-    rebuild_index_db, resolve_symbol,
+    find_symbols, find_workspace_root, load_callees, load_callers, load_index,
+    load_symbols_for_file, open_db, rebuild_index_db, resolve_symbol, validate_index_db,
 };

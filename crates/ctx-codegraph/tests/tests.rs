@@ -654,7 +654,7 @@ fn test_service_context_selection() {
     };
     storage::save_index(&mut conn, &mut index).unwrap();
 
-    let service = GraphContextService::load_or_build(dir.path()).unwrap();
+    let service = GraphContextService::new(dir.path(), conn);
 
     // 1. service на fixture-графе строит context для a в режиме Callees
     let res_callees = service
@@ -746,4 +746,72 @@ fn test_service_context_selection() {
             .iter()
             .any(|d| d.severity == "warning" && d.message.contains("max_nodes limit"))
     );
+}
+
+#[test]
+fn test_index_lifecycle_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let git_dir = root.join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
+
+    let file_path = root.join("lib.rs");
+    fs::write(&file_path, "fn test() {}").unwrap();
+
+    // 1. First call to load_or_build builds index
+    let _service = GraphContextService::load_or_build(root).unwrap();
+    let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
+    assert!(db_path.exists());
+
+    let options = BuildIndexOptions {
+        use_rust_analyzer: true,
+        max_depth: None,
+        include_tests: true,
+    };
+    let is_valid = validate_index_db(root, &options).unwrap();
+    assert!(is_valid);
+
+    // 2. Second call to load_or_build reuses the index
+    let _service2 = GraphContextService::load_or_build(root).unwrap();
+    assert!(db_path.exists());
+
+    // 3. Cache path is stable for a subdirectory inside the same repo root
+    let sub_dir = root.join("src");
+    fs::create_dir_all(&sub_dir).unwrap();
+    let resolved_root = find_workspace_root(&sub_dir);
+    assert_eq!(
+        resolved_root.canonicalize().unwrap(),
+        root.canonicalize().unwrap()
+    );
+
+    // 4. Modifying a file invalidates the index
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_path, "fn test_modified_long_body() { let x = 1; }").unwrap();
+    let is_valid_after_mod = validate_index_db(root, &options).unwrap();
+    assert!(!is_valid_after_mod);
+
+    // 5. Changing options invalidates cache
+    let _service3 = GraphContextService::load_or_build(root).unwrap();
+    assert!(validate_index_db(root, &options).unwrap());
+
+    let different_options = BuildIndexOptions {
+        use_rust_analyzer: false,
+        max_depth: None,
+        include_tests: true,
+    };
+    let is_valid_diff_opts = validate_index_db(root, &different_options).unwrap();
+    assert!(!is_valid_diff_opts);
+
+    // 6. Changing schema version invalidates cache
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2')",
+            [],
+        )
+        .unwrap();
+    }
+    let is_valid_diff_schema = validate_index_db(root, &options).unwrap();
+    assert!(!is_valid_diff_schema);
 }
