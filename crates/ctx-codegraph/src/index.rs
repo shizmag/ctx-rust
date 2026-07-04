@@ -15,6 +15,7 @@ pub struct BuildIndexOptions {
     pub use_rust_analyzer: bool,
     pub max_depth: Option<usize>,
     pub include_tests: bool,
+    pub change_detection: crate::model::FileChangeDetection,
 }
 
 impl Default for BuildIndexOptions {
@@ -23,6 +24,7 @@ impl Default for BuildIndexOptions {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         }
     }
 }
@@ -235,7 +237,8 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
         }
 
         if resolved_idx.is_none() {
-            let (fallback_idx, fallback_conf) = resolve_name_only(&cs.raw_name, &global_symbols, &cs.file);
+            let (fallback_idx, fallback_conf) =
+                resolve_name_only(&cs.raw_name, &global_symbols, &cs.file);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }

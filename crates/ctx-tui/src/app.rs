@@ -505,6 +505,7 @@ mod tests {
             use_rust_analyzer: false, // fast tree-sitter fallback
             max_depth: None,
             include_tests: true,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         };
         ctx_codegraph::rebuild_index_db(&temp_dir, options).unwrap();
 

@@ -84,6 +84,12 @@ impl ResolutionConfidence {
     }
 }
 
+impl std::fmt::Display for ResolutionConfidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextRange {
     pub start_line: usize,
@@ -262,14 +268,59 @@ pub struct GraphContextResult {
     pub diagnostics: Vec<GraphContextDiagnostic>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FullRebuildReason {
+    MissingDatabase,
+    IncompatibleSchema,
+    IncompatibleConfig,
+    CorruptDatabase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FileSnapshot {
+    pub path: PathBuf,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FileChangeDetection {
+    MtimeAndSize,
+    ContentHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IndexDiff {
+    pub added: Vec<FileSnapshot>,
+    pub modified: Vec<FileSnapshot>,
+    pub deleted: Vec<PathBuf>,
+    pub unchanged: Vec<FileSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum IndexState {
+    Missing,
+    Ready,
+    NeedsIncrementalUpdate(IndexDiff),
+    NeedsFullRebuild(FullRebuildReason),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuildReport {
     pub full_rebuild: bool,
+    pub full_rebuild_reason: Option<FullRebuildReason>,
     pub added_files: usize,
     pub modified_files: usize,
     pub deleted_files: usize,
     pub unchanged_files: usize,
+    pub parsed_files: usize,
+    pub reused_files: usize,
     pub symbols_written: usize,
     pub call_sites_written: usize,
     pub edges_written: usize,
+    pub lsp_edges_exact: usize,
+    pub syntax_edges: usize,
+    pub heuristic_edges: usize,
+    pub unresolved_edges: usize,
 }

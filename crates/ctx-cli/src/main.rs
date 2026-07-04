@@ -244,11 +244,16 @@ enum Command {
 #[command(
     about = "Analyze the project and build/query a symbol and call graph",
     long_about = "The graph command scans the selected project files and builds a local SQLite index of \
-                 modules, symbols, calls, and dependencies. You can build this index and query it to \
-                 find all symbols, view callers/callees of a symbol, or compute a call slice tree \
-                 to understand how functions are connected.",
+                  modules, symbols, calls, and dependencies. You can build this index and query it to \
+                  find all symbols, view callers/callees of a symbol, or compute a call slice tree \
+                  to understand how functions are connected.\n\n\
+                  By default, ctx builds a fast tree-sitter based graph. Edges are labeled with \
+                  their resolution confidence: Syntax, Heuristic, Unresolved. Use --with-lsp to \
+                  ask rust-analyzer to enrich resolvable edges as LspExact. This is slower but \
+                  more semantically precise.",
     after_help = "Examples:\n  \
                   ctx graph build\n  \
+                  ctx graph build --with-lsp\n  \
                   ctx graph symbols\n  \
                   ctx graph calls my_function\n  \
                   ctx graph callers my_function\n  \
@@ -267,9 +272,13 @@ struct GraphCommand {
     #[arg(long, global = true)]
     no_rust_analyzer: bool,
 
-    /// Enable rust-analyzer database fallback (slow but precise call resolution)
+    /// Enable rust-analyzer database fallback (slow but precise call resolution, marks edges as LspExact)
     #[arg(long, global = true)]
     with_lsp: bool,
+
+    /// Show verbose build report and timings
+    #[arg(long, short, global = true)]
+    verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,18 +351,77 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 use_rust_analyzer,
                 max_depth: None,
                 include_tests: true,
+                change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
             };
             let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
-            if report.full_rebuild {
-                println!("Full rebuild completed.");
+            if graph_args.verbose {
+                println!("--- Codegraph Build Report ---");
+                println!(
+                    "Full Rebuild: {}",
+                    if report.full_rebuild { "yes" } else { "no" }
+                );
+                if let Some(reason) = report.full_rebuild_reason {
+                    println!("Full Rebuild Reason: {:?}", reason);
+                }
+                println!(
+                    "Files: {} added, {} modified, {} deleted, {} unchanged",
+                    report.added_files,
+                    report.modified_files,
+                    report.deleted_files,
+                    report.unchanged_files
+                );
+                println!(
+                    "Parsed Files: {}, Reused Files: {}",
+                    report.parsed_files, report.reused_files
+                );
+                println!(
+                    "Symbols Written: {}, Call Sites Written: {}, Edges Written: {}",
+                    report.symbols_written, report.call_sites_written, report.edges_written
+                );
+                println!(
+                    "Edge Resolution Confidence: LspExact={}, Syntax={}, Heuristic={}, Unresolved={}",
+                    report.lsp_edges_exact,
+                    report.syntax_edges,
+                    report.heuristic_edges,
+                    report.unresolved_edges
+                );
+                println!("-----------------------------");
             } else {
-                println!("Incremental update completed.");
+                if report.full_rebuild {
+                    if let Some(reason) = report.full_rebuild_reason {
+                        match reason {
+                            ctx_codegraph::model::FullRebuildReason::MissingDatabase => {
+                                println!("Full rebuild completed (Index not found).");
+                            }
+                            ctx_codegraph::model::FullRebuildReason::IncompatibleSchema => {
+                                println!("Full rebuild completed (Incompatible schema).");
+                            }
+                            ctx_codegraph::model::FullRebuildReason::IncompatibleConfig => {
+                                println!("Full rebuild completed (Incompatible configuration).");
+                            }
+                            ctx_codegraph::model::FullRebuildReason::CorruptDatabase => {
+                                println!("Full rebuild completed (Database corrupted).");
+                            }
+                        }
+                    } else {
+                        println!("Full rebuild completed.");
+                    }
+                } else {
+                    println!("Incremental update completed.");
+                }
+                println!(
+                    "Files: {} added, {} modified, {} deleted, {} unchanged",
+                    report.added_files,
+                    report.modified_files,
+                    report.deleted_files,
+                    report.unchanged_files
+                );
+                println!(
+                    "Symbols updated: {}, call sites updated: {}, edges updated: {}",
+                    report.symbols_written, report.call_sites_written, report.edges_written
+                );
+                println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
             }
-            println!("Files: {} added, {} modified, {} deleted, {} unchanged",
-                     report.added_files, report.modified_files, report.deleted_files, report.unchanged_files);
-            println!("Symbols updated: {}, call sites updated: {}, edges updated: {}",
-                     report.symbols_written, report.call_sites_written, report.edges_written);
-            println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
         }
         GraphSubcommand::Symbols { mut query } => {
             let mut target_path = graph_args.path.clone();
@@ -364,7 +432,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 }
             }
 
-            let conn = get_connection_or_rebuild(&target_path, use_rust_analyzer)?;
+            let conn =
+                get_connection_or_rebuild(&target_path, use_rust_analyzer, graph_args.verbose)?;
 
             if let Some(q) = query {
                 match ctx_codegraph::resolve_symbol(&conn, &q)? {
@@ -427,7 +496,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             }
         }
         GraphSubcommand::Calls { symbol } | GraphSubcommand::Callees { symbol } => {
-            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let conn =
+                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -450,11 +520,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 for (edge, target) in callees {
                     match target {
                         Some(t) => println!(
-                            "  - {} -> {} ({:?})",
+                            "  - {} -> {} ({})",
                             edge.raw_name, t.qualified_name, edge.confidence
                         ),
                         None => println!(
-                            "  - {} -> [Unresolved] ({:?})",
+                            "  - {} -> [Unresolved] ({})",
                             edge.raw_name, edge.confidence
                         ),
                     }
@@ -462,7 +532,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             }
         }
         GraphSubcommand::Callers { symbol } => {
-            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let conn =
+                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -484,7 +555,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             } else {
                 for (edge, caller) in callers {
                     println!(
-                        "  - {} via `{}` at L{}:{} ({:?})",
+                        "  - {} via `{}` at L{}:{} ({})",
                         caller.qualified_name,
                         edge.raw_name,
                         edge.call_range.start_line,
@@ -495,7 +566,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             }
         }
         GraphSubcommand::Slice { symbol } => {
-            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let conn =
+                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -530,7 +602,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             depth,
             max_nodes,
         } => {
-            let _conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
+            let _conn =
+                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
             let service = ctx_codegraph::GraphContextService::load_or_build(&graph_args.path)?;
 
             match service.resolve_symbol(&symbol)? {
@@ -582,21 +655,71 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
 fn get_connection_or_rebuild(
     path: &Path,
     use_rust_analyzer: bool,
+    verbose: bool,
 ) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
     let options = ctx_codegraph::BuildIndexOptions {
         use_rust_analyzer,
         max_depth: None,
         include_tests: true,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
     let (_index, report) = ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
-    if report.full_rebuild {
-        println!("Index not found or incompatible. Rebuilt codegraph index.");
-    } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+    if verbose {
+        println!("--- Codegraph Build Report ---");
         println!(
-            "Incremental update: {} added, {} modified, {} deleted files.",
-            report.added_files, report.modified_files, report.deleted_files
+            "Full Rebuild: {}",
+            if report.full_rebuild { "yes" } else { "no" }
         );
+        if let Some(reason) = report.full_rebuild_reason {
+            println!("Full Rebuild Reason: {:?}", reason);
+        }
+        println!(
+            "Files: {} added, {} modified, {} deleted, {} unchanged",
+            report.added_files, report.modified_files, report.deleted_files, report.unchanged_files
+        );
+        println!(
+            "Parsed Files: {}, Reused Files: {}",
+            report.parsed_files, report.reused_files
+        );
+        println!(
+            "Symbols Written: {}, Call Sites Written: {}, Edges Written: {}",
+            report.symbols_written, report.call_sites_written, report.edges_written
+        );
+        println!(
+            "Edge Resolution Confidence: LspExact={}, Syntax={}, Heuristic={}, Unresolved={}",
+            report.lsp_edges_exact,
+            report.syntax_edges,
+            report.heuristic_edges,
+            report.unresolved_edges
+        );
+        println!("-----------------------------");
+    } else {
+        if report.full_rebuild {
+            if let Some(reason) = report.full_rebuild_reason {
+                match reason {
+                    ctx_codegraph::model::FullRebuildReason::MissingDatabase => {
+                        println!("Index not found. Built codegraph index.");
+                    }
+                    ctx_codegraph::model::FullRebuildReason::IncompatibleSchema => {
+                        println!("Incompatible schema. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::FullRebuildReason::IncompatibleConfig => {
+                        println!("Incompatible configuration. Rebuilt codegraph index cleanly.");
+                    }
+                    ctx_codegraph::model::FullRebuildReason::CorruptDatabase => {
+                        println!("Database corrupted. Rebuilt codegraph index cleanly.");
+                    }
+                }
+            } else {
+                println!("Rebuilt codegraph index.");
+            }
+        } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+            println!(
+                "Incremental update: {} added, {} modified, {} deleted files.",
+                report.added_files, report.modified_files, report.deleted_files
+            );
+        }
     }
     let conn = ctx_codegraph::open_db(&workspace_root)?;
     Ok(conn)

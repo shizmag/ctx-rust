@@ -30,6 +30,7 @@ impl GraphContextService {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         };
         if !crate::storage::validate_index_db(&workspace_root, &options)? {
             let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;

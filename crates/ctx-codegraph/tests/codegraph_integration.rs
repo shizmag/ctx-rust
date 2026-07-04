@@ -49,6 +49,7 @@ fn test_integration_builds_simple_project_index_and_slice() {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -138,6 +139,7 @@ fn test_integration_rebuild_sqlite_database() {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -203,6 +205,7 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();

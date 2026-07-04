@@ -89,7 +89,8 @@ mod tests {
         assert_eq!(res_conf, ResolutionConfidence::Syntax);
 
         // Different file -> Heuristic
-        let (res_idx_h, res_conf_h) = resolve_name_only("load", &symbols, Path::new("src/other.rs"));
+        let (res_idx_h, res_conf_h) =
+            resolve_name_only("load", &symbols, Path::new("src/other.rs"));
         assert_eq!(res_idx_h, Some(1));
         assert_eq!(res_conf_h, ResolutionConfidence::Heuristic);
     }
@@ -101,7 +102,8 @@ mod tests {
             make_test_symbol("load", SymbolKind::Function),
         ];
 
-        let (res_idx, res_conf) = resolve_name_only("crate::pipeline::load", &symbols, Path::new("src/lib.rs"));
+        let (res_idx, res_conf) =
+            resolve_name_only("crate::pipeline::load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx, Some(1));
         assert_eq!(res_conf, ResolutionConfidence::Syntax);
     }
@@ -117,7 +119,8 @@ mod tests {
         assert_eq!(res_idx, Some(1));
         assert_eq!(res_conf, ResolutionConfidence::Syntax);
 
-        let (res_idx_2, res_conf_2) = resolve_name_only("pipeline.load", &symbols, Path::new("src/lib.rs"));
+        let (res_idx_2, res_conf_2) =
+            resolve_name_only("pipeline.load", &symbols, Path::new("src/lib.rs"));
         assert_eq!(res_idx_2, Some(1));
         assert_eq!(res_conf_2, ResolutionConfidence::Syntax);
     }

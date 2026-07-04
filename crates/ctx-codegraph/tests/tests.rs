@@ -2,6 +2,8 @@ use ctx_codegraph::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_parse_rust_code() {
     let dir = tempfile::tempdir().unwrap();
@@ -103,15 +105,18 @@ fn test_name_only_resolution_and_ambiguity() {
     ];
 
     use std::path::Path;
-    let (res_idx, res_conf) = resolver::noop::resolve_name_only("foo", &symbols, Path::new("src/lib.rs"));
+    let (res_idx, res_conf) =
+        resolver::noop::resolve_name_only("foo", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx, Some(0));
     assert_eq!(res_conf, ResolutionConfidence::Syntax);
 
-    let (res_idx_ambig, res_conf_ambig) = resolver::noop::resolve_name_only("bar", &symbols, Path::new("src/lib.rs"));
+    let (res_idx_ambig, res_conf_ambig) =
+        resolver::noop::resolve_name_only("bar", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx_ambig, None);
     assert_eq!(res_conf_ambig, ResolutionConfidence::Unresolved);
 
-    let (res_idx_unres, res_conf_unres) = resolver::noop::resolve_name_only("baz", &symbols, Path::new("src/lib.rs"));
+    let (res_idx_unres, res_conf_unres) =
+        resolver::noop::resolve_name_only("baz", &symbols, Path::new("src/lib.rs"));
     assert_eq!(res_idx_unres, None);
     assert_eq!(res_conf_unres, ResolutionConfidence::Unresolved);
 }
@@ -359,6 +364,7 @@ fn test_integration_mini_project() {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -438,6 +444,7 @@ fn test_integration_mini_project() {
 
 #[test]
 fn test_integration_with_rust_analyzer() {
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     if std::process::Command::new("rust-analyzer")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -477,6 +484,7 @@ fn test_integration_with_rust_analyzer() {
             use_rust_analyzer: true,
             max_depth: None,
             include_tests: true,
+            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -769,6 +777,7 @@ fn test_index_lifecycle_validation() {
         use_rust_analyzer: false,
         max_depth: None,
         include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
     };
     let is_valid = validate_index_db(root, &options).unwrap();
     assert!(is_valid);
@@ -800,6 +809,7 @@ fn test_index_lifecycle_validation() {
         use_rust_analyzer: true,
         max_depth: None,
         include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
     };
     let is_valid_diff_opts = validate_index_db(root, &different_options).unwrap();
     assert!(!is_valid_diff_opts);
@@ -823,7 +833,11 @@ fn test_edge_resolution_quality_variants() {
     let root = dir.path();
 
     // Create Cargo.toml
-    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
 
     let src_dir = root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
@@ -852,6 +866,7 @@ fn test_edge_resolution_quality_variants() {
             use_rust_analyzer: false,
             max_depth: None,
             include_tests: true,
+            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -862,16 +877,28 @@ fn test_edge_resolution_quality_variants() {
     let sym_d = index.symbols.iter().find(|s| s.name == "d").unwrap();
 
     // Verify b(); inside a() is Syntax (same file)
-    let edge_a_b = index.edges.iter().find(|e| e.raw_name == "b" && e.from == sym_a.id.unwrap()).unwrap();
+    let edge_a_b = index
+        .edges
+        .iter()
+        .find(|e| e.raw_name == "b" && e.from == sym_a.id.unwrap())
+        .unwrap();
     assert_eq!(edge_a_b.confidence, ResolutionConfidence::Syntax);
 
     // Verify unresolved_call(); inside a() is Unresolved
-    let edge_unres = index.edges.iter().find(|e| e.raw_name == "unresolved_call" && e.from == sym_a.id.unwrap()).unwrap();
+    let edge_unres = index
+        .edges
+        .iter()
+        .find(|e| e.raw_name == "unresolved_call" && e.from == sym_a.id.unwrap())
+        .unwrap();
     assert_eq!(edge_unres.confidence, ResolutionConfidence::Unresolved);
     assert!(edge_unres.to.is_none());
 
     // Verify b(); inside d() is Heuristic (different file)
-    let edge_d_b = index.edges.iter().find(|e| e.raw_name == "b" && e.from == sym_d.id.unwrap()).unwrap();
+    let edge_d_b = index
+        .edges
+        .iter()
+        .find(|e| e.raw_name == "b" && e.from == sym_d.id.unwrap())
+        .unwrap();
     assert_eq!(edge_d_b.confidence, ResolutionConfidence::Heuristic);
 }
 
@@ -880,7 +907,11 @@ fn test_incremental_diff_report() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
     let src_dir = root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
 
@@ -896,6 +927,7 @@ fn test_incremental_diff_report() {
         use_rust_analyzer: false,
         max_depth: None,
         include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
     };
 
     // 1. Initial build: all files added
@@ -949,7 +981,11 @@ fn test_db_correctness_after_incremental_update() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    fs::write(root.join("Cargo.toml"), "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
     let src_dir = root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
 
@@ -965,11 +1001,17 @@ fn test_db_correctness_after_incremental_update() {
         use_rust_analyzer: false,
         max_depth: None,
         include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(index.symbols.iter().any(|s| s.name == "b"));
-    assert!(index.edges.iter().any(|e| e.raw_name == "b" && e.to.is_some()));
+    assert!(
+        index
+            .edges
+            .iter()
+            .any(|e| e.raw_name == "b" && e.to.is_some())
+    );
 
     // Modify file: change lib.rs so a calls c instead, and define c in lib.rs
     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -987,7 +1029,12 @@ fn test_db_correctness_after_incremental_update() {
 
     let (index_add, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(index_add.symbols.iter().any(|s| s.name == "d"));
-    assert!(index_add.edges.iter().any(|e| e.raw_name == "a" && e.to.is_some()));
+    assert!(
+        index_add
+            .edges
+            .iter()
+            .any(|e| e.raw_name == "a" && e.to.is_some())
+    );
 
     // Scenario 3: Delete file
     // Delete b.rs
@@ -999,7 +1046,11 @@ fn test_db_correctness_after_incremental_update() {
     // Scenario 4: Rename/change symbol
     // Change lib.rs from defining c to defining new_name, and calling it
     std::thread::sleep(std::time::Duration::from_millis(10));
-    fs::write(&file_lib, "pub fn a() { new_name(); }\npub fn new_name() {}").unwrap();
+    fs::write(
+        &file_lib,
+        "pub fn a() { new_name(); }\npub fn new_name() {}",
+    )
+    .unwrap();
 
     let (index_rename, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(!index_rename.symbols.iter().any(|s| s.name == "c"));
@@ -1008,3 +1059,125 @@ fn test_db_correctness_after_incremental_update() {
     assert!(index_rename.edges.iter().any(|e| e.raw_name == "new_name"));
 }
 
+#[test]
+fn test_mock_lsp_exact_enrichment() {
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    // Write python mock rust-analyzer
+    let script_path = bin_dir.join("rust-analyzer");
+    let script_content = r#"#!/usr/bin/env python3
+import sys
+import json
+
+def log(msg):
+    sys.stderr.write(f"MOCK LOG: {msg}\n")
+    sys.stderr.flush()
+
+def write_response(id, result):
+    response = {
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    }
+    msg = json.dumps(response)
+    sys.stdout.write(f"Content-Length: {len(msg)}\r\n\r\n{msg}")
+    sys.stdout.flush()
+
+content_buf = ""
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    if line.startswith("Content-Length:"):
+        length = int(line.split(":")[1].strip())
+        # read the empty line \r\n
+        sys.stdin.readline()
+        # read content of length bytes
+        content = sys.stdin.read(length)
+        req = json.loads(content)
+        method = req.get("method")
+        req_id = req.get("id")
+        
+        if method == "initialize":
+            write_response(req_id, {"capabilities": {"textDocumentSync": 1}})
+        elif method == "textDocument/definition":
+            uri = req.get("params", {}).get("textDocument", {}).get("uri")
+            if uri:
+                write_response(req_id, [
+                    {
+                        "uri": uri,
+                        "range": {
+                            "start": {"line": 4, "character": 3},
+                            "end": {"line": 4, "character": 4}
+                        }
+                    }
+                ])
+            else:
+                write_response(req_id, [])
+"#;
+
+    {
+        let mut file = File::create(&script_path).unwrap();
+        file.write_all(script_content.as_bytes()).unwrap();
+    }
+
+    // Make script executable
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+
+    // Set PATH to include bin_dir
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    unsafe {
+        std::env::set_var("PATH", &new_path);
+    }
+
+    // Create a mock cargo workspace
+    let proj_dir = temp_dir.path().join("mock_project");
+    fs::create_dir_all(&proj_dir).unwrap();
+    fs::write(
+        proj_dir.join("Cargo.toml"),
+        "[package]\nname=\"mock_project\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+
+    let src_dir = proj_dir.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    // Write lib.rs where:
+    // fn a() { b(); } is at line 2 (start line 2)
+    // fn b() {} is at line 5 (start line 5, col 9)
+    let lib_code = "fn a() {\n    b();\n}\n\nfn b() {}\n";
+    fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
+
+    // Run build index with lsp
+    let options = BuildIndexOptions {
+        use_rust_analyzer: true,
+        max_depth: None,
+        include_tests: true,
+        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
+
+    // Restore PATH
+    unsafe {
+        std::env::set_var("PATH", old_path);
+    }
+
+    // Verify that edge resolved to LspExact!
+    assert!(report.full_rebuild);
+    assert_eq!(report.lsp_edges_exact, 1);
+
+    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    assert_eq!(edge.confidence, ResolutionConfidence::LspExact);
+    assert!(edge.to.is_some());
+}
