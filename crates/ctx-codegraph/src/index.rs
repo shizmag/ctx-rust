@@ -184,7 +184,7 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
                     Err(err) if err.contains("-32603") || err.contains("file not found") => {
                         std::thread::sleep(delay);
                     }
-                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(1500) => {
+                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(5000) => {
                         std::thread::sleep(delay);
                     }
                     _ => {

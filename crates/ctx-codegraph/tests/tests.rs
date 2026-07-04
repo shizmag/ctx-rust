@@ -311,6 +311,7 @@ fn test_slices() {
         SymbolId(0),
         SliceOptions {
             max_depth: 5,
+            max_nodes: None,
             include_tests: true,
         },
     );
@@ -321,6 +322,7 @@ fn test_slices() {
         SymbolId(2),
         SliceOptions {
             max_depth: 5,
+            max_nodes: None,
             include_tests: true,
         },
     );
@@ -372,6 +374,7 @@ fn test_integration_mini_project() {
         run_pipeline_id,
         SliceOptions {
             max_depth: 10,
+            max_nodes: None,
             include_tests: true,
         },
     );
@@ -409,6 +412,7 @@ fn test_integration_mini_project() {
         run_pipeline_id_loaded,
         SliceOptions {
             max_depth: 10,
+            max_nodes: None,
             include_tests: true,
         },
     );

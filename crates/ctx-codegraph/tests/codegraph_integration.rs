@@ -91,6 +91,7 @@ fn test_integration_builds_simple_project_index_and_slice() {
         run_pipeline.id.unwrap(),
         SliceOptions {
             max_depth: 10,
+            max_nodes: None,
             include_tests: true,
         },
     );

@@ -282,4 +282,3 @@ fn ensure_gitignore_entries(root: &Path) {
         let _ = std::fs::write(&gitignore_path, content);
     }
 }
-

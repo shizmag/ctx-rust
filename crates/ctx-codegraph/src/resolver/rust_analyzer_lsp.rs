@@ -176,6 +176,19 @@ impl Drop for LspClient {
     }
 }
 
+fn is_inside_range(range: &crate::model::TextRange, line: usize, col: usize) -> bool {
+    if line < range.start_line || line > range.end_line {
+        return false;
+    }
+    if line == range.start_line && col < range.start_col {
+        return false;
+    }
+    if line == range.end_line && col > range.end_col {
+        return false;
+    }
+    true
+}
+
 fn matches_definition(
     sym: &Symbol,
     target_file: &Path,
@@ -203,6 +216,12 @@ fn matches_definition(
 
     if target_line_1 == end_line && target_col_1 > sym.range.end_col {
         return false;
+    }
+
+    if let Some(ref body) = sym.body_range {
+        if is_inside_range(body, target_line_1, target_col_1) {
+            return false;
+        }
     }
 
     true
@@ -250,13 +269,16 @@ pub fn resolve_via_lsp(
             .display()
     );
 
+    let name_segment = crate::resolver::noop::parse_raw_name(&call_site.raw_name);
+    let offset = call_site.raw_name.len() - name_segment.len();
+
     let params = serde_json::json!({
         "textDocument": {
             "uri": file_uri
         },
         "position": {
             "line": call_site.range.start_line - 1,
-            "character": call_site.range.start_col - 1
+            "character": call_site.range.start_col - 1 + offset
         }
     });
 

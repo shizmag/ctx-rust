@@ -3,6 +3,7 @@ use std::collections::{HashSet, VecDeque};
 
 pub struct SliceOptions {
     pub max_depth: usize,
+    pub max_nodes: Option<usize>,
     pub include_tests: bool,
 }
 
@@ -18,6 +19,12 @@ pub fn forward_slice(index: &CodeIndex, start: SymbolId, options: SliceOptions) 
         if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr)) {
             if !options.include_tests && sym.kind == SymbolKind::Test {
                 continue;
+            }
+        }
+
+        if let Some(limit) = options.max_nodes {
+            if result.len() >= limit {
+                break;
             }
         }
 
@@ -54,6 +61,12 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
         if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr)) {
             if !options.include_tests && sym.kind == SymbolKind::Test {
                 continue;
+            }
+        }
+
+        if let Some(limit) = options.max_nodes {
+            if result.len() >= limit {
+                break;
             }
         }
 
@@ -137,6 +150,7 @@ mod tests {
             SymbolId(0),
             SliceOptions {
                 max_depth: 10,
+                max_nodes: None,
                 include_tests: true,
             },
         );
@@ -163,6 +177,7 @@ mod tests {
             SymbolId(0),
             SliceOptions {
                 max_depth: 1,
+                max_nodes: None,
                 include_tests: true,
             },
         );
@@ -189,6 +204,7 @@ mod tests {
             SymbolId(2),
             SliceOptions {
                 max_depth: 10,
+                max_nodes: None,
                 include_tests: true,
             },
         );
@@ -217,6 +233,7 @@ mod tests {
             SymbolId(0),
             SliceOptions {
                 max_depth: 10,
+                max_nodes: None,
                 include_tests: true,
             },
         );
@@ -242,10 +259,141 @@ mod tests {
             SymbolId(0),
             SliceOptions {
                 max_depth: 10,
+                max_nodes: None,
                 include_tests: false,
             },
         );
         // b_test is skipped because include_tests is false
         assert_eq!(slice, vec![SymbolId(0)]);
+    }
+
+    #[test]
+    fn test_fixture_graph_and_semantics() {
+        // fn a() { b(); }
+        // fn b() { c(); }
+        // fn c() {}
+        // fn d() { b(); }
+        let index = CodeIndex {
+            root: PathBuf::from("."),
+            files: vec![],
+            symbols: vec![
+                make_test_symbol(0, "a", SymbolKind::Function),
+                make_test_symbol(1, "b", SymbolKind::Function),
+                make_test_symbol(2, "c", SymbolKind::Function),
+                make_test_symbol(3, "d", SymbolKind::Function),
+            ],
+            call_sites: vec![],
+            edges: vec![
+                make_test_edge(0, 1), // a -> b
+                make_test_edge(1, 2), // b -> c
+                make_test_edge(3, 1), // d -> b
+            ],
+        };
+
+        // callees(a) содержит b
+        let callees_a: Vec<SymbolId> = index
+            .edges
+            .iter()
+            .filter(|e| e.from == SymbolId(0))
+            .filter_map(|e| e.to)
+            .collect();
+        assert!(callees_a.contains(&SymbolId(1)));
+
+        // callees(b) содержит c
+        let callees_b: Vec<SymbolId> = index
+            .edges
+            .iter()
+            .filter(|e| e.from == SymbolId(1))
+            .filter_map(|e| e.to)
+            .collect();
+        assert!(callees_b.contains(&SymbolId(2)));
+
+        // callers(b) содержит a и d
+        let callers_b: Vec<SymbolId> = index
+            .edges
+            .iter()
+            .filter(|e| e.to == Some(SymbolId(1)))
+            .map(|e| e.from)
+            .collect();
+        assert!(callers_b.contains(&SymbolId(0)));
+        assert!(callers_b.contains(&SymbolId(3)));
+
+        // forward traversal от a содержит b и c
+        let forward = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                max_nodes: None,
+                include_tests: true,
+            },
+        );
+        assert!(forward.contains(&SymbolId(1)));
+        assert!(forward.contains(&SymbolId(2)));
+
+        // reverse traversal от c содержит b, a, d
+        let reverse = reverse_slice(
+            &index,
+            SymbolId(2),
+            SliceOptions {
+                max_depth: 10,
+                max_nodes: None,
+                include_tests: true,
+            },
+        );
+        assert!(reverse.contains(&SymbolId(1)));
+        assert!(reverse.contains(&SymbolId(0)));
+        assert!(reverse.contains(&SymbolId(3)));
+
+        // self-cycle или обычный cycle не приводит к бесконечной рекурсии
+        let index_cycle = CodeIndex {
+            root: PathBuf::from("."),
+            files: vec![],
+            symbols: vec![
+                make_test_symbol(0, "a", SymbolKind::Function),
+                make_test_symbol(1, "b", SymbolKind::Function),
+            ],
+            call_sites: vec![],
+            edges: vec![
+                make_test_edge(0, 0), // self-cycle: a -> a
+                make_test_edge(0, 1), // a -> b
+                make_test_edge(1, 0), // cycle: b -> a
+            ],
+        };
+        let cycle_forward = forward_slice(
+            &index_cycle,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                max_nodes: None,
+                include_tests: true,
+            },
+        );
+        assert_eq!(cycle_forward.len(), 2); // only a and b
+
+        // max_depth ограничивает обход
+        let depth_forward = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 1,
+                max_nodes: None,
+                include_tests: true,
+            },
+        );
+        assert!(depth_forward.contains(&SymbolId(1)));
+        assert!(!depth_forward.contains(&SymbolId(2)));
+
+        // max_nodes ограничивает результат
+        let nodes_forward = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                max_nodes: Some(2),
+                include_tests: true,
+            },
+        );
+        assert_eq!(nodes_forward.len(), 2);
     }
 }

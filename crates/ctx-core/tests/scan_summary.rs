@@ -298,7 +298,8 @@ fn test_gitignore_auto_add() {
             max_file_size: 1024,
             exclude: Vec::new(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let gitignore_path = root.join(".gitignore");
     assert!(gitignore_path.exists());
@@ -316,7 +317,8 @@ fn test_gitignore_auto_add() {
             max_file_size: 1024,
             exclude: Vec::new(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let content2 = fs::read_to_string(&gitignore_path).unwrap();
     assert!(content2.starts_with("target/\n# Comment\n"));
@@ -326,4 +328,3 @@ fn test_gitignore_auto_add() {
     assert_eq!(content2.matches(".ctx-codegraph/").count(), 1);
     assert_eq!(content2.matches(".ctx_*/").count(), 1);
 }
-

@@ -279,6 +279,11 @@ enum GraphSubcommand {
         /// The name or qualified path of the target symbol
         symbol: String,
     },
+    /// List the direct callees (called functions/symbols) of a target symbol
+    Callees {
+        /// The name or qualified path of the target symbol
+        symbol: String,
+    },
     /// List the direct callers of a target symbol
     Callers {
         /// The name or qualified path of the target symbol
@@ -333,7 +338,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 }
             }
         }
-        GraphSubcommand::Calls { symbol } => {
+        GraphSubcommand::Calls { symbol } | GraphSubcommand::Callees { symbol } => {
             let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
@@ -483,9 +488,13 @@ fn print_slice_tree_helper(
         return;
     }
 
+    let mut seen_targets = HashSet::new();
     for edge in &index.edges {
         if edge.from == curr_id {
             if let Some(to_id) = edge.to {
+                if !seen_targets.insert(to_id) {
+                    continue;
+                }
                 if !visited.contains(&to_id) {
                     visited.insert(to_id);
                     print_slice_tree_helper(index, to_id, depth + 1, max_depth, visited);
