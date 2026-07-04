@@ -103,7 +103,7 @@ pub fn create_file_snapshot_with_registry(
         file_id: None,
         rel_path,
         abs_path: abs_path.to_path_buf(),
-        language: backend.language().0.clone(),
+        language: backend.language().clone(),
         backend_id: backend.id().0.clone(),
         size_bytes,
         mtime_ms,

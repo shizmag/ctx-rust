@@ -11,17 +11,45 @@ pub struct CallId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
-pub struct Language(pub String);
+pub struct LanguageId(pub String);
 
-impl Language {
+impl LanguageId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into().to_ascii_lowercase())
+    }
+
     pub fn rust() -> Self {
-        Language("rust".to_string())
+        Self("rust".to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl std::fmt::Display for Language {
+impl std::fmt::Display for LanguageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+pub type Language = LanguageId;
+
+#[allow(non_snake_case)]
+pub fn Language(s: String) -> LanguageId {
+    LanguageId(s)
+}
+
+impl rusqlite::types::ToSql for LanguageId {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+impl rusqlite::types::FromSql for LanguageId {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        Ok(LanguageId(s))
     }
 }
 
@@ -308,7 +336,6 @@ impl RebuildReason {
     }
 }
 
-pub type LanguageId = String;
 pub type BackendId = String;
 pub type ParserId = String;
 pub type ResolverId = String;

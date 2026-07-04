@@ -135,7 +135,7 @@ fn test_sqlite_and_find_symbols() {
             file_id: None,
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: PathBuf::from("src/lib.rs"),
-            language: "rust".to_string(),
+            language: Language::rust(),
             backend_id: "rust-backend".to_string(),
             size_bytes: 100,
             mtime_ms: 12345,
@@ -525,7 +525,7 @@ fn test_service_context_selection() {
             file_id: None,
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: dir.path().join("src/lib.rs"),
-            language: "rust".to_string(),
+            language: Language::rust(),
             backend_id: "rust-backend".to_string(),
             size_bytes: 200,
             mtime_ms: 100,
@@ -1604,7 +1604,7 @@ fn test_db_transaction_rollback_on_failure() {
             file_id: None,
             rel_path: PathBuf::from("lib.rs"),
             abs_path: dir.path().join("lib.rs"),
-            language: "rust".to_string(),
+            language: Language::rust(),
             backend_id: "rust-backend".to_string(),
             size_bytes: 100,
             mtime_ms: 100,
@@ -1799,7 +1799,7 @@ fn test_generic_pipeline_with_mock_backend() {
         index.files[0].abs_path.file_name().unwrap(),
         "test_file.mock"
     );
-    assert_eq!(index.files[0].language, "mock");
+    assert_eq!(index.files[0].language.as_str(), "mock");
 
     assert_eq!(index.symbols.len(), 2);
     let sym_names: std::collections::HashSet<String> =

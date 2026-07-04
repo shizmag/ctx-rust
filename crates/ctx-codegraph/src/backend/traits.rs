@@ -7,13 +7,31 @@ use std::path::Path;
 #[serde(transparent)]
 pub struct BackendId(pub String);
 
+impl BackendId {
+    pub fn new(s: impl Into<String>) -> Self {
+        BackendId(s.into())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct ParserId(pub String);
 
+impl ParserId {
+    pub fn new(s: impl Into<String>) -> Self {
+        ParserId(s.into())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct ResolverId(pub String);
+
+impl ResolverId {
+    pub fn new(s: impl Into<String>) -> Self {
+        ResolverId(s.into())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceMarker {

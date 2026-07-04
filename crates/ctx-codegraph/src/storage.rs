@@ -321,7 +321,7 @@ pub fn compute_index_diff_with_registry(
                 file_id: None,
                 rel_path: rel_path.clone(),
                 abs_path: path.clone(),
-                language: db_lang.clone(),
+                language: Language(db_lang.clone()),
                 backend_id: db_backend_id.clone(),
                 size_bytes: disk_size,
                 mtime_ms: disk_mtime,
@@ -791,7 +791,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let id: i64 = row.get(0)?;
         let path_str: String = row.get(1)?;
         let rel_path_str: String = row.get(2)?;
-        let language: String = row.get(3)?;
+        let language: Language = row.get(3)?;
         let backend_id: String = row.get(4)?;
         let mtime_ms: i64 = row.get(5)?;
         let size_bytes: u64 = row.get(6)?;
@@ -2505,7 +2505,7 @@ mod tests {
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
-                language: "rust".to_string(),
+                language: Language::rust(),
                 backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
@@ -2617,7 +2617,7 @@ mod tests {
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
-                language: "rust".to_string(),
+                language: Language::rust(),
                 backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
@@ -2677,7 +2677,7 @@ mod tests {
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
-                language: "rust".to_string(),
+                language: Language::rust(),
                 backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
@@ -2813,7 +2813,7 @@ mod tests {
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
-                language: "rust".to_string(),
+                language: Language::rust(),
                 backend_id: "rust-backend".to_string(),
                 size_bytes: 200,
                 mtime_ms: 100,
