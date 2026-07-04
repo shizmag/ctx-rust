@@ -1,10 +1,10 @@
-use std::process::{Child, Command, Stdio};
-use std::io::{BufRead, BufReader, Write, Read};
+use crate::model::{CallSite, Symbol, SymbolKind};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use crate::model::{Symbol, SymbolKind, CallSite};
+use std::time::{Duration, Instant};
 
 pub struct LspClient {
     child: Child,
@@ -73,7 +73,13 @@ impl LspClient {
             next_id: 1,
         };
 
-        let root_uri = format!("file://{}", workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf()).display());
+        let root_uri = format!(
+            "file://{}",
+            workspace_root
+                .canonicalize()
+                .unwrap_or_else(|_| workspace_root.to_path_buf())
+                .display()
+        );
         let init_params = serde_json::json!({
             "processId": std::process::id(),
             "rootUri": root_uri,
@@ -102,7 +108,9 @@ impl LspClient {
     fn send_raw(&mut self, payload: serde_json::Value) -> Result<(), String> {
         let msg = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
         let data = format!("Content-Length: {}\r\n\r\n{}", msg.len(), msg);
-        self.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        self.writer
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
         self.writer.flush().map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -116,7 +124,12 @@ impl LspClient {
         self.send_raw(payload)
     }
 
-    pub fn request(&mut self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<serde_json::Value, String> {
+    pub fn request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -131,7 +144,9 @@ impl LspClient {
 
         let start = Instant::now();
         while start.elapsed() < timeout {
-            let remaining = timeout.checked_sub(start.elapsed()).unwrap_or(Duration::ZERO);
+            let remaining = timeout
+                .checked_sub(start.elapsed())
+                .unwrap_or(Duration::ZERO);
             match self.rx.recv_timeout(remaining) {
                 Ok(msg) => {
                     if let Some(resp_id) = msg.get("id") {
@@ -139,7 +154,10 @@ impl LspClient {
                             if let Some(error) = msg.get("error") {
                                 return Err(format!("LSP error: {}", error));
                             }
-                            return Ok(msg.get("result").cloned().unwrap_or(serde_json::Value::Null));
+                            return Ok(msg
+                                .get("result")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null));
                         }
                     }
                 }
@@ -158,34 +176,46 @@ impl Drop for LspClient {
     }
 }
 
-fn matches_definition(sym: &Symbol, target_file: &Path, target_line_1: usize, target_col_1: usize) -> bool {
+fn matches_definition(
+    sym: &Symbol,
+    target_file: &Path,
+    target_line_1: usize,
+    target_col_1: usize,
+) -> bool {
     let sym_canon = sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone());
-    let target_canon = target_file.canonicalize().unwrap_or_else(|_| target_file.to_path_buf());
+    let target_canon = target_file
+        .canonicalize()
+        .unwrap_or_else(|_| target_file.to_path_buf());
     if sym_canon != target_canon {
         return false;
     }
-    
+
     let start_line = sym.range.start_line;
     let end_line = sym.range.end_line;
-    
+
     if target_line_1 < start_line || target_line_1 > end_line {
         return false;
     }
-    
+
     if target_line_1 == start_line && target_col_1 < sym.range.start_col {
         return false;
     }
-    
+
     if target_line_1 == end_line && target_col_1 > sym.range.end_col {
         return false;
     }
-    
+
     true
 }
 
-pub fn find_matching_symbol(symbols: &[Symbol], target_file: &Path, target_line_1: usize, target_col_1: usize) -> Option<usize> {
+pub fn find_matching_symbol(
+    symbols: &[Symbol],
+    target_file: &Path,
+    target_line_1: usize,
+    target_col_1: usize,
+) -> Option<usize> {
     let mut best_match: Option<(usize, usize)> = None;
-    
+
     for (i, sym) in symbols.iter().enumerate() {
         if sym.kind == SymbolKind::Impl {
             continue;
@@ -202,7 +232,7 @@ pub fn find_matching_symbol(symbols: &[Symbol], target_file: &Path, target_line_
             }
         }
     }
-    
+
     best_match.map(|(i, _)| i)
 }
 
@@ -211,8 +241,15 @@ pub fn resolve_via_lsp(
     call_site: &CallSite,
     symbols: &[Symbol],
 ) -> Result<Option<usize>, String> {
-    let file_uri = format!("file://{}", call_site.file.canonicalize().unwrap_or_else(|_| call_site.file.clone()).display());
-    
+    let file_uri = format!(
+        "file://{}",
+        call_site
+            .file
+            .canonicalize()
+            .unwrap_or_else(|_| call_site.file.clone())
+            .display()
+    );
+
     let params = serde_json::json!({
         "textDocument": {
             "uri": file_uri
@@ -223,8 +260,12 @@ pub fn resolve_via_lsp(
         }
     });
 
-    let resp = client.request("textDocument/definition", params, Duration::from_millis(500))?;
-    
+    let resp = client.request(
+        "textDocument/definition",
+        params,
+        Duration::from_millis(5000),
+    )?;
+
     let parse_location = |loc: &serde_json::Value| -> Option<(PathBuf, usize, usize)> {
         let uri_str = loc.get("uri")?.as_str()?;
         if !uri_str.starts_with("file://") {
@@ -247,7 +288,9 @@ pub fn resolve_via_lsp(
 
     for loc in locations {
         if let Some((target_path, target_line, target_col)) = parse_location(&loc) {
-            if let Some(sym_idx) = find_matching_symbol(symbols, &target_path, target_line, target_col) {
+            if let Some(sym_idx) =
+                find_matching_symbol(symbols, &target_path, target_line, target_col)
+            {
                 return Ok(Some(sym_idx));
             }
         }

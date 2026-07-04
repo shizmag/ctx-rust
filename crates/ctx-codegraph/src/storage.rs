@@ -1,9 +1,10 @@
-use std::path::{Path, PathBuf};
-use crate::model::{
-    CodeIndex, SourceFile, Symbol, CallSite, CallEdge, SymbolId, FileId, Language, SymbolKind, ResolutionConfidence, TextRange
-};
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
+use crate::model::{
+    CallEdge, CallSite, CodeIndex, FileId, Language, ResolutionConfidence, SourceFile, Symbol,
+    SymbolId, SymbolKind, TextRange,
+};
+use std::path::{Path, PathBuf};
 
 pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
     let db_dir = root.join(".ctx-codegraph");
@@ -14,7 +15,8 @@ pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
 }
 
 pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -81,9 +83,13 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
         CREATE INDEX IF NOT EXISTS idx_edges_from ON call_edges(from_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_to ON call_edges(to_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_confidence ON call_edges(confidence);
-    ")?;
+    ",
+    )?;
 
-    conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '1')", [])?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '1')",
+        [],
+    )?;
     conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('backend', 'tree-sitter-rust+optional-rust-analyzer-lsp')", [])?;
 
     Ok(())
@@ -107,10 +113,12 @@ pub fn save_index(
 
     let mut path_to_file_id = std::collections::HashMap::new();
     {
-        let mut stmt = tx.prepare("
+        let mut stmt = tx.prepare(
+            "
             INSERT INTO files (path, language, mtime_ms, size_bytes, content_hash)
             VALUES (?1, ?2, ?3, ?4, ?5)
-        ")?;
+        ",
+        )?;
         for file in &mut index.files {
             let path_str = file.path.to_string_lossy().to_string();
             let row_id = stmt.insert(rusqlite::params![
@@ -128,19 +136,21 @@ pub fn save_index(
 
     let mut temp_sym_to_db_id = std::collections::HashMap::new();
     {
-        let mut stmt = tx.prepare("
+        let mut stmt = tx.prepare(
+            "
             INSERT INTO symbols (
                 file_id, name, qualified_name, kind, language,
                 start_line, start_col, end_line, end_col,
                 body_start_line, body_start_col, body_end_line, body_end_col
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-        ")?;
+        ",
+        )?;
         for (i, sym) in index.symbols.iter_mut().enumerate() {
             let file_id = path_to_file_id.get(&sym.file).copied().ok_or_else(|| {
                 CodeGraphError::Parse(format!("File not found for symbol: {}", sym.file.display()))
             })?;
             sym.file_id = Some(file_id);
-            
+
             let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
             let body_start_col = sym.body_range.as_ref().map(|r| r.start_col);
             let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
@@ -161,7 +171,7 @@ pub fn save_index(
                 body_end_line,
                 body_end_col,
             ])?;
-            
+
             let db_id = SymbolId(row_id);
             let temp_id = SymbolId(i as i64);
             sym.id = Some(db_id);
@@ -171,24 +181,32 @@ pub fn save_index(
 
     let mut temp_call_to_db_id = std::collections::HashMap::new();
     {
-        let mut stmt = tx.prepare("
+        let mut stmt = tx.prepare(
+            "
             INSERT INTO call_sites (
                 file_id, from_symbol_id, raw_name,
                 start_line, start_col, end_line, end_col
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-        ")?;
+        ",
+        )?;
         for (i, cs) in index.call_sites.iter_mut().enumerate() {
             let file_id = path_to_file_id.get(&cs.file).copied().ok_or_else(|| {
-                CodeGraphError::Parse(format!("File not found for call site: {}", cs.file.display()))
+                CodeGraphError::Parse(format!(
+                    "File not found for call site: {}",
+                    cs.file.display()
+                ))
             })?;
             cs.file_id = Some(file_id);
 
             let from_temp_id = cs.from.ok_or_else(|| {
                 CodeGraphError::Parse("Call site without enclosing symbol id".to_string())
             })?;
-            let from_db_id = temp_sym_to_db_id.get(&from_temp_id).copied().ok_or_else(|| {
-                CodeGraphError::Parse("Enclosing symbol not saved to DB".to_string())
-            })?;
+            let from_db_id = temp_sym_to_db_id
+                .get(&from_temp_id)
+                .copied()
+                .ok_or_else(|| {
+                    CodeGraphError::Parse("Enclosing symbol not saved to DB".to_string())
+                })?;
 
             let row_id = stmt.insert(rusqlite::params![
                 file_id.0,
@@ -209,27 +227,34 @@ pub fn save_index(
     }
 
     {
-        let mut stmt = tx.prepare("
+        let mut stmt = tx.prepare(
+            "
             INSERT INTO call_edges (
                 from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence
             ) VALUES (?1, ?2, ?3, ?4, ?5)
-        ")?;
+        ",
+        )?;
         for edge in &mut index.edges {
             let from_db_id = temp_sym_to_db_id.get(&edge.from).copied().ok_or_else(|| {
                 CodeGraphError::Parse("Edge source symbol not saved to DB".to_string())
             })?;
             let to_db_id = match edge.to {
-                Some(temp_to) => Some(temp_sym_to_db_id.get(&temp_to).copied().ok_or_else(|| {
-                    CodeGraphError::Parse("Edge target symbol not saved to DB".to_string())
-                })?),
+                Some(temp_to) => {
+                    Some(temp_sym_to_db_id.get(&temp_to).copied().ok_or_else(|| {
+                        CodeGraphError::Parse("Edge target symbol not saved to DB".to_string())
+                    })?)
+                }
                 None => None,
             };
-            let temp_call_id = edge.call_site_id.ok_or_else(|| {
-                CodeGraphError::Parse("Edge without call site ID".to_string())
-            })?;
-            let db_call_id = temp_call_to_db_id.get(&temp_call_id).copied().ok_or_else(|| {
-                CodeGraphError::Parse("Edge call site not saved to DB".to_string())
-            })?;
+            let temp_call_id = edge
+                .call_site_id
+                .ok_or_else(|| CodeGraphError::Parse("Edge without call site ID".to_string()))?;
+            let db_call_id = temp_call_to_db_id
+                .get(&temp_call_id)
+                .copied()
+                .ok_or_else(|| {
+                    CodeGraphError::Parse("Edge call site not saved to DB".to_string())
+                })?;
 
             stmt.execute(rusqlite::params![
                 from_db_id.0,
@@ -251,7 +276,8 @@ pub fn save_index(
 
 pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
-    let mut stmt = conn.prepare("SELECT id, path, language, mtime_ms, size_bytes, content_hash FROM files")?;
+    let mut stmt =
+        conn.prepare("SELECT id, path, language, mtime_ms, size_bytes, content_hash FROM files")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -270,12 +296,14 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
     }
 
     let mut symbols = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT id, file_id, name, qualified_name, kind, language,
                start_line, start_col, end_line, end_col,
                body_start_line, body_start_col, body_end_line, body_end_col
         FROM symbols
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -283,24 +311,35 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let name: String = row.get(2)?;
         let qualified_name: String = row.get(3)?;
         let kind_str: String = row.get(4)?;
-        
+
         let start_line: usize = row.get(6)?;
         let start_col: usize = row.get(7)?;
         let end_line: usize = row.get(8)?;
         let end_col: usize = row.get(9)?;
-        
+
         let body_start_line: Option<usize> = row.get(10)?;
         let body_start_col: Option<usize> = row.get(11)?;
         let body_end_line: Option<usize> = row.get(12)?;
         let body_end_col: Option<usize> = row.get(13)?;
 
-        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (body_start_line, body_start_col, body_end_line, body_end_col) {
-            Some(TextRange { start_line: sl, start_col: sc, end_line: el, end_col: ec })
+        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (body_start_line, body_start_col, body_end_line, body_end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
         } else {
             None
         };
 
-        let file_path = files.iter().find(|f| f.id == Some(FileId(file_id))).map(|f| f.path.clone()).unwrap_or_default();
+        let file_path = files
+            .iter()
+            .find(|f| f.id == Some(FileId(file_id)))
+            .map(|f| f.path.clone())
+            .unwrap_or_default();
 
         symbols.push(Symbol {
             id: Some(SymbolId(id)),
@@ -310,17 +349,24 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
             language: Language::Rust,
             file: file_path,
-            range: TextRange { start_line, start_col, end_line, end_col },
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
             body_range,
         });
     }
 
     let mut call_sites = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT id, file_id, from_symbol_id, raw_name,
                start_line, start_col, end_line, end_col
         FROM call_sites
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -332,7 +378,11 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let end_line: usize = row.get(6)?;
         let end_col: usize = row.get(7)?;
 
-        let file_path = files.iter().find(|f| f.id == Some(FileId(file_id))).map(|f| f.path.clone()).unwrap_or_default();
+        let file_path = files
+            .iter()
+            .find(|f| f.id == Some(FileId(file_id)))
+            .map(|f| f.path.clone())
+            .unwrap_or_default();
 
         call_sites.push(CallSite {
             id: Some(crate::model::CallId(id)),
@@ -341,15 +391,22 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             from_temp_index: None,
             raw_name,
             file: file_path,
-            range: TextRange { start_line, start_col, end_line, end_col },
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
         });
     }
 
     let mut edges = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence
         FROM call_edges
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let from_symbol_id: i64 = row.get(0)?;
@@ -358,7 +415,16 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let raw_name: String = row.get(3)?;
         let confidence_str: String = row.get(4)?;
 
-        let call_range = call_sites.iter().find(|cs| cs.id == Some(crate::model::CallId(call_site_id))).map(|cs| cs.range.clone()).unwrap_or(TextRange { start_line: 0, start_col: 0, end_line: 0, end_col: 0 });
+        let call_range = call_sites
+            .iter()
+            .find(|cs| cs.id == Some(crate::model::CallId(call_site_id)))
+            .map(|cs| cs.range.clone())
+            .unwrap_or(TextRange {
+                start_line: 0,
+                start_col: 0,
+                end_line: 0,
+                end_col: 0,
+            });
 
         edges.push(CallEdge {
             from: SymbolId(from_symbol_id),
@@ -366,7 +432,8 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             call_site_id: Some(crate::model::CallId(call_site_id)),
             raw_name,
             call_range,
-            confidence: ResolutionConfidence::from_str(&confidence_str).unwrap_or(ResolutionConfidence::Unresolved),
+            confidence: ResolutionConfidence::from_str(&confidence_str)
+                .unwrap_or(ResolutionConfidence::Unresolved),
         });
     }
 
@@ -392,7 +459,8 @@ pub fn rebuild_index_db(
 }
 
 fn load_symbol_by_id(conn: &rusqlite::Connection, id: SymbolId) -> Result<Symbol, CodeGraphError> {
-    conn.query_row("
+    conn.query_row(
+        "
         SELECT file_id, name, qualified_name, kind, language,
                start_line, start_col, end_line, end_col,
                body_start_line, body_start_col, body_end_line, body_end_col
@@ -403,19 +471,26 @@ fn load_symbol_by_id(conn: &rusqlite::Connection, id: SymbolId) -> Result<Symbol
             let name: String = row.get(1)?;
             let qualified_name: String = row.get(2)?;
             let kind_str: String = row.get(3)?;
-            
+
             let start_line: usize = row.get(5)?;
             let start_col: usize = row.get(6)?;
             let end_line: usize = row.get(7)?;
             let end_col: usize = row.get(8)?;
-            
+
             let body_start_line: Option<usize> = row.get(9)?;
             let body_start_col: Option<usize> = row.get(10)?;
             let body_end_line: Option<usize> = row.get(11)?;
             let body_end_col: Option<usize> = row.get(12)?;
 
-            let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (body_start_line, body_start_col, body_end_line, body_end_col) {
-                Some(TextRange { start_line: sl, start_col: sc, end_line: el, end_col: ec })
+            let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+                (body_start_line, body_start_col, body_end_line, body_end_col)
+            {
+                Some(TextRange {
+                    start_line: sl,
+                    start_col: sc,
+                    end_line: el,
+                    end_col: ec,
+                })
             } else {
                 None
             };
@@ -434,11 +509,17 @@ fn load_symbol_by_id(conn: &rusqlite::Connection, id: SymbolId) -> Result<Symbol
                 kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
                 language: Language::Rust,
                 file: PathBuf::from(file_path),
-                range: TextRange { start_line, start_col, end_line, end_col },
+                range: TextRange {
+                    start_line,
+                    start_col,
+                    end_line,
+                    end_col,
+                },
                 body_range,
             })
-        }
-    ).map_err(Into::into)
+        },
+    )
+    .map_err(Into::into)
 }
 
 pub fn find_symbols(
@@ -462,19 +543,26 @@ pub fn find_symbols(
             let name: String = row.get(2)?;
             let qualified_name: String = row.get(3)?;
             let kind_str: String = row.get(4)?;
-            
+
             let start_line: usize = row.get(6)?;
             let start_col: usize = row.get(7)?;
             let end_line: usize = row.get(8)?;
             let end_col: usize = row.get(9)?;
-            
+
             let body_start_line: Option<usize> = row.get(10)?;
             let body_start_col: Option<usize> = row.get(11)?;
             let body_end_line: Option<usize> = row.get(12)?;
             let body_end_col: Option<usize> = row.get(13)?;
 
-            let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (body_start_line, body_start_col, body_end_line, body_end_col) {
-                Some(TextRange { start_line: sl, start_col: sc, end_line: el, end_col: ec })
+            let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+                (body_start_line, body_start_col, body_end_line, body_end_col)
+            {
+                Some(TextRange {
+                    start_line: sl,
+                    start_col: sc,
+                    end_line: el,
+                    end_col: ec,
+                })
             } else {
                 None
             };
@@ -493,7 +581,12 @@ pub fn find_symbols(
                 kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
                 language: Language::Rust,
                 file: PathBuf::from(file_path),
-                range: TextRange { start_line, start_col, end_line, end_col },
+                range: TextRange {
+                    start_line,
+                    start_col,
+                    end_line,
+                    end_col,
+                },
                 body_range,
             });
         }
@@ -528,11 +621,13 @@ pub fn load_callees(
     symbol_id: SymbolId,
 ) -> Result<Vec<(CallEdge, Option<Symbol>)>, CodeGraphError> {
     let mut results = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT to_symbol_id, call_site_id, raw_name, confidence
         FROM call_edges
         WHERE from_symbol_id = ?1
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
         let to_symbol_id: Option<i64> = row.get(0)?;
@@ -546,8 +641,12 @@ pub fn load_callees(
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
 
-
-        let call_range = TextRange { start_line, start_col, end_line, end_col };
+        let call_range = TextRange {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        };
 
         let edge = CallEdge {
             from: symbol_id,
@@ -555,7 +654,8 @@ pub fn load_callees(
             call_site_id: Some(crate::model::CallId(call_site_id)),
             raw_name,
             call_range,
-            confidence: ResolutionConfidence::from_str(&confidence_str).unwrap_or(ResolutionConfidence::Unresolved),
+            confidence: ResolutionConfidence::from_str(&confidence_str)
+                .unwrap_or(ResolutionConfidence::Unresolved),
         };
 
         let target_symbol = if let Some(to_id) = to_symbol_id {
@@ -575,11 +675,13 @@ pub fn load_callers(
     symbol_id: SymbolId,
 ) -> Result<Vec<(CallEdge, Symbol)>, CodeGraphError> {
     let mut results = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT from_symbol_id, call_site_id, raw_name, confidence
         FROM call_edges
         WHERE to_symbol_id = ?1
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
         let from_symbol_id: i64 = row.get(0)?;
@@ -593,8 +695,12 @@ pub fn load_callers(
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
 
-
-        let call_range = TextRange { start_line, start_col, end_line, end_col };
+        let call_range = TextRange {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        };
 
         let edge = CallEdge {
             from: SymbolId(from_symbol_id),
@@ -602,7 +708,8 @@ pub fn load_callers(
             call_site_id: Some(crate::model::CallId(call_site_id)),
             raw_name,
             call_range,
-            confidence: ResolutionConfidence::from_str(&confidence_str).unwrap_or(ResolutionConfidence::Unresolved),
+            confidence: ResolutionConfidence::from_str(&confidence_str)
+                .unwrap_or(ResolutionConfidence::Unresolved),
         };
 
         let caller_symbol = load_symbol_by_id(conn, SymbolId(from_symbol_id))?;
@@ -617,7 +724,7 @@ pub fn load_symbols_for_file(
     path: &Path,
 ) -> Result<Vec<Symbol>, CodeGraphError> {
     let path_str = path.to_string_lossy().to_string();
-    
+
     let file_id_res: Result<i64, rusqlite::Error> = conn.query_row(
         "SELECT id FROM files WHERE path = ?1",
         rusqlite::params![path_str],
@@ -631,31 +738,40 @@ pub fn load_symbols_for_file(
     };
 
     let mut results = Vec::new();
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT id, name, qualified_name, kind, language,
                start_line, start_col, end_line, end_col,
                body_start_line, body_start_col, body_end_line, body_end_col
         FROM symbols WHERE file_id = ?1
-    ")?;
+    ",
+    )?;
     let mut rows = stmt.query(rusqlite::params![file_id])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let name: String = row.get(1)?;
         let qualified_name: String = row.get(2)?;
         let kind_str: String = row.get(3)?;
-        
+
         let start_line: usize = row.get(5)?;
         let start_col: usize = row.get(6)?;
         let end_line: usize = row.get(7)?;
         let end_col: usize = row.get(8)?;
-        
+
         let body_start_line: Option<usize> = row.get(9)?;
         let body_start_col: Option<usize> = row.get(10)?;
         let body_end_line: Option<usize> = row.get(11)?;
         let body_end_col: Option<usize> = row.get(12)?;
 
-        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (body_start_line, body_start_col, body_end_line, body_end_col) {
-            Some(TextRange { start_line: sl, start_col: sc, end_line: el, end_col: ec })
+        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (body_start_line, body_start_col, body_end_line, body_end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
         } else {
             None
         };
@@ -668,7 +784,12 @@ pub fn load_symbols_for_file(
             kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
             language: Language::Rust,
             file: path.to_path_buf(),
-            range: TextRange { start_line, start_col, end_line, end_col },
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
             body_range,
         });
     }
@@ -679,7 +800,7 @@ pub fn load_symbols_for_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallSite, CallEdge, CallId, Language, SymbolKind, TextRange};
+    use crate::model::{CallEdge, CallId, CallSite, Language, SymbolKind, TextRange};
     use std::path::PathBuf;
 
     #[test]
@@ -689,7 +810,9 @@ mod tests {
         init_schema(&conn).unwrap();
 
         let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )
             .unwrap();
         let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
         let mut tables = vec![];
@@ -729,7 +852,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 1, start_col: 1, end_line: 5, end_col: 1 },
+                    range: TextRange {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 5,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
                 Symbol {
@@ -740,7 +868,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 6, start_col: 1, end_line: 10, end_col: 1 },
+                    range: TextRange {
+                        start_line: 6,
+                        start_col: 1,
+                        end_line: 10,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
             ],
@@ -751,14 +884,24 @@ mod tests {
                 from_temp_index: Some(0),
                 raw_name: "load".to_string(),
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 10 },
+                range: TextRange {
+                    start_line: 3,
+                    start_col: 5,
+                    end_line: 3,
+                    end_col: 10,
+                },
             }],
             edges: vec![CallEdge {
                 from: SymbolId(0),
                 to: Some(SymbolId(1)),
                 call_site_id: Some(CallId(0)),
                 raw_name: "load".to_string(),
-                call_range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 10 },
+                call_range: TextRange {
+                    start_line: 3,
+                    start_col: 5,
+                    end_line: 3,
+                    end_col: 10,
+                },
                 confidence: ResolutionConfidence::NameOnly,
             }],
         };
@@ -804,19 +947,22 @@ mod tests {
                 size_bytes: Some(200),
                 content_hash: Some("hash1".to_string()),
             }],
-            symbols: vec![
-                Symbol {
-                    id: None,
-                    file_id: None,
-                    name: "run_pipeline".to_string(),
-                    qualified_name: "mod::run_pipeline".to_string(),
-                    kind: SymbolKind::Function,
-                    language: Language::Rust,
-                    file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 1, start_col: 1, end_line: 5, end_col: 1 },
-                    body_range: None,
+            symbols: vec![Symbol {
+                id: None,
+                file_id: None,
+                name: "run_pipeline".to_string(),
+                qualified_name: "mod::run_pipeline".to_string(),
+                kind: SymbolKind::Function,
+                language: Language::Rust,
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 5,
+                    end_col: 1,
                 },
-            ],
+                body_range: None,
+            }],
             call_sites: vec![],
             edges: vec![],
         };
@@ -862,7 +1008,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 1, start_col: 1, end_line: 5, end_col: 1 },
+                    range: TextRange {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 5,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
                 Symbol {
@@ -873,7 +1024,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 6, start_col: 1, end_line: 10, end_col: 1 },
+                    range: TextRange {
+                        start_line: 6,
+                        start_col: 1,
+                        end_line: 10,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
                 Symbol {
@@ -884,7 +1040,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 11, start_col: 1, end_line: 15, end_col: 1 },
+                    range: TextRange {
+                        start_line: 11,
+                        start_col: 1,
+                        end_line: 15,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
                 Symbol {
@@ -895,7 +1056,12 @@ mod tests {
                     kind: SymbolKind::Test,
                     language: Language::Rust,
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 16, start_col: 1, end_line: 20, end_col: 1 },
+                    range: TextRange {
+                        start_line: 16,
+                        start_col: 1,
+                        end_line: 20,
+                        end_col: 1,
+                    },
                     body_range: None,
                 },
             ],
@@ -907,7 +1073,12 @@ mod tests {
                     from_temp_index: Some(0),
                     raw_name: "load".to_string(),
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 10 },
+                    range: TextRange {
+                        start_line: 3,
+                        start_col: 5,
+                        end_line: 3,
+                        end_col: 10,
+                    },
                 },
                 CallSite {
                     id: None,
@@ -916,7 +1087,12 @@ mod tests {
                     from_temp_index: Some(0),
                     raw_name: "process".to_string(),
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 4, start_col: 5, end_line: 4, end_col: 15 },
+                    range: TextRange {
+                        start_line: 4,
+                        start_col: 5,
+                        end_line: 4,
+                        end_col: 15,
+                    },
                 },
                 CallSite {
                     id: None,
@@ -925,7 +1101,12 @@ mod tests {
                     from_temp_index: Some(3),
                     raw_name: "load".to_string(),
                     file: PathBuf::from("src/lib.rs"),
-                    range: TextRange { start_line: 18, start_col: 5, end_line: 18, end_col: 10 },
+                    range: TextRange {
+                        start_line: 18,
+                        start_col: 5,
+                        end_line: 18,
+                        end_col: 10,
+                    },
                 },
             ],
             edges: vec![
@@ -934,7 +1115,12 @@ mod tests {
                     to: Some(SymbolId(1)),
                     call_site_id: Some(CallId(0)),
                     raw_name: "load".to_string(),
-                    call_range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 10 },
+                    call_range: TextRange {
+                        start_line: 3,
+                        start_col: 5,
+                        end_line: 3,
+                        end_col: 10,
+                    },
                     confidence: ResolutionConfidence::NameOnly,
                 },
                 CallEdge {
@@ -942,7 +1128,12 @@ mod tests {
                     to: Some(SymbolId(2)),
                     call_site_id: Some(CallId(1)),
                     raw_name: "process".to_string(),
-                    call_range: TextRange { start_line: 4, start_col: 5, end_line: 4, end_col: 15 },
+                    call_range: TextRange {
+                        start_line: 4,
+                        start_col: 5,
+                        end_line: 4,
+                        end_col: 15,
+                    },
                     confidence: ResolutionConfidence::NameOnly,
                 },
                 CallEdge {
@@ -950,7 +1141,12 @@ mod tests {
                     to: Some(SymbolId(1)),
                     call_site_id: Some(CallId(2)),
                     raw_name: "load".to_string(),
-                    call_range: TextRange { start_line: 18, start_col: 5, end_line: 18, end_col: 10 },
+                    call_range: TextRange {
+                        start_line: 18,
+                        start_col: 5,
+                        end_line: 18,
+                        end_col: 10,
+                    },
                     confidence: ResolutionConfidence::NameOnly,
                 },
             ],
@@ -958,13 +1154,28 @@ mod tests {
         save_index(&mut conn, &mut index).unwrap();
 
         let loaded = load_index(&conn, dir.path()).unwrap();
-        let run_pipeline_id = loaded.symbols.iter().find(|s| s.name == "run_pipeline").unwrap().id.unwrap();
-        let load_id = loaded.symbols.iter().find(|s| s.name == "load").unwrap().id.unwrap();
+        let run_pipeline_id = loaded
+            .symbols
+            .iter()
+            .find(|s| s.name == "run_pipeline")
+            .unwrap()
+            .id
+            .unwrap();
+        let load_id = loaded
+            .symbols
+            .iter()
+            .find(|s| s.name == "load")
+            .unwrap()
+            .id
+            .unwrap();
 
         // 5.5 Load callees: run_pipeline -> load and process
         let callees = load_callees(&conn, run_pipeline_id).unwrap();
         assert_eq!(callees.len(), 2);
-        let callee_names: Vec<String> = callees.into_iter().map(|(_, opt_s)| opt_s.unwrap().name).collect();
+        let callee_names: Vec<String> = callees
+            .into_iter()
+            .map(|(_, opt_s)| opt_s.unwrap().name)
+            .collect();
         assert!(callee_names.contains(&"load".to_string()));
         assert!(callee_names.contains(&"process".to_string()));
 
@@ -976,4 +1187,3 @@ mod tests {
         assert!(caller_names.contains(&"test_run_pipeline".to_string()));
     }
 }
-

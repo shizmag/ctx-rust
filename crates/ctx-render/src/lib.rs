@@ -163,7 +163,8 @@ fn render_markdown(result: &ScanResult, options: &RenderOptions) -> Result<Strin
         ));
         out.push_str(&format!("- **Tests**: {}\n", result.summary.tests));
         if result.summary.coverable_lines > 0 {
-            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64)
+                * 100.0;
             out.push_str(&format!("- **Coverage**: {:.1}%\n", cov));
         }
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
@@ -228,7 +229,8 @@ fn render_xml(result: &ScanResult, options: &RenderOptions) -> Result<String, st
         out.push_str(&format!("    <bytes>{}</bytes>\n", result.summary.bytes));
         out.push_str(&format!("    <tests>{}</tests>\n", result.summary.tests));
         if result.summary.coverable_lines > 0 {
-            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64)
+                * 100.0;
             out.push_str(&format!("    <coverage_pct>{:.1}</coverage_pct>\n", cov));
         }
         if result.summary.hidden_files > 0 || result.summary.hidden_dirs > 0 {
@@ -302,7 +304,8 @@ fn render_plain(result: &ScanResult, options: &RenderOptions) -> Result<String, 
         ));
         out.push_str(&format!("Tests: {}\n", result.summary.tests));
         if result.summary.coverable_lines > 0 {
-            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+            let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64)
+                * 100.0;
             out.push_str(&format!("Coverage: {:.1}%\n", cov));
         }
         out.push('\n');
@@ -398,7 +401,8 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                 dir_parts.push(format!("{} tests", node.stats.tests));
             }
             if node.stats.coverable_lines > 0 {
-                let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                let cov =
+                    (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
                 dir_parts.push(format!("{:.1}% cov", cov));
             }
 
@@ -440,7 +444,9 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                         dir_parts.push(format!("{} tests", node.stats.tests));
                     }
                     if node.stats.coverable_lines > 0 {
-                        let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                        let cov = (node.stats.covered_lines as f64
+                            / node.stats.coverable_lines as f64)
+                            * 100.0;
                         dir_parts.push(format!("{:.1}% cov", cov));
                     }
 
@@ -486,7 +492,9 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
                         stats_parts.push(format!("{} tests", node.stats.tests));
                     }
                     if node.stats.coverable_lines > 0 {
-                        let cov = (node.stats.covered_lines as f64 / node.stats.coverable_lines as f64) * 100.0;
+                        let cov = (node.stats.covered_lines as f64
+                            / node.stats.coverable_lines as f64)
+                            * 100.0;
                         stats_parts.push(format!("{:.1}% cov", cov));
                     }
 
@@ -527,7 +535,8 @@ pub fn render_colored_tree(result: &ScanResult) -> Result<String, std::io::Error
     let size_str = format_bytes(result.summary.bytes);
     let tests_str = format!("{} tests", result.summary.tests);
     let cov_str = if result.summary.coverable_lines > 0 {
-        let cov = (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
+        let cov =
+            (result.summary.covered_lines as f64 / result.summary.coverable_lines as f64) * 100.0;
         format!("{:.1}%", cov)
     } else {
         "N/A".to_string()

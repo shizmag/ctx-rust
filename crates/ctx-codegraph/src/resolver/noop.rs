@@ -1,4 +1,4 @@
-use crate::model::{Symbol, SymbolKind, ResolutionConfidence};
+use crate::model::{ResolutionConfidence, Symbol, SymbolKind};
 
 pub fn parse_raw_name(raw_name: &str) -> &str {
     if let Some(idx) = raw_name.rfind("::") {
@@ -10,7 +10,10 @@ pub fn parse_raw_name(raw_name: &str) -> &str {
     }
 }
 
-pub fn resolve_name_only(raw_name: &str, symbols: &[Symbol]) -> (Option<usize>, ResolutionConfidence) {
+pub fn resolve_name_only(
+    raw_name: &str,
+    symbols: &[Symbol],
+) -> (Option<usize>, ResolutionConfidence) {
     let target_name = parse_raw_name(raw_name);
     let is_method_call = raw_name.contains('.') && !raw_name.contains("::");
 
@@ -24,7 +27,9 @@ pub fn resolve_name_only(raw_name: &str, symbols: &[Symbol]) -> (Option<usize>, 
             if is_method_call {
                 sym.kind == SymbolKind::Method
             } else {
-                sym.kind == SymbolKind::Function || sym.kind == SymbolKind::Method || sym.kind == SymbolKind::Test
+                sym.kind == SymbolKind::Function
+                    || sym.kind == SymbolKind::Method
+                    || sym.kind == SymbolKind::Test
             }
         })
         .map(|(i, _)| i)
@@ -118,13 +123,10 @@ mod tests {
 
     #[test]
     fn test_unresolved_symbol() {
-        let symbols = vec![
-            make_test_symbol("load", SymbolKind::Function),
-        ];
+        let symbols = vec![make_test_symbol("load", SymbolKind::Function)];
 
         let (res_idx, res_conf) = resolve_name_only("missing", &symbols);
         assert_eq!(res_idx, None);
         assert_eq!(res_conf, ResolutionConfidence::Unresolved);
     }
 }
-

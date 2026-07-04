@@ -1,16 +1,14 @@
-use std::path::Path;
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use sha2::{Sha256, Digest};
+use std::path::Path;
 use walkdir::WalkDir;
 
-use crate::model::{
-    CodeIndex, SourceFile, CallEdge, SymbolId, Language, SymbolKind
-};
 use crate::error::CodeGraphError;
 use crate::languages::rust::parse_rust_file;
-use crate::resolver::rust_analyzer_lsp::{LspClient, resolve_via_lsp};
+use crate::model::{CallEdge, CodeIndex, Language, SourceFile, SymbolId, SymbolKind};
 use crate::resolver::noop::resolve_name_only;
+use crate::resolver::rust_analyzer_lsp::{LspClient, resolve_via_lsp};
 
 #[derive(Debug, Clone)]
 pub struct BuildIndexOptions {
@@ -35,7 +33,9 @@ fn compute_file_hash(path: &Path) -> Option<String> {
     let mut buffer = [0; 4096];
     loop {
         let n = file.read(&mut buffer).ok()?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buffer[..n]);
     }
     Some(format!("{:x}", hasher.finalize()))
@@ -161,13 +161,39 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
         match LspClient::new(root) {
             Ok(client) => Some(client),
             Err(err) => {
-                eprintln!("Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.", err);
+                eprintln!(
+                    "Warning: Failed to start rust-analyzer LSP: {}. Falling back to name-only resolution.",
+                    err
+                );
                 None
             }
         }
     } else {
         None
     };
+
+    if let Some(ref mut client) = lsp_client {
+        if let Some(first_cs) = global_call_sites.first() {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(15);
+            let delay = std::time::Duration::from_millis(200);
+
+            while start.elapsed() < timeout {
+                let res = resolve_via_lsp(client, first_cs, &global_symbols);
+                match res {
+                    Err(err) if err.contains("-32603") || err.contains("file not found") => {
+                        std::thread::sleep(delay);
+                    }
+                    Ok(None) if start.elapsed() < std::time::Duration::from_millis(1500) => {
+                        std::thread::sleep(delay);
+                    }
+                    _ => {
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     for (call_site_idx, cs) in global_call_sites.iter().enumerate() {
         let from_id = match cs.from {
@@ -186,7 +212,10 @@ pub fn build_index(root: &Path, options: BuildIndexOptions) -> Result<CodeIndex,
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    eprintln!("LSP resolution warning for call to {}: {}", cs.raw_name, err);
+                    eprintln!(
+                        "LSP resolution warning for call to {}: {}",
+                        cs.raw_name, err
+                    );
                 }
             }
         }

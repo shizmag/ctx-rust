@@ -112,7 +112,11 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
             }
 
             NodeKind::File => {
-                let file_stats = ctx_stats::collect_file_stats(entry_path, options.max_file_size, Some(&test_ctx))?;
+                let file_stats = ctx_stats::collect_file_stats(
+                    entry_path,
+                    options.max_file_size,
+                    Some(&test_ctx),
+                )?;
 
                 let stats = NodeStats {
                     files: 1,

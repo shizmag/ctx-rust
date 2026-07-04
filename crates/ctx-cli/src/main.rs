@@ -1,9 +1,9 @@
 use clap::Parser;
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::collections::HashSet;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
@@ -279,7 +279,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         GraphSubcommand::Symbols => {
             let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
             let index = ctx_codegraph::load_index(&conn, &graph_args.path)?;
-            
+
             let mut grouped: HashMap<PathBuf, Vec<ctx_codegraph::Symbol>> = HashMap::new();
             for sym in index.symbols {
                 grouped.entry(sym.file.clone()).or_default().push(sym);
@@ -324,8 +324,14 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             } else {
                 for (edge, target) in callees {
                     match target {
-                        Some(t) => println!("  - {} -> {} ({:?})", edge.raw_name, t.qualified_name, edge.confidence),
-                        None => println!("  - {} -> [Unresolved] ({:?})", edge.raw_name, edge.confidence),
+                        Some(t) => println!(
+                            "  - {} -> {} ({:?})",
+                            edge.raw_name, t.qualified_name, edge.confidence
+                        ),
+                        None => println!(
+                            "  - {} -> [Unresolved] ({:?})",
+                            edge.raw_name, edge.confidence
+                        ),
                     }
                 }
             }
@@ -354,7 +360,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 for (edge, caller) in callers {
                     println!(
                         "  - {} via `{}` at L{}:{} ({:?})",
-                        caller.qualified_name, edge.raw_name, edge.call_range.start_line, edge.call_range.start_col, edge.confidence
+                        caller.qualified_name,
+                        edge.raw_name,
+                        edge.call_range.start_line,
+                        edge.call_range.start_col,
+                        edge.confidence
                     );
                 }
             }
@@ -450,7 +460,10 @@ fn print_slice_tree_helper(
                     visited.remove(&to_id);
                 } else {
                     if let Some(target_sym) = index.symbols.iter().find(|s| s.id == Some(to_id)) {
-                        println!("{}  └─ {} (already visited)", indent, target_sym.qualified_name);
+                        println!(
+                            "{}  └─ {} (already visited)",
+                            indent, target_sym.qualified_name
+                        );
                     }
                 }
             }

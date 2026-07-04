@@ -36,7 +36,9 @@ impl TestContext {
         } else {
             file_path.to_path_buf()
         };
-        self.coverage.get(&path).map(|fc| (fc.covered, fc.coverable))
+        self.coverage
+            .get(&path)
+            .map(|fc| (fc.covered, fc.coverable))
     }
 
     pub fn get_file_line_coverage(&self, file_path: &Path) -> Option<HashMap<usize, usize>> {
@@ -117,10 +119,7 @@ pub fn parse_coverage_file(
     }
 }
 
-fn parse_lcov(
-    path: &Path,
-    root: &Path,
-) -> Result<HashMap<PathBuf, FileCoverage>, std::io::Error> {
+fn parse_lcov(path: &Path, root: &Path) -> Result<HashMap<PathBuf, FileCoverage>, std::io::Error> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
@@ -211,10 +210,9 @@ fn parse_cobertura(
                     extract_attribute(trimmed, "number"),
                     extract_attribute(trimmed, "hits"),
                 ) {
-                    if let (Ok(line_num), Ok(hits)) = (
-                        num_str.parse::<usize>(),
-                        hits_str.parse::<usize>(),
-                    ) {
+                    if let (Ok(line_num), Ok(hits)) =
+                        (num_str.parse::<usize>(), hits_str.parse::<usize>())
+                    {
                         line_hits.insert(line_num, hits);
                     }
                 }

@@ -1,6 +1,6 @@
+use ctx_codegraph::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use ctx_codegraph::*;
 
 #[test]
 fn test_parse_rust_code() {
@@ -38,7 +38,15 @@ fn test_parse_rust_code() {
     assert_eq!(new_method.qualified_name, "MyStruct::new");
 
     let load_call = call_sites.iter().find(|c| c.raw_name == "load").unwrap();
-    assert_eq!(load_call.from_temp_index, Some(symbols.iter().position(|s| s.name == "run_pipeline").unwrap()));
+    assert_eq!(
+        load_call.from_temp_index,
+        Some(
+            symbols
+                .iter()
+                .position(|s| s.name == "run_pipeline")
+                .unwrap()
+        )
+    );
 }
 
 #[test]
@@ -52,7 +60,12 @@ fn test_name_only_resolution_and_ambiguity() {
             kind: SymbolKind::Function,
             language: Language::Rust,
             file: PathBuf::from("src/lib.rs"),
-            range: TextRange { start_line: 1, start_col: 1, end_line: 5, end_col: 1 },
+            range: TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
             body_range: None,
         },
         Symbol {
@@ -63,7 +76,12 @@ fn test_name_only_resolution_and_ambiguity() {
             kind: SymbolKind::Function,
             language: Language::Rust,
             file: PathBuf::from("src/lib.rs"),
-            range: TextRange { start_line: 6, start_col: 1, end_line: 10, end_col: 1 },
+            range: TextRange {
+                start_line: 6,
+                start_col: 1,
+                end_line: 10,
+                end_col: 1,
+            },
             body_range: None,
         },
         Symbol {
@@ -74,7 +92,12 @@ fn test_name_only_resolution_and_ambiguity() {
             kind: SymbolKind::Function,
             language: Language::Rust,
             file: PathBuf::from("src/lib.rs"),
-            range: TextRange { start_line: 11, start_col: 1, end_line: 15, end_col: 1 },
+            range: TextRange {
+                start_line: 11,
+                start_col: 1,
+                end_line: 15,
+                end_col: 1,
+            },
             body_range: None,
         },
     ];
@@ -119,7 +142,12 @@ fn test_sqlite_and_find_symbols() {
                 kind: SymbolKind::Function,
                 language: Language::Rust,
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 1, start_col: 1, end_line: 5, end_col: 1 },
+                range: TextRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 5,
+                    end_col: 1,
+                },
                 body_range: None,
             },
             Symbol {
@@ -130,7 +158,12 @@ fn test_sqlite_and_find_symbols() {
                 kind: SymbolKind::Function,
                 language: Language::Rust,
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 6, start_col: 1, end_line: 10, end_col: 1 },
+                range: TextRange {
+                    start_line: 6,
+                    start_col: 1,
+                    end_line: 10,
+                    end_col: 1,
+                },
                 body_range: None,
             },
         ],
@@ -141,14 +174,24 @@ fn test_sqlite_and_find_symbols() {
             from_temp_index: Some(0),
             raw_name: "bar_func".to_string(),
             file: PathBuf::from("src/lib.rs"),
-            range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 15 },
+            range: TextRange {
+                start_line: 3,
+                start_col: 5,
+                end_line: 3,
+                end_col: 15,
+            },
         }],
         edges: vec![CallEdge {
             from: SymbolId(0),
             to: Some(SymbolId(1)),
             call_site_id: Some(CallId(0)),
             raw_name: "bar_func".to_string(),
-            call_range: TextRange { start_line: 3, start_col: 5, end_line: 3, end_col: 15 },
+            call_range: TextRange {
+                start_line: 3,
+                start_col: 5,
+                end_line: 3,
+                end_col: 15,
+            },
             confidence: ResolutionConfidence::NameOnly,
         }],
     };
@@ -191,7 +234,12 @@ fn test_slices() {
                 kind: SymbolKind::Function,
                 language: Language::Rust,
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 1, start_col: 1, end_line: 2, end_col: 1 },
+                range: TextRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 2,
+                    end_col: 1,
+                },
                 body_range: None,
             },
             Symbol {
@@ -202,7 +250,12 @@ fn test_slices() {
                 kind: SymbolKind::Function,
                 language: Language::Rust,
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 3, start_col: 1, end_line: 4, end_col: 1 },
+                range: TextRange {
+                    start_line: 3,
+                    start_col: 1,
+                    end_line: 4,
+                    end_col: 1,
+                },
                 body_range: None,
             },
             Symbol {
@@ -213,7 +266,12 @@ fn test_slices() {
                 kind: SymbolKind::Function,
                 language: Language::Rust,
                 file: PathBuf::from("src/lib.rs"),
-                range: TextRange { start_line: 5, start_col: 1, end_line: 6, end_col: 1 },
+                range: TextRange {
+                    start_line: 5,
+                    start_col: 1,
+                    end_line: 6,
+                    end_col: 1,
+                },
                 body_range: None,
             },
         ],
@@ -224,7 +282,12 @@ fn test_slices() {
                 to: Some(SymbolId(1)),
                 call_site_id: None,
                 raw_name: "b".to_string(),
-                call_range: TextRange { start_line: 1, start_col: 1, end_line: 1, end_col: 1 },
+                call_range: TextRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                },
                 confidence: ResolutionConfidence::NameOnly,
             },
             CallEdge {
@@ -232,16 +295,35 @@ fn test_slices() {
                 to: Some(SymbolId(2)),
                 call_site_id: None,
                 raw_name: "c".to_string(),
-                call_range: TextRange { start_line: 3, start_col: 1, end_line: 3, end_col: 1 },
+                call_range: TextRange {
+                    start_line: 3,
+                    start_col: 1,
+                    end_line: 3,
+                    end_col: 1,
+                },
                 confidence: ResolutionConfidence::NameOnly,
             },
         ],
     };
 
-    let f_slice = forward_slice(&index, SymbolId(0), SliceOptions { max_depth: 5, include_tests: true });
+    let f_slice = forward_slice(
+        &index,
+        SymbolId(0),
+        SliceOptions {
+            max_depth: 5,
+            include_tests: true,
+        },
+    );
     assert_eq!(f_slice, vec![SymbolId(0), SymbolId(1), SymbolId(2)]);
 
-    let r_slice = reverse_slice(&index, SymbolId(2), SliceOptions { max_depth: 5, include_tests: true });
+    let r_slice = reverse_slice(
+        &index,
+        SymbolId(2),
+        SliceOptions {
+            max_depth: 5,
+            include_tests: true,
+        },
+    );
     assert_eq!(r_slice, vec![SymbolId(2), SymbolId(1), SymbolId(0)]);
 }
 
@@ -275,16 +357,37 @@ fn test_integration_mini_project() {
             max_depth: None,
             include_tests: true,
         },
-    ).unwrap();
+    )
+    .unwrap();
 
-    let run_pipeline_sym = index.symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
+    let run_pipeline_sym = index
+        .symbols
+        .iter()
+        .find(|s| s.name == "run_pipeline")
+        .unwrap();
     let run_pipeline_id = run_pipeline_sym.id.unwrap();
 
-    let f_slice = forward_slice(&index, run_pipeline_id, SliceOptions { max_depth: 10, include_tests: true });
-    
-    let names: Vec<String> = f_slice.iter().map(|id| {
-        index.symbols.iter().find(|s| s.id == Some(*id)).unwrap().name.clone()
-    }).collect();
+    let f_slice = forward_slice(
+        &index,
+        run_pipeline_id,
+        SliceOptions {
+            max_depth: 10,
+            include_tests: true,
+        },
+    );
+
+    let names: Vec<String> = f_slice
+        .iter()
+        .map(|id| {
+            index
+                .symbols
+                .iter()
+                .find(|s| s.id == Some(*id))
+                .unwrap()
+                .name
+                .clone()
+        })
+        .collect();
 
     assert!(names.contains(&"run_pipeline".to_string()));
     assert!(names.contains(&"load".to_string()));
@@ -294,16 +397,85 @@ fn test_integration_mini_project() {
     let conn = storage::open_db(dir.path()).unwrap();
     let loaded_index = storage::load_index(&conn, dir.path()).unwrap();
 
-    let run_pipeline_sym_loaded = loaded_index.symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
+    let run_pipeline_sym_loaded = loaded_index
+        .symbols
+        .iter()
+        .find(|s| s.name == "run_pipeline")
+        .unwrap();
     let run_pipeline_id_loaded = run_pipeline_sym_loaded.id.unwrap();
 
-    let f_slice_loaded = forward_slice(&loaded_index, run_pipeline_id_loaded, SliceOptions { max_depth: 10, include_tests: true });
-    let names_loaded: Vec<String> = f_slice_loaded.iter().map(|id| {
-        loaded_index.symbols.iter().find(|s| s.id == Some(*id)).unwrap().name.clone()
-    }).collect();
+    let f_slice_loaded = forward_slice(
+        &loaded_index,
+        run_pipeline_id_loaded,
+        SliceOptions {
+            max_depth: 10,
+            include_tests: true,
+        },
+    );
+    let names_loaded: Vec<String> = f_slice_loaded
+        .iter()
+        .map(|id| {
+            loaded_index
+                .symbols
+                .iter()
+                .find(|s| s.id == Some(*id))
+                .unwrap()
+                .name
+                .clone()
+        })
+        .collect();
 
     assert!(names_loaded.contains(&"run_pipeline".to_string()));
     assert!(names_loaded.contains(&"load".to_string()));
     assert!(names_loaded.contains(&"process".to_string()));
     assert!(names_loaded.contains(&"save".to_string()));
+}
+
+#[test]
+fn test_integration_with_rust_analyzer() {
+    if std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+
+    let cargo_toml = r#"
+        [package]
+        name = "test-project"
+        version = "0.1.0"
+        edition = "2021"
+    "#;
+    fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let file_path = src_dir.join("lib.rs");
+    let code = r#"
+        pub fn run_pipeline() {
+            load();
+        }
+
+        pub fn load() {}
+    "#;
+    fs::write(&file_path, code).unwrap();
+
+    let index = rebuild_index_db(
+        dir.path(),
+        BuildIndexOptions {
+            use_rust_analyzer: true,
+            max_depth: None,
+            include_tests: true,
+        },
+    )
+    .unwrap();
+
+    let load_edge = index.edges.iter().find(|e| e.raw_name == "load").unwrap();
+    assert_eq!(load_edge.confidence, ResolutionConfidence::Exact);
 }

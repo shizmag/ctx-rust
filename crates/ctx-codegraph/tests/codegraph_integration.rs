@@ -1,8 +1,8 @@
-use std::fs;
 use ctx_codegraph::{
-    build_index, rebuild_index_db, load_index, find_symbols, open_db, forward_slice,
-    BuildIndexOptions, SliceOptions, SymbolKind
+    BuildIndexOptions, SliceOptions, SymbolKind, build_index, find_symbols, forward_slice,
+    load_index, open_db, rebuild_index_db,
 };
+use std::fs;
 
 #[test]
 fn test_integration_builds_simple_project_index_and_slice() {
@@ -50,9 +50,14 @@ fn test_integration_builds_simple_project_index_and_slice() {
             max_depth: None,
             include_tests: true,
         },
-    ).unwrap();
+    )
+    .unwrap();
 
-    let run_pipeline = index.symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
+    let run_pipeline = index
+        .symbols
+        .iter()
+        .find(|s| s.name == "run_pipeline")
+        .unwrap();
     let load = index.symbols.iter().find(|s| s.name == "load").unwrap();
     let process = index.symbols.iter().find(|s| s.name == "process").unwrap();
     let save = index.symbols.iter().find(|s| s.name == "save").unwrap();
@@ -63,21 +68,41 @@ fn test_integration_builds_simple_project_index_and_slice() {
     assert_eq!(save.kind, SymbolKind::Function);
 
     // Assert edges
-    let e_run_load = index.edges.iter().find(|e| e.from == run_pipeline.id.unwrap() && e.to == Some(load.id.unwrap()));
-    let e_run_proc = index.edges.iter().find(|e| e.from == run_pipeline.id.unwrap() && e.to == Some(process.id.unwrap()));
-    let e_proc_save = index.edges.iter().find(|e| e.from == process.id.unwrap() && e.to == Some(save.id.unwrap()));
+    let e_run_load = index
+        .edges
+        .iter()
+        .find(|e| e.from == run_pipeline.id.unwrap() && e.to == Some(load.id.unwrap()));
+    let e_run_proc = index
+        .edges
+        .iter()
+        .find(|e| e.from == run_pipeline.id.unwrap() && e.to == Some(process.id.unwrap()));
+    let e_proc_save = index
+        .edges
+        .iter()
+        .find(|e| e.from == process.id.unwrap() && e.to == Some(save.id.unwrap()));
 
     assert!(e_run_load.is_some());
     assert!(e_run_proc.is_some());
     assert!(e_proc_save.is_some());
 
     // 6.2 Forward slice from entrypoint
-    let f_slice = forward_slice(&index, run_pipeline.id.unwrap(), SliceOptions { max_depth: 10, include_tests: true });
+    let f_slice = forward_slice(
+        &index,
+        run_pipeline.id.unwrap(),
+        SliceOptions {
+            max_depth: 10,
+            include_tests: true,
+        },
+    );
     assert!(f_slice.contains(&load.id.unwrap()));
     assert!(f_slice.contains(&process.id.unwrap()));
     assert!(f_slice.contains(&save.id.unwrap()));
 
-    let unrelated = index.symbols.iter().find(|s| s.name == "unrelated").unwrap();
+    let unrelated = index
+        .symbols
+        .iter()
+        .find(|s| s.name == "unrelated")
+        .unwrap();
     assert!(!f_slice.contains(&unrelated.id.unwrap()));
 }
 
@@ -113,7 +138,8 @@ fn test_integration_rebuild_sqlite_database() {
             max_depth: None,
             include_tests: true,
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
     assert!(db_path.exists());
@@ -121,7 +147,11 @@ fn test_integration_rebuild_sqlite_database() {
     let conn = open_db(root).unwrap();
     let loaded = load_index(&conn, root).unwrap();
 
-    let rp_loaded = loaded.symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
+    let rp_loaded = loaded
+        .symbols
+        .iter()
+        .find(|s| s.name == "run_pipeline")
+        .unwrap();
     assert_eq!(rp_loaded.qualified_name, "lib::run_pipeline");
 
     let found = find_symbols(&conn, "run_pipeline").unwrap();
@@ -150,12 +180,20 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
     // Create target/debug/generated.rs
     let target_dir = root.join("target/debug");
     fs::create_dir_all(&target_dir).unwrap();
-    fs::write(target_dir.join("generated.rs"), "pub fn target_function() {}").unwrap();
+    fs::write(
+        target_dir.join("generated.rs"),
+        "pub fn target_function() {}",
+    )
+    .unwrap();
 
     // Create .ctx-codegraph/generated.rs
     let cg_dir = root.join(".ctx-codegraph");
     fs::create_dir_all(&cg_dir).unwrap();
-    fs::write(cg_dir.join("generated.rs"), "pub fn codegraph_function() {}").unwrap();
+    fs::write(
+        cg_dir.join("generated.rs"),
+        "pub fn codegraph_function() {}",
+    )
+    .unwrap();
 
     // Rebuild index
     let index = rebuild_index_db(
@@ -165,7 +203,8 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
             max_depth: None,
             include_tests: true,
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let valid_exists = index.symbols.iter().any(|s| s.name == "valid_function");
     let target_exists = index.symbols.iter().any(|s| s.name == "target_function");

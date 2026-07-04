@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use crate::model::{Symbol, CallSite, TextRange, Language, SymbolKind};
 use crate::error::CodeGraphError;
-use tree_sitter::{Parser, Node};
+use crate::model::{CallSite, Language, Symbol, SymbolKind, TextRange};
+use std::path::{Path, PathBuf};
+use tree_sitter::{Node, Parser};
 
 struct ParserState<'a> {
     source: &'a [u8],
@@ -35,7 +35,13 @@ fn clean_type_name(s: &str) -> String {
 }
 
 impl<'a> ParserState<'a> {
-    fn visit(&mut self, node: Node, current_impl: Option<String>, current_function_idx: Option<usize>, current_modules: Option<String>) {
+    fn visit(
+        &mut self,
+        node: Node,
+        current_impl: Option<String>,
+        current_function_idx: Option<usize>,
+        current_modules: Option<String>,
+    ) {
         let kind = node.kind();
         let mut next_impl = current_impl.clone();
         let mut next_function_idx = current_function_idx;
@@ -45,7 +51,7 @@ impl<'a> ParserState<'a> {
             "impl_item" => {
                 let type_node = node.child_by_field_name("type");
                 let trait_node = node.child_by_field_name("trait");
-                
+
                 let impl_name = if let Some(t) = type_node {
                     let type_text = clean_type_name(get_node_text(t, self.source));
                     if let Some(tr) = trait_node {
@@ -172,7 +178,7 @@ impl<'a> ParserState<'a> {
             "function_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = get_node_text(name_node, self.source).to_string();
-                    
+
                     let mut is_test = false;
                     let mut prev = node.prev_sibling();
                     while let Some(p) = prev {
@@ -211,7 +217,9 @@ impl<'a> ParserState<'a> {
                     };
 
                     let range = to_text_range(node.range());
-                    let body_range = node.child_by_field_name("body").map(|b| to_text_range(b.range()));
+                    let body_range = node
+                        .child_by_field_name("body")
+                        .map(|b| to_text_range(b.range()));
 
                     let symbol = Symbol {
                         id: None,
@@ -252,7 +260,12 @@ impl<'a> ParserState<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.visit(child, next_impl.clone(), next_function_idx, next_modules.clone());
+            self.visit(
+                child,
+                next_impl.clone(),
+                next_function_idx,
+                next_modules.clone(),
+            );
         }
     }
 }
@@ -264,11 +277,11 @@ pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), Code
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-    
+
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", path.display())))?;
-    
+
     let file_stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -340,7 +353,10 @@ mod tests {
 
         let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let pipeline = symbols.iter().find(|s| s.name == "Pipeline" && s.kind == SymbolKind::Struct).unwrap();
+        let pipeline = symbols
+            .iter()
+            .find(|s| s.name == "Pipeline" && s.kind == SymbolKind::Struct)
+            .unwrap();
         let new_method = symbols.iter().find(|s| s.name == "new").unwrap();
         let run_method = symbols.iter().find(|s| s.name == "run").unwrap();
         let load_method = symbols.iter().find(|s| s.name == "load").unwrap();
@@ -374,8 +390,14 @@ mod tests {
 
         let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let runner = symbols.iter().find(|s| s.name == "Runner" && s.kind == SymbolKind::Trait).unwrap();
-        let run_impl = symbols.iter().find(|s| s.name == "run" && s.kind == SymbolKind::Method).unwrap();
+        let runner = symbols
+            .iter()
+            .find(|s| s.name == "Runner" && s.kind == SymbolKind::Trait)
+            .unwrap();
+        let run_impl = symbols
+            .iter()
+            .find(|s| s.name == "run" && s.kind == SymbolKind::Method)
+            .unwrap();
 
         assert_eq!(runner.kind, SymbolKind::Trait);
         assert!(run_impl.qualified_name.contains("Job"));
@@ -398,7 +420,10 @@ mod tests {
 
         let (symbols, _call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let test_run = symbols.iter().find(|s| s.name == "test_run_pipeline").unwrap();
+        let test_run = symbols
+            .iter()
+            .find(|s| s.name == "test_run_pipeline")
+            .unwrap();
         let helper = symbols.iter().find(|s| s.name == "helper").unwrap();
 
         assert_eq!(test_run.kind, SymbolKind::Test);
@@ -419,7 +444,10 @@ mod tests {
 
         let (symbols, call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let run_pipeline_idx = symbols.iter().position(|s| s.name == "run_pipeline").unwrap();
+        let run_pipeline_idx = symbols
+            .iter()
+            .position(|s| s.name == "run_pipeline")
+            .unwrap();
         let call = call_sites.iter().find(|c| c.raw_name == "load").unwrap();
 
         assert_eq!(call.from_temp_index, Some(run_pipeline_idx));
@@ -438,7 +466,10 @@ mod tests {
 
         let (_symbols, call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let call = call_sites.iter().find(|c| c.raw_name == "crate::pipeline::load").unwrap();
+        let call = call_sites
+            .iter()
+            .find(|c| c.raw_name == "crate::pipeline::load")
+            .unwrap();
         assert_eq!(call.raw_name, "crate::pipeline::load");
     }
 
@@ -462,7 +493,10 @@ mod tests {
         let (symbols, call_sites) = parse_rust_file(&file_path).unwrap();
 
         let run_idx = symbols.iter().position(|s| s.name == "run").unwrap();
-        let call = call_sites.iter().find(|c| c.raw_name == "self.load").unwrap();
+        let call = call_sites
+            .iter()
+            .find(|c| c.raw_name == "self.load")
+            .unwrap();
 
         assert_eq!(call.from_temp_index, Some(run_idx));
     }
@@ -488,8 +522,10 @@ mod tests {
 
         let (_symbols, call_sites) = parse_rust_file(&file_path).unwrap();
 
-        let call = call_sites.iter().find(|c| c.raw_name == "Pipeline::new").unwrap();
+        let call = call_sites
+            .iter()
+            .find(|c| c.raw_name == "Pipeline::new")
+            .unwrap();
         assert_eq!(call.raw_name, "Pipeline::new");
     }
 }
-

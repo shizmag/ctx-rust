@@ -20,7 +20,7 @@ pub fn forward_slice(index: &CodeIndex, start: SymbolId, options: SliceOptions) 
                 continue;
             }
         }
-        
+
         result.push(curr);
 
         if depth >= options.max_depth {
@@ -80,7 +80,7 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallEdge, Language, TextRange, Symbol, ResolutionConfidence};
+    use crate::model::{CallEdge, Language, ResolutionConfidence, Symbol, TextRange};
     use std::path::PathBuf;
 
     fn make_test_symbol(id: i64, name: &str, kind: SymbolKind) -> Symbol {
@@ -129,13 +129,17 @@ mod tests {
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
             call_sites: vec![],
-            edges: vec![
-                make_test_edge(0, 1),
-                make_test_edge(1, 2),
-            ],
+            edges: vec![make_test_edge(0, 1), make_test_edge(1, 2)],
         };
 
-        let slice = forward_slice(&index, SymbolId(0), SliceOptions { max_depth: 10, include_tests: true });
+        let slice = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                include_tests: true,
+            },
+        );
         // Stable BFS order: a, then its callee b, then b's callee c
         assert_eq!(slice, vec![SymbolId(0), SymbolId(1), SymbolId(2)]);
     }
@@ -151,13 +155,17 @@ mod tests {
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
             call_sites: vec![],
-            edges: vec![
-                make_test_edge(0, 1),
-                make_test_edge(1, 2),
-            ],
+            edges: vec![make_test_edge(0, 1), make_test_edge(1, 2)],
         };
 
-        let slice = forward_slice(&index, SymbolId(0), SliceOptions { max_depth: 1, include_tests: true });
+        let slice = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 1,
+                include_tests: true,
+            },
+        );
         // BFS order, up to depth 1: a (depth 0), b (depth 1)
         assert_eq!(slice, vec![SymbolId(0), SymbolId(1)]);
     }
@@ -173,13 +181,17 @@ mod tests {
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
             call_sites: vec![],
-            edges: vec![
-                make_test_edge(0, 2),
-                make_test_edge(1, 2),
-            ],
+            edges: vec![make_test_edge(0, 2), make_test_edge(1, 2)],
         };
 
-        let slice = reverse_slice(&index, SymbolId(2), SliceOptions { max_depth: 10, include_tests: true });
+        let slice = reverse_slice(
+            &index,
+            SymbolId(2),
+            SliceOptions {
+                max_depth: 10,
+                include_tests: true,
+            },
+        );
         // Target c (depth 0), then callers a and b
         assert_eq!(slice.len(), 3);
         assert_eq!(slice[0], SymbolId(2));
@@ -197,13 +209,17 @@ mod tests {
                 make_test_symbol(1, "b", SymbolKind::Function),
             ],
             call_sites: vec![],
-            edges: vec![
-                make_test_edge(0, 1),
-                make_test_edge(1, 0),
-            ],
+            edges: vec![make_test_edge(0, 1), make_test_edge(1, 0)],
         };
 
-        let slice = forward_slice(&index, SymbolId(0), SliceOptions { max_depth: 10, include_tests: true });
+        let slice = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                include_tests: true,
+            },
+        );
         // Should terminate, containing a and b exactly once
         assert_eq!(slice, vec![SymbolId(0), SymbolId(1)]);
     }
@@ -218,14 +234,18 @@ mod tests {
                 make_test_symbol(1, "b_test", SymbolKind::Test),
             ],
             call_sites: vec![],
-            edges: vec![
-                make_test_edge(0, 1),
-            ],
+            edges: vec![make_test_edge(0, 1)],
         };
 
-        let slice = forward_slice(&index, SymbolId(0), SliceOptions { max_depth: 10, include_tests: false });
+        let slice = forward_slice(
+            &index,
+            SymbolId(0),
+            SliceOptions {
+                max_depth: 10,
+                include_tests: false,
+            },
+        );
         // b_test is skipped because include_tests is false
         assert_eq!(slice, vec![SymbolId(0)]);
     }
 }
-

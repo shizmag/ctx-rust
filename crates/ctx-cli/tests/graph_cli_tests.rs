@@ -42,14 +42,19 @@ fn test_cli_graph_build() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "build", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph build");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Index successfully built") || stdout.contains("codegraph"));
-    
+
     let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
     assert!(db_path.exists());
 }
@@ -63,7 +68,12 @@ fn test_cli_graph_symbols() {
     // Verify symbols output (should auto-build index since it doesn't exist)
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "symbols", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "symbols",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph symbols");
 
@@ -82,7 +92,13 @@ fn test_cli_graph_calls() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "calls", "run_pipeline", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "calls",
+            "run_pipeline",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph calls");
 
@@ -100,7 +116,13 @@ fn test_cli_graph_callers() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "callers", "load", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "callers",
+            "load",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph callers");
 
@@ -117,7 +139,13 @@ fn test_cli_graph_slice() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "slice", "run_pipeline", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "slice",
+            "run_pipeline",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph slice");
 
@@ -163,7 +191,13 @@ fn test_cli_ambiguous_symbol_message() {
     // Call "load" should be ambiguous
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd
-        .args(["graph", "calls", "load", root.to_str().unwrap(), "--no-rust-analyzer"])
+        .args([
+            "graph",
+            "calls",
+            "load",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
         .output()
         .expect("failed to run ctx graph calls load");
 

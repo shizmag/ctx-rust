@@ -154,8 +154,14 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
     let checked_tests: usize = checked_files_nodes.iter().map(|f| f.stats.tests).sum();
     let total_coverable = app.scan_result.summary.coverable_lines;
     let total_covered = app.scan_result.summary.covered_lines;
-    let checked_coverable: usize = checked_files_nodes.iter().map(|f| f.stats.coverable_lines).sum();
-    let checked_covered: usize = checked_files_nodes.iter().map(|f| f.stats.covered_lines).sum();
+    let checked_coverable: usize = checked_files_nodes
+        .iter()
+        .map(|f| f.stats.coverable_lines)
+        .sum();
+    let checked_covered: usize = checked_files_nodes
+        .iter()
+        .map(|f| f.stats.covered_lines)
+        .sum();
 
     let stats_text = vec![
         Line::from(vec![
@@ -320,7 +326,8 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                         Span::raw("  Coverage    : "),
                         Span::styled(
                             if item.coverable_lines > 0 {
-                                let cov = (item.covered_lines as f64 / item.coverable_lines as f64) * 100.0;
+                                let cov = (item.covered_lines as f64 / item.coverable_lines as f64)
+                                    * 100.0;
                                 format!("{:.1}%", cov)
                             } else {
                                 "N/A".to_string()
@@ -369,8 +376,12 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                                 let indicator = if let Some(ref hits_map) = line_coverage {
                                     if let Some(&hits) = hits_map.get(&line_num) {
                                         if hits > 0 { "█ " } else { "█ " }
-                                    } else { "  " }
-                                } else { "  " };
+                                    } else {
+                                        "  "
+                                    }
+                                } else {
+                                    "  "
+                                };
 
                                 let prefix_span = Span::styled(
                                     format!("{:3} │{}", line_num, indicator),
