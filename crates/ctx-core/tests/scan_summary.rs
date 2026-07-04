@@ -30,10 +30,10 @@ fn scan_builds_tree_and_skips_hidden_directories() {
     )
     .unwrap();
 
-    assert_eq!(result.summary.files, 3);
+    assert_eq!(result.summary.files, 4);
     assert_eq!(result.summary.dirs, 2); // src, src/bin
     assert_eq!(result.summary.hidden_dirs, 2);
-    assert_eq!(result.summary.lines, 3);
+    assert_eq!(result.summary.lines, 5);
     assert!(result.summary.bytes > 0);
     assert!(result.summary.tokens > 0);
 
@@ -60,6 +60,7 @@ fn scan_builds_tree_and_skips_hidden_directories() {
 
     assert!(root_children.contains(&"src"));
     assert!(root_children.contains(&"README.md"));
+    assert!(root_children.contains(&".gitignore"));
     assert!(!root_children.contains(&".git"));
     assert!(!root_children.contains(&"target"));
 
@@ -281,3 +282,48 @@ ignored_nested/
             .any(|item| item.path.ends_with("src/ignored_nested") && item.is_dir)
     );
 }
+
+#[test]
+fn test_gitignore_auto_add() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path().to_path_buf();
+
+    // 1. If .git exists, .gitignore should be created
+    fs::create_dir_all(root.join(".git")).unwrap();
+    let _result = scan(
+        &root,
+        ScanOptions {
+            mode: Mode::Smart,
+            max_depth: None,
+            max_file_size: 1024,
+            exclude: Vec::new(),
+        },
+    ).unwrap();
+
+    let gitignore_path = root.join(".gitignore");
+    assert!(gitignore_path.exists());
+    let content = fs::read_to_string(&gitignore_path).unwrap();
+    assert!(content.contains(".ctx-codegraph/"));
+    assert!(content.contains(".ctx_*/"));
+
+    // 2. If .gitignore exists, it should be appended without duplicating/corrupting existing lines
+    fs::write(&gitignore_path, "target/\n# Comment\n").unwrap();
+    let _result2 = scan(
+        &root,
+        ScanOptions {
+            mode: Mode::Smart,
+            max_depth: None,
+            max_file_size: 1024,
+            exclude: Vec::new(),
+        },
+    ).unwrap();
+
+    let content2 = fs::read_to_string(&gitignore_path).unwrap();
+    assert!(content2.starts_with("target/\n# Comment\n"));
+    assert!(content2.contains(".ctx-codegraph/"));
+    assert!(content2.contains(".ctx_*/"));
+    // Count occurrences
+    assert_eq!(content2.matches(".ctx-codegraph/").count(), 1);
+    assert_eq!(content2.matches(".ctx_*/").count(), 1);
+}
+

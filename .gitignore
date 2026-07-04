@@ -5,3 +5,4 @@ target/
 .codegraph/
 run/.ctx-codegraph/codegraph.sqlite
 .ctx-codegraph/
+.ctx_*/

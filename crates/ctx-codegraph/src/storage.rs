@@ -6,7 +6,49 @@ use crate::model::{
 };
 use std::path::{Path, PathBuf};
 
+fn ensure_gitignore_entries(root: &Path) {
+    let gitignore_path = root.join(".gitignore");
+    let has_git = root.join(".git").exists();
+
+    if gitignore_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
+            let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+            let mut changed = false;
+
+            let has_codegraph = lines.iter().any(|l| {
+                let trimmed = l.trim();
+                trimmed == ".ctx-codegraph" || trimmed == ".ctx-codegraph/"
+            });
+            let has_ctx_wildcard = lines.iter().any(|l| {
+                let trimmed = l.trim();
+                trimmed == ".ctx_*" || trimmed == ".ctx_*/"
+            });
+
+            if !has_codegraph {
+                lines.push(".ctx-codegraph/".to_string());
+                changed = true;
+            }
+            if !has_ctx_wildcard {
+                lines.push(".ctx_*/".to_string());
+                changed = true;
+            }
+
+            if changed {
+                let mut new_content = lines.join("\n");
+                if !new_content.ends_with('\n') {
+                    new_content.push('\n');
+                }
+                let _ = std::fs::write(&gitignore_path, new_content);
+            }
+        }
+    } else if has_git {
+        let content = ".ctx-codegraph/\n.ctx_*/\n";
+        let _ = std::fs::write(&gitignore_path, content);
+    }
+}
+
 pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
+    ensure_gitignore_entries(root);
     let db_dir = root.join(".ctx-codegraph");
     std::fs::create_dir_all(&db_dir)?;
     let db_path = db_dir.join("codegraph.sqlite");
