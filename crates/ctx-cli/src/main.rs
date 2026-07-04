@@ -272,8 +272,11 @@ struct GraphCommand {
 enum GraphSubcommand {
     /// Build or rebuild the codegraph SQLite index database
     Build,
-    /// List all indexed symbols grouped by their files
-    Symbols,
+    /// List all indexed symbols grouped by their files, or find a specific symbol
+    Symbols {
+        /// The name or qualified path of the target symbol
+        query: Option<String>,
+    },
     /// List the direct callees (called functions/symbols) of a target symbol
     Calls {
         /// The name or qualified path of the target symbol
@@ -313,28 +316,74 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
             println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
         }
-        GraphSubcommand::Symbols => {
-            let conn = get_connection_or_rebuild(&graph_args.path, use_rust_analyzer)?;
-            let index = ctx_codegraph::load_index(&conn, &graph_args.path)?;
-
-            let mut grouped: HashMap<PathBuf, Vec<ctx_codegraph::Symbol>> = HashMap::new();
-            for sym in index.symbols {
-                grouped.entry(sym.file.clone()).or_default().push(sym);
+        GraphSubcommand::Symbols { mut query } => {
+            let mut target_path = graph_args.path.clone();
+            if let Some(ref q) = query {
+                if std::path::Path::new(q).is_dir() {
+                    target_path = std::path::PathBuf::from(q);
+                    query = None;
+                }
             }
 
-            let mut sorted_files: Vec<PathBuf> = grouped.keys().cloned().collect();
-            sorted_files.sort();
+            let conn = get_connection_or_rebuild(&target_path, use_rust_analyzer)?;
 
-            for file in sorted_files {
-                let rel_path = file.strip_prefix(&graph_args.path).unwrap_or(&file);
-                println!("{}:", rel_path.display());
-                let mut file_syms = grouped.remove(&file).unwrap();
-                file_syms.sort_by_key(|s| s.range.start_line);
-                for sym in file_syms {
-                    println!(
-                        "  [{:?}] {} (L{}-{})",
-                        sym.kind, sym.name, sym.range.start_line, sym.range.end_line
-                    );
+            if let Some(q) = query {
+                match ctx_codegraph::resolve_symbol(&conn, &q)? {
+                    ctx_codegraph::SymbolResolution::Unique(obj) => {
+                        let rel_path = obj
+                            .file_path
+                            .strip_prefix(&target_path)
+                            .unwrap_or(&obj.file_path);
+                        println!(
+                            "Unique match: {} ({:?}) in {} at L{}",
+                            obj.qualified_name,
+                            obj.kind,
+                            rel_path.display(),
+                            obj.range.start_line
+                        );
+                    }
+                    ctx_codegraph::SymbolResolution::Ambiguous(objs) => {
+                        println!("Ambiguous query: {}", q);
+                        println!("\nCandidates:");
+                        for obj in objs {
+                            let rel_path = obj
+                                .file_path
+                                .strip_prefix(&target_path)
+                                .unwrap_or(&obj.file_path);
+                            println!(
+                                "  {:<30} {}:{}",
+                                obj.qualified_name,
+                                rel_path.display(),
+                                obj.range.start_line
+                            );
+                        }
+                    }
+                    ctx_codegraph::SymbolResolution::NotFound => {
+                        println!("Symbol not found: {}", q);
+                    }
+                }
+            } else {
+                let index = ctx_codegraph::load_index(&conn, &target_path)?;
+
+                let mut grouped: HashMap<PathBuf, Vec<ctx_codegraph::Symbol>> = HashMap::new();
+                for sym in index.symbols {
+                    grouped.entry(sym.file.clone()).or_default().push(sym);
+                }
+
+                let mut sorted_files: Vec<PathBuf> = grouped.keys().cloned().collect();
+                sorted_files.sort();
+
+                for file in sorted_files {
+                    let rel_path = file.strip_prefix(&target_path).unwrap_or(&file);
+                    println!("{}:", rel_path.display());
+                    let mut file_syms = grouped.remove(&file).unwrap();
+                    file_syms.sort_by_key(|s| s.range.start_line);
+                    for sym in file_syms {
+                        println!(
+                            "  [{:?}] {} (L{}-{})",
+                            sym.kind, sym.name, sym.range.start_line, sym.range.end_line
+                        );
+                    }
                 }
             }
         }

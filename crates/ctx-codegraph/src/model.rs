@@ -147,3 +147,73 @@ pub struct CodeIndex {
     pub call_sites: Vec<CallSite>,
     pub edges: Vec<CallEdge>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SourceRange {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
+impl From<TextRange> for SourceRange {
+    fn from(r: TextRange) -> Self {
+        Self {
+            start_line: r.start_line,
+            start_col: r.start_col,
+            end_line: r.end_line,
+            end_col: r.end_col,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum LanguageObjectKind {
+    Function,
+    Method,
+    Struct,
+    Enum,
+    Trait,
+    Impl,
+    Module,
+    Class,
+    Interface,
+    TypeAlias,
+    Constant,
+    Variable,
+    Unknown,
+}
+
+impl From<SymbolKind> for LanguageObjectKind {
+    fn from(kind: SymbolKind) -> Self {
+        match kind {
+            SymbolKind::Function => LanguageObjectKind::Function,
+            SymbolKind::Method => LanguageObjectKind::Method,
+            SymbolKind::Struct => LanguageObjectKind::Struct,
+            SymbolKind::Enum => LanguageObjectKind::Enum,
+            SymbolKind::Trait => LanguageObjectKind::Trait,
+            SymbolKind::Impl => LanguageObjectKind::Impl,
+            SymbolKind::Module => LanguageObjectKind::Module,
+            SymbolKind::Test => LanguageObjectKind::Function,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LanguageObject {
+    pub id: SymbolId,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: LanguageObjectKind,
+    pub file_path: PathBuf,
+    pub range: SourceRange,
+    pub signature: Option<String>,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SymbolResolution {
+    Unique(LanguageObject),
+    Ambiguous(Vec<LanguageObject>),
+    NotFound,
+}

@@ -1,8 +1,9 @@
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
 use crate::model::{
-    CallEdge, CallSite, CodeIndex, FileId, Language, ResolutionConfidence, SourceFile, Symbol,
-    SymbolId, SymbolKind, TextRange,
+    CallEdge, CallSite, CodeIndex, FileId, Language, LanguageObject, LanguageObjectKind,
+    ResolutionConfidence, SourceFile, SourceRange, Symbol, SymbolId, SymbolKind, SymbolResolution,
+    TextRange,
 };
 use std::path::{Path, PathBuf};
 
@@ -658,6 +659,69 @@ pub fn find_symbols(
     Ok(results)
 }
 
+pub fn resolve_symbol(
+    conn: &rusqlite::Connection,
+    query: &str,
+) -> Result<SymbolResolution, CodeGraphError> {
+    let candidates = find_symbols(conn, query)?;
+    if candidates.is_empty() {
+        return Ok(SymbolResolution::NotFound);
+    }
+
+    let mut exact_qualified = Vec::new();
+    let mut exact_name = Vec::new();
+    let mut partial = Vec::new();
+
+    for sym in candidates {
+        let id = sym.id.unwrap_or(SymbolId(0));
+        let name = sym.name.clone();
+        let qualified_name = sym.qualified_name.clone();
+        let kind = LanguageObjectKind::from(sym.kind);
+        let file_path = sym.file.clone();
+        let range = SourceRange::from(sym.range.clone());
+        let language = Some(format!("{:?}", sym.language).to_lowercase());
+
+        let obj = LanguageObject {
+            id,
+            name,
+            qualified_name,
+            kind,
+            file_path,
+            range,
+            signature: None,
+            language,
+        };
+
+        if obj.qualified_name == query {
+            exact_qualified.push(obj);
+        } else if obj.name == query {
+            exact_name.push(obj);
+        } else {
+            partial.push(obj);
+        }
+    }
+
+    if !exact_qualified.is_empty() {
+        if exact_qualified.len() == 1 {
+            Ok(SymbolResolution::Unique(exact_qualified.remove(0)))
+        } else {
+            Ok(SymbolResolution::Ambiguous(exact_qualified))
+        }
+    } else if !exact_name.is_empty() {
+        if exact_name.len() == 1 {
+            Ok(SymbolResolution::Unique(exact_name.remove(0)))
+        } else {
+            Ok(SymbolResolution::Ambiguous(exact_name))
+        }
+    } else {
+        if partial.len() == 1 {
+            Ok(SymbolResolution::Unique(partial.remove(0)))
+        } else {
+            Ok(SymbolResolution::Ambiguous(partial))
+        }
+    }
+}
+
 pub fn load_callees(
     conn: &rusqlite::Connection,
     symbol_id: SymbolId,
@@ -1023,6 +1087,134 @@ mod tests {
         // Missing match
         let missing = find_symbols(&conn, "missing").unwrap();
         assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_symbol_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(dir.path()).unwrap();
+        init_schema(&conn).unwrap();
+
+        let mut index = CodeIndex {
+            root: dir.path().to_path_buf(),
+            files: vec![SourceFile {
+                id: None,
+                path: PathBuf::from("src/lib.rs"),
+                language: Language::Rust,
+                mtime_ms: Some(100),
+                size_bytes: Some(200),
+                content_hash: Some("hash1".to_string()),
+            }],
+            symbols: vec![
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "run_pipeline".to_string(),
+                    qualified_name: "mod::run_pipeline".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::Rust,
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 5,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "Pipeline".to_string(),
+                    qualified_name: "mod::Pipeline".to_string(),
+                    kind: SymbolKind::Struct,
+                    language: Language::Rust,
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 6,
+                        start_col: 1,
+                        end_line: 10,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "duplicate_name".to_string(),
+                    qualified_name: "modA::duplicate_name".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::Rust,
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 11,
+                        start_col: 1,
+                        end_line: 15,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "duplicate_name".to_string(),
+                    qualified_name: "modB::duplicate_name".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::Rust,
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 16,
+                        start_col: 1,
+                        end_line: 20,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+            ],
+            call_sites: vec![],
+            edges: vec![],
+        };
+        save_index(&mut conn, &mut index).unwrap();
+
+        // 1. query с одним exact match возвращает Unique
+        let res1 = resolve_symbol(&conn, "run_pipeline").unwrap();
+        if let SymbolResolution::Unique(ref obj) = res1 {
+            assert_eq!(obj.name, "run_pipeline");
+            assert_eq!(obj.qualified_name, "mod::run_pipeline");
+            // 4. LanguageObjectKind корректно мапится хотя бы для функций и структур на fixture-коде
+            assert_eq!(obj.kind, LanguageObjectKind::Function);
+        } else {
+            panic!("Expected Unique, got {:?}", res1);
+        }
+
+        let res2 = resolve_symbol(&conn, "mod::Pipeline").unwrap();
+        if let SymbolResolution::Unique(ref obj) = res2 {
+            assert_eq!(obj.name, "Pipeline");
+            assert_eq!(obj.qualified_name, "mod::Pipeline");
+            assert_eq!(obj.kind, LanguageObjectKind::Struct);
+        } else {
+            panic!("Expected Unique, got {:?}", res2);
+        }
+
+        // 2. query с несколькими match возвращает Ambiguous
+        let res3 = resolve_symbol(&conn, "duplicate_name").unwrap();
+        if let SymbolResolution::Ambiguous(ref objs) = res3 {
+            assert_eq!(objs.len(), 2);
+            assert!(
+                objs.iter()
+                    .any(|o| o.qualified_name == "modA::duplicate_name")
+            );
+            assert!(
+                objs.iter()
+                    .any(|o| o.qualified_name == "modB::duplicate_name")
+            );
+        } else {
+            panic!("Expected Ambiguous, got {:?}", res3);
+        }
+
+        // 3. отсутствующий query возвращает NotFound
+        let res4 = resolve_symbol(&conn, "non_existent").unwrap();
+        assert_eq!(res4, SymbolResolution::NotFound);
     }
 
     #[test]
