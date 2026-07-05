@@ -275,6 +275,22 @@ ctx graph slice run_pipeline
 
 ---
 
+## Retrieve ranked context under token budget
+
+Retrieve a ranked, token-budgeted semantic context containing code snippets around a symbol (e.g. `auth_service`).
+
+```bash
+ctx graph affect auth_service --depth auto --token-budget 12000
+```
+
+For structured JSON outputs suitable for integrations/tooling:
+
+```bash
+ctx graph affect auth_service --format json
+```
+
+---
+
 ## Disable rust-analyzer
 
 ```bash
