@@ -7,7 +7,9 @@ pub struct FileId(pub i64);
 pub struct SymbolId(pub i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct CallId(pub i64);
+pub struct OccurrenceId(pub i64);
+
+pub type CallId = OccurrenceId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -150,34 +152,144 @@ pub struct Symbol {
     pub body_range: Option<TextRange>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CallSite {
-    pub id: Option<CallId>,
-    pub file_id: Option<FileId>,
-    pub from: Option<SymbolId>,
-    pub from_temp_index: Option<usize>,
-    pub raw_name: String,
-    pub file: PathBuf,
-    pub range: TextRange,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum OccurrenceKind {
+    Call,
+    Reference,
+    Import,
+    Export,
+    TypeUse,
+    DefinitionUse,
+    VariableRead,
+    VariableWrite,
+    MacroInvocation,
+    Unknown,
+}
+
+impl OccurrenceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OccurrenceKind::Call => "Call",
+            OccurrenceKind::Reference => "Reference",
+            OccurrenceKind::Import => "Import",
+            OccurrenceKind::Export => "Export",
+            OccurrenceKind::TypeUse => "TypeUse",
+            OccurrenceKind::DefinitionUse => "DefinitionUse",
+            OccurrenceKind::VariableRead => "VariableRead",
+            OccurrenceKind::VariableWrite => "VariableWrite",
+            OccurrenceKind::MacroInvocation => "MacroInvocation",
+            OccurrenceKind::Unknown => "Unknown",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Call" => Some(OccurrenceKind::Call),
+            "Reference" => Some(OccurrenceKind::Reference),
+            "Import" => Some(OccurrenceKind::Import),
+            "Export" => Some(OccurrenceKind::Export),
+            "TypeUse" => Some(OccurrenceKind::TypeUse),
+            "DefinitionUse" => Some(OccurrenceKind::DefinitionUse),
+            "VariableRead" => Some(OccurrenceKind::VariableRead),
+            "VariableWrite" => Some(OccurrenceKind::VariableWrite),
+            "MacroInvocation" => Some(OccurrenceKind::MacroInvocation),
+            "Unknown" => Some(OccurrenceKind::Unknown),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CallEdge {
-    pub from: SymbolId,
-    pub to: Option<SymbolId>,
-    pub call_site_id: Option<CallId>,
-    pub raw_name: String,
-    pub call_range: TextRange,
-    pub confidence: ResolutionConfidence,
+pub struct Occurrence {
+    pub id: Option<OccurrenceId>,
+    pub file_id: Option<FileId>,
+    pub enclosing_symbol: Option<SymbolId>,
+    pub enclosing_temp_index: Option<usize>,
+    pub kind: OccurrenceKind,
+    pub raw_text: String,
+    pub file: PathBuf,
+    pub range: TextRange,
+    pub language: LanguageId,
+    pub backend_id: BackendId,
 }
+
+pub type CallSite = Occurrence;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum EdgeKind {
+    Call,
+    Reference,
+    Import,
+    Export,
+    TypeUse,
+    Inherits,
+    Implements,
+    DataFlow,
+    Contains,
+    Unknown,
+}
+
+impl EdgeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeKind::Call => "Call",
+            EdgeKind::Reference => "Reference",
+            EdgeKind::Import => "Import",
+            EdgeKind::Export => "Export",
+            EdgeKind::TypeUse => "TypeUse",
+            EdgeKind::Inherits => "Inherits",
+            EdgeKind::Implements => "Implements",
+            EdgeKind::DataFlow => "DataFlow",
+            EdgeKind::Contains => "Contains",
+            EdgeKind::Unknown => "Unknown",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Call" => Some(EdgeKind::Call),
+            "Reference" => Some(EdgeKind::Reference),
+            "Import" => Some(EdgeKind::Import),
+            "Export" => Some(EdgeKind::Export),
+            "TypeUse" => Some(EdgeKind::TypeUse),
+            "Inherits" => Some(EdgeKind::Inherits),
+            "Implements" => Some(EdgeKind::Implements),
+            "DataFlow" => Some(EdgeKind::DataFlow),
+            "Contains" => Some(EdgeKind::Contains),
+            "Unknown" => Some(EdgeKind::Unknown),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct EdgeId(pub i64);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdge {
+    pub id: Option<EdgeId>,
+    pub kind: EdgeKind,
+    pub from_file_id: Option<FileId>,
+    pub from_symbol_id: Option<SymbolId>,
+    pub to_symbol_id: Option<SymbolId>,
+    pub to_external: Option<String>,
+    pub occurrence_id: Option<OccurrenceId>,
+    pub raw_text: Option<String>,
+    pub range: Option<TextRange>,
+    pub confidence: ResolutionConfidence,
+    pub produced_by: Option<ResolverId>,
+}
+
+pub type CallEdge = GraphEdge;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CodeIndex {
     pub root: PathBuf,
     pub files: Vec<FileSnapshot>,
     pub symbols: Vec<Symbol>,
-    pub call_sites: Vec<CallSite>,
-    pub edges: Vec<CallEdge>,
+    pub occurrences: Vec<Occurrence>,
+    pub edges: Vec<GraphEdge>,
+    pub call_sites: Vec<Occurrence>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -270,7 +382,7 @@ pub struct GraphContextOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GraphEdge {
+pub struct GraphContextEdge {
     pub from: SymbolId,
     pub to: SymbolId,
     pub label: Option<String>,
@@ -292,7 +404,7 @@ pub struct GraphContextDiagnostic {
 pub struct GraphContextResult {
     pub root: LanguageObject,
     pub nodes: Vec<LanguageObject>,
-    pub edges: Vec<GraphEdge>,
+    pub edges: Vec<GraphContextEdge>,
     pub files: Vec<ContextFileSpan>,
     pub diagnostics: Vec<GraphContextDiagnostic>,
 }
@@ -339,7 +451,6 @@ impl RebuildReason {
 pub type BackendId = String;
 pub type ParserId = String;
 pub type ResolverId = String;
-pub type OccurrenceId = CallId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FileParseStatus {
@@ -427,58 +538,7 @@ pub struct BuildReport {
     pub unresolved_edges: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum EdgeKind {
-    Call,
-    Reference,
-    Import,
-    Export,
-    TypeUse,
-    DataFlow,
-}
-
-impl EdgeKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EdgeKind::Call => "Call",
-            EdgeKind::Reference => "Reference",
-            EdgeKind::Import => "Import",
-            EdgeKind::Export => "Export",
-            EdgeKind::TypeUse => "TypeUse",
-            EdgeKind::DataFlow => "DataFlow",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "Call" => Some(EdgeKind::Call),
-            "Reference" => Some(EdgeKind::Reference),
-            "Import" => Some(EdgeKind::Import),
-            "Export" => Some(EdgeKind::Export),
-            "TypeUse" => Some(EdgeKind::TypeUse),
-            "DataFlow" => Some(EdgeKind::DataFlow),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct EdgeId(pub i64);
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct GraphEdgeRecord {
-    pub id: Option<EdgeId>,
-    pub kind: EdgeKind,
-    pub from_file_id: FileId,
-    pub from_symbol_id: Option<SymbolId>,
-    pub to_symbol_id: Option<SymbolId>,
-    pub to_external: Option<String>,
-    pub occurrence_id: Option<OccurrenceId>,
-    pub range: TextRange,
-    pub label: Option<String>,
-    pub confidence: ResolutionConfidence,
-    pub produced_by: ResolverId,
-}
+// Generic Occurrence and GraphEdge model types are defined above.
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AffectedSet {

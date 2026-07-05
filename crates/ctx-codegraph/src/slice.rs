@@ -35,8 +35,8 @@ pub fn forward_slice(index: &CodeIndex, start: SymbolId, options: SliceOptions) 
         }
 
         for edge in &index.edges {
-            if edge.from == curr {
-                if let Some(to_id) = edge.to {
+            if edge.from_symbol_id == Some(curr) {
+                if let Some(to_id) = edge.to_symbol_id {
                     if !visited.contains(&to_id) {
                         visited.insert(to_id);
                         queue.push_back((to_id, depth + 1));
@@ -77,11 +77,12 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
         }
 
         for edge in &index.edges {
-            if edge.to == Some(curr) {
-                let from_id = edge.from;
-                if !visited.contains(&from_id) {
-                    visited.insert(from_id);
-                    queue.push_back((from_id, depth + 1));
+            if edge.to_symbol_id == Some(curr) {
+                if let Some(from_id) = edge.from_symbol_id {
+                    if !visited.contains(&from_id) {
+                        visited.insert(from_id);
+                        queue.push_back((from_id, depth + 1));
+                    }
                 }
             }
         }
@@ -93,7 +94,7 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallEdge, LanguageId, ResolutionConfidence, Symbol, TextRange};
+    use crate::model::{CallEdge, LanguageId, ResolutionConfidence, Symbol, TextRange, Occurrence};
     use std::path::PathBuf;
 
     fn make_test_symbol(id: i64, name: &str, kind: SymbolKind) -> Symbol {
@@ -117,17 +118,22 @@ mod tests {
 
     fn make_test_edge(from: i64, to: i64) -> CallEdge {
         CallEdge {
-            from: SymbolId(from),
-            to: Some(SymbolId(to)),
-            call_site_id: None,
-            raw_name: "call".to_string(),
-            call_range: TextRange {
+            id: None,
+            kind: crate::model::EdgeKind::Call,
+            from_file_id: None,
+            from_symbol_id: Some(SymbolId(from)),
+            to_symbol_id: Some(SymbolId(to)),
+            to_external: None,
+            occurrence_id: None,
+            raw_text: Some("call".to_string()),
+            range: Some(TextRange {
                 start_line: 1,
                 start_col: 1,
                 end_line: 1,
                 end_col: 1,
-            },
+            }),
             confidence: ResolutionConfidence::Heuristic,
+            produced_by: None,
         }
     }
 
@@ -141,6 +147,7 @@ mod tests {
                 make_test_symbol(1, "b", SymbolKind::Function),
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![make_test_edge(0, 1), make_test_edge(1, 2)],
         };
@@ -168,6 +175,7 @@ mod tests {
                 make_test_symbol(1, "b", SymbolKind::Function),
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![make_test_edge(0, 1), make_test_edge(1, 2)],
         };
@@ -195,6 +203,7 @@ mod tests {
                 make_test_symbol(1, "b", SymbolKind::Function),
                 make_test_symbol(2, "c", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![make_test_edge(0, 2), make_test_edge(1, 2)],
         };
@@ -224,6 +233,7 @@ mod tests {
                 make_test_symbol(0, "a", SymbolKind::Function),
                 make_test_symbol(1, "b", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![make_test_edge(0, 1), make_test_edge(1, 0)],
         };
@@ -250,6 +260,7 @@ mod tests {
                 make_test_symbol(0, "a", SymbolKind::Function),
                 make_test_symbol(1, "b_test", SymbolKind::Test),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![make_test_edge(0, 1)],
         };
@@ -282,6 +293,7 @@ mod tests {
                 make_test_symbol(2, "c", SymbolKind::Function),
                 make_test_symbol(3, "d", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![
                 make_test_edge(0, 1), // a -> b
@@ -294,8 +306,8 @@ mod tests {
         let callees_a: Vec<SymbolId> = index
             .edges
             .iter()
-            .filter(|e| e.from == SymbolId(0))
-            .filter_map(|e| e.to)
+            .filter(|e| e.from_symbol_id == Some(SymbolId(0)))
+            .filter_map(|e| e.to_symbol_id)
             .collect();
         assert!(callees_a.contains(&SymbolId(1)));
 
@@ -303,8 +315,8 @@ mod tests {
         let callees_b: Vec<SymbolId> = index
             .edges
             .iter()
-            .filter(|e| e.from == SymbolId(1))
-            .filter_map(|e| e.to)
+            .filter(|e| e.from_symbol_id == Some(SymbolId(1)))
+            .filter_map(|e| e.to_symbol_id)
             .collect();
         assert!(callees_b.contains(&SymbolId(2)));
 
@@ -312,8 +324,8 @@ mod tests {
         let callers_b: Vec<SymbolId> = index
             .edges
             .iter()
-            .filter(|e| e.to == Some(SymbolId(1)))
-            .map(|e| e.from)
+            .filter(|e| e.to_symbol_id == Some(SymbolId(1)))
+            .filter_map(|e| e.from_symbol_id)
             .collect();
         assert!(callers_b.contains(&SymbolId(0)));
         assert!(callers_b.contains(&SymbolId(3)));
@@ -353,6 +365,7 @@ mod tests {
                 make_test_symbol(0, "a", SymbolKind::Function),
                 make_test_symbol(1, "b", SymbolKind::Function),
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![
                 make_test_edge(0, 0), // self-cycle: a -> a

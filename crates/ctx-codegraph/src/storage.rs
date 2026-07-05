@@ -5,7 +5,7 @@ use crate::model::{
     AffectedSet, CallEdge, CallId, CallSite, CodeIndex, EdgeKind, FileChangeDetection, FileId,
     FileParseStatus, FileSnapshot, IndexDiff, IndexState, Language, LanguageObject,
     LanguageObjectKind, RebuildReason, ResolutionConfidence, SourceRange, Symbol, SymbolId,
-    SymbolKind, SymbolResolution, TextRange,
+    SymbolKind, SymbolResolution, TextRange, Occurrence, OccurrenceId, OccurrenceKind, EdgeId, GraphEdge, LanguageId,
 };
 use crate::resolver::noop::resolve_name_only;
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ pub fn check_db_compatibility_with_registry(
 
     // 1. Schema version
     let schema_version = get_meta("schema_version");
-    if schema_version.as_deref() != Some("3") {
+    if schema_version.as_deref() != Some("4") {
         return Ok(Some(RebuildReason::SchemaVersionChanged));
     }
 
@@ -448,6 +448,34 @@ pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
 }
 
 pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
+    let meta_exists: bool = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='metadata'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    let mut needs_drop = false;
+    if meta_exists {
+        let schema_version: Option<String> = conn
+            .query_row("SELECT value FROM metadata WHERE key = 'schema_version'", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .ok();
+        if schema_version.as_deref() != Some("4") {
+            needs_drop = true;
+        }
+    }
+
+    if needs_drop {
+        let tables = vec!["metadata", "files", "symbols", "call_sites", "call_edges", "occurrences", "edges"];
+        for table in tables {
+            let _ = conn.execute(&format!("DROP TABLE IF EXISTS {}", table), []);
+        }
+    }
+
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS metadata (
@@ -489,45 +517,57 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
             FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS call_sites (
+        CREATE TABLE IF NOT EXISTS occurrences (
             id INTEGER PRIMARY KEY,
             file_id INTEGER NOT NULL,
-            from_symbol_id INTEGER NOT NULL,
-            raw_name TEXT NOT NULL,
+            enclosing_symbol_id INTEGER,
+            kind TEXT NOT NULL,
+            raw_text TEXT NOT NULL,
             start_line INTEGER NOT NULL,
             start_col INTEGER NOT NULL,
             end_line INTEGER NOT NULL,
             end_col INTEGER NOT NULL,
+            language TEXT NOT NULL,
+            backend_id TEXT NOT NULL,
             FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
-            FOREIGN KEY(from_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE
+            FOREIGN KEY(enclosing_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS call_edges (
+        CREATE TABLE IF NOT EXISTS edges (
             id INTEGER PRIMARY KEY,
-            from_symbol_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            from_file_id INTEGER NOT NULL,
+            from_symbol_id INTEGER,
             to_symbol_id INTEGER,
-            call_site_id INTEGER NOT NULL,
-            raw_name TEXT NOT NULL,
+            to_external TEXT,
+            occurrence_id INTEGER,
+            raw_text TEXT,
+            start_line INTEGER,
+            start_col INTEGER,
+            end_line INTEGER,
+            end_col INTEGER,
             confidence TEXT NOT NULL,
+            produced_by TEXT,
+            FOREIGN KEY(from_file_id) REFERENCES files(id) ON DELETE CASCADE,
             FOREIGN KEY(from_symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
             FOREIGN KEY(to_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL,
-            FOREIGN KEY(call_site_id) REFERENCES call_sites(id) ON DELETE CASCADE
+            FOREIGN KEY(occurrence_id) REFERENCES occurrences(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
         CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name);
         CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
-        CREATE INDEX IF NOT EXISTS idx_call_sites_from ON call_sites(from_symbol_id);
-        CREATE INDEX IF NOT EXISTS idx_call_sites_raw_name ON call_sites(raw_name);
-        CREATE INDEX IF NOT EXISTS idx_edges_from ON call_edges(from_symbol_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_to ON call_edges(to_symbol_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_confidence ON call_edges(confidence);
+        CREATE INDEX IF NOT EXISTS idx_occurrences_enclosing ON occurrences(enclosing_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_occurrences_raw_text ON occurrences(raw_text);
+        CREATE INDEX IF NOT EXISTS idx_edges_from_symbol ON edges(from_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_to_symbol ON edges(to_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
     ",
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '4')",
         [],
     )?;
     // Store default backends metadata initially
@@ -682,13 +722,13 @@ pub fn save_index(
     {
         let mut stmt = tx.prepare(
             "
-            INSERT INTO call_sites (
-                file_id, from_symbol_id, raw_name,
-                start_line, start_col, end_line, end_col
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO occurrences (
+                file_id, enclosing_symbol_id, kind, raw_text,
+                start_line, start_col, end_line, end_col, language, backend_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ",
         )?;
-        for (i, cs) in index.call_sites.iter_mut().enumerate() {
+        for (i, cs) in index.occurrences.iter_mut().enumerate() {
             let file_id = path_to_file_id
                 .get(&cs.file)
                 .copied()
@@ -701,36 +741,39 @@ pub fn save_index(
                 })
                 .ok_or_else(|| {
                     CodeGraphError::Parse(format!(
-                        "File not found for call site: {}",
+                        "File not found for occurrence: {}",
                         cs.file.display()
                     ))
                 })?;
             cs.file_id = Some(file_id);
 
-            let from_temp_id = cs.from.ok_or_else(|| {
-                CodeGraphError::Parse("Call site without enclosing symbol id".to_string())
-            })?;
-            let from_db_id = temp_sym_to_db_id
-                .get(&from_temp_id)
-                .copied()
-                .ok_or_else(|| {
-                    CodeGraphError::Parse("Enclosing symbol not saved to DB".to_string())
-                })?;
+            let from_db_id = match cs.enclosing_symbol {
+                Some(temp_id) => {
+                    let db_id = temp_sym_to_db_id.get(&temp_id).copied().ok_or_else(|| {
+                        CodeGraphError::Parse("Enclosing symbol not saved to DB".to_string())
+                    })?;
+                    Some(db_id)
+                }
+                None => None,
+            };
 
             let row_id = stmt.insert(rusqlite::params![
                 file_id.0,
-                from_db_id.0,
-                cs.raw_name,
+                from_db_id.map(|id| id.0),
+                cs.kind.as_str(),
+                cs.raw_text,
                 cs.range.start_line,
                 cs.range.start_col,
                 cs.range.end_line,
                 cs.range.end_col,
+                cs.language.as_str(),
+                cs.backend_id,
             ])?;
 
-            let db_call_id = crate::model::CallId(row_id);
-            let temp_call_id = crate::model::CallId(i as i64);
+            let db_call_id = crate::model::OccurrenceId(row_id);
+            let temp_call_id = crate::model::OccurrenceId(i as i64);
             cs.id = Some(db_call_id);
-            cs.from = Some(from_db_id);
+            cs.enclosing_symbol = from_db_id;
             temp_call_to_db_id.insert(temp_call_id, db_call_id);
         }
     }
@@ -738,44 +781,79 @@ pub fn save_index(
     {
         let mut stmt = tx.prepare(
             "
-            INSERT INTO call_edges (
-                from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence
-            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO edges (
+                kind, from_file_id, from_symbol_id, to_symbol_id, to_external,
+                occurrence_id, raw_text, start_line, start_col, end_line, end_col,
+                confidence, produced_by
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
         ",
         )?;
         for edge in &mut index.edges {
-            let from_db_id = temp_sym_to_db_id.get(&edge.from).copied().ok_or_else(|| {
-                CodeGraphError::Parse("Edge source symbol not saved to DB".to_string())
-            })?;
-            let to_db_id = match edge.to {
-                Some(temp_to) => {
-                    Some(temp_sym_to_db_id.get(&temp_to).copied().ok_or_else(|| {
-                        CodeGraphError::Parse("Edge target symbol not saved to DB".to_string())
-                    })?)
+            let from_symbol_db_id = match edge.from_symbol_id {
+                Some(temp_id) => {
+                    let db_id = temp_sym_to_db_id.get(&temp_id).copied().ok_or_else(|| {
+                        CodeGraphError::Parse("Edge source symbol not saved to DB".to_string())
+                    })?;
+                    Some(db_id)
                 }
                 None => None,
             };
-            let temp_call_id = edge
-                .call_site_id
-                .ok_or_else(|| CodeGraphError::Parse("Edge without call site ID".to_string()))?;
-            let db_call_id = temp_call_to_db_id
-                .get(&temp_call_id)
-                .copied()
-                .ok_or_else(|| {
-                    CodeGraphError::Parse("Edge call site not saved to DB".to_string())
-                })?;
+            let to_symbol_db_id = match edge.to_symbol_id {
+                Some(temp_to) => {
+                    let db_id = temp_sym_to_db_id.get(&temp_to).copied().ok_or_else(|| {
+                        CodeGraphError::Parse("Edge target symbol not saved to DB".to_string())
+                    })?;
+                    Some(db_id)
+                }
+                None => None,
+            };
+            let db_occurrence_id = match edge.occurrence_id {
+                Some(temp_call_id) => {
+                    let db_id = temp_call_to_db_id.get(&temp_call_id).copied().ok_or_else(|| {
+                        CodeGraphError::Parse("Edge occurrence not saved to DB".to_string())
+                    })?;
+                    Some(db_id)
+                }
+                None => None,
+            };
+
+            let (from_file_db_id, raw_text, range) = match edge.occurrence_id {
+                Some(temp_id) => {
+                    let cs = &index.occurrences[temp_id.0 as usize];
+                    (cs.file_id, Some(cs.raw_text.clone()), Some(cs.range.clone()))
+                }
+                None => {
+                    let file_id = edge.from_file_id.or_else(|| {
+                        None
+                    });
+                    (file_id, edge.raw_text.clone(), edge.range.clone())
+                }
+            };
+
+            let from_file_db_id = from_file_db_id.ok_or_else(|| {
+                CodeGraphError::Parse("Edge without valid file ID".to_string())
+            })?;
 
             stmt.execute(rusqlite::params![
-                from_db_id.0,
-                to_db_id.map(|id| id.0),
-                db_call_id.0,
-                edge.raw_name,
+                edge.kind.as_str(),
+                from_file_db_id.0,
+                from_symbol_db_id.map(|id| id.0),
+                to_symbol_db_id.map(|id| id.0),
+                edge.to_external,
+                db_occurrence_id.map(|id| id.0),
+                raw_text,
+                range.as_ref().map(|r| r.start_line),
+                range.as_ref().map(|r| r.start_col),
+                range.as_ref().map(|r| r.end_line),
+                range.as_ref().map(|r| r.end_col),
                 edge.confidence.as_str(),
+                edge.produced_by,
             ])?;
 
-            edge.from = from_db_id;
-            edge.to = to_db_id;
-            edge.call_site_id = Some(db_call_id);
+            edge.from_file_id = Some(from_file_db_id);
+            edge.from_symbol_id = from_symbol_db_id;
+            edge.to_symbol_id = to_symbol_db_id;
+            edge.occurrence_id = db_occurrence_id;
         }
     }
 
@@ -887,33 +965,37 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         });
     }
 
-    let mut call_sites = Vec::new();
+    let mut occurrences = Vec::new();
     let mut stmt = conn.prepare(
         "
-        SELECT id, file_id, from_symbol_id, raw_name,
-               start_line, start_col, end_line, end_col
-        FROM call_sites
+        SELECT id, file_id, enclosing_symbol_id, kind, raw_text,
+               start_line, start_col, end_line, end_col, language, backend_id
+        FROM occurrences
     ",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let file_id: i64 = row.get(1)?;
-        let from_symbol_id: i64 = row.get(2)?;
-        let raw_name: String = row.get(3)?;
-        let start_line: usize = row.get(4)?;
-        let start_col: usize = row.get(5)?;
-        let end_line: usize = row.get(6)?;
-        let end_col: usize = row.get(7)?;
+        let enclosing_symbol_id: Option<i64> = row.get(2)?;
+        let kind_str: String = row.get(3)?;
+        let raw_text: String = row.get(4)?;
+        let start_line: usize = row.get(5)?;
+        let start_col: usize = row.get(6)?;
+        let end_line: usize = row.get(7)?;
+        let end_col: usize = row.get(8)?;
+        let language_str: String = row.get(9)?;
+        let backend_id: String = row.get(10)?;
 
         let file_path = file_map.get(&FileId(file_id)).cloned().unwrap_or_default();
 
-        call_sites.push(CallSite {
-            id: Some(crate::model::CallId(id)),
+        occurrences.push(Occurrence {
+            id: Some(OccurrenceId(id)),
             file_id: Some(FileId(file_id)),
-            from: Some(SymbolId(from_symbol_id)),
-            from_temp_index: None,
-            raw_name,
+            enclosing_symbol: enclosing_symbol_id.map(SymbolId),
+            enclosing_temp_index: None,
+            kind: OccurrenceKind::from_str(&kind_str).unwrap_or(OccurrenceKind::Unknown),
+            raw_text,
             file: file_path,
             range: TextRange {
                 start_line,
@@ -921,56 +1003,79 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
                 end_line,
                 end_col,
             },
+            language: LanguageId(language_str),
+            backend_id,
         });
     }
-
-    let call_site_map: std::collections::HashMap<crate::model::CallId, TextRange> = call_sites
-        .iter()
-        .filter_map(|cs| cs.id.map(|id| (id, cs.range.clone())))
-        .collect();
 
     let mut edges = Vec::new();
     let mut stmt = conn.prepare(
         "
-        SELECT from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence
-        FROM call_edges
+        SELECT id, kind, from_file_id, from_symbol_id, to_symbol_id, to_external,
+               occurrence_id, raw_text, start_line, start_col, end_line, end_col,
+               confidence, produced_by
+        FROM edges
     ",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
-        let from_symbol_id: i64 = row.get(0)?;
-        let to_symbol_id: Option<i64> = row.get(1)?;
-        let call_site_id: i64 = row.get(2)?;
-        let raw_name: String = row.get(3)?;
-        let confidence_str: String = row.get(4)?;
+        let id: i64 = row.get(0)?;
+        let kind_str: String = row.get(1)?;
+        let from_file_id: i64 = row.get(2)?;
+        let from_symbol_id: Option<i64> = row.get(3)?;
+        let to_symbol_id: Option<i64> = row.get(4)?;
+        let to_external: Option<String> = row.get(5)?;
+        let occurrence_id: Option<i64> = row.get(6)?;
+        let raw_text: Option<String> = row.get(7)?;
+        let start_line: Option<usize> = row.get(8)?;
+        let start_col: Option<usize> = row.get(9)?;
+        let end_line: Option<usize> = row.get(10)?;
+        let end_col: Option<usize> = row.get(11)?;
+        let confidence_str: String = row.get(12)?;
+        let produced_by: Option<String> = row.get(13)?;
 
-        let call_range = call_site_map
-            .get(&crate::model::CallId(call_site_id))
-            .cloned()
-            .unwrap_or(TextRange {
-                start_line: 0,
-                start_col: 0,
-                end_line: 0,
-                end_col: 0,
-            });
+        let range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (start_line, start_col, end_line, end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
+        } else {
+            None
+        };
 
-        edges.push(CallEdge {
-            from: SymbolId(from_symbol_id),
-            to: to_symbol_id.map(SymbolId),
-            call_site_id: Some(crate::model::CallId(call_site_id)),
-            raw_name,
-            call_range,
+        edges.push(GraphEdge {
+            id: Some(EdgeId(id)),
+            kind: EdgeKind::from_str(&kind_str).unwrap_or(EdgeKind::Unknown),
+            from_file_id: Some(FileId(from_file_id)),
+            from_symbol_id: from_symbol_id.map(SymbolId),
+            to_symbol_id: to_symbol_id.map(SymbolId),
+            to_external,
+            occurrence_id: occurrence_id.map(OccurrenceId),
+            raw_text,
+            range,
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
+            produced_by,
         });
     }
+
+    let call_sites_compat = occurrences
+        .iter()
+        .filter(|o| o.kind == OccurrenceKind::Call)
+        .cloned()
+        .collect();
 
     Ok(CodeIndex {
         root: root.to_path_buf(),
         files,
         symbols,
-        call_sites,
+        occurrences,
         edges,
+        call_sites: call_sites_compat,
     })
 }
 
@@ -1126,11 +1231,11 @@ pub fn compute_affected_set_with_registry(
 
     for &sym_id in &symbols {
         let mut stmt =
-            conn.prepare("SELECT call_site_id FROM call_edges WHERE to_symbol_id = ?1")?;
+            conn.prepare("SELECT occurrence_id FROM edges WHERE to_symbol_id = ?1")?;
         let rows = stmt.query_map([sym_id.0], |row| row.get::<_, i64>(0))?;
         for row in rows {
             if let Ok(cs_id) = row {
-                occurrences.insert(CallId(cs_id));
+                occurrences.insert(OccurrenceId(cs_id));
             }
         }
     }
@@ -1190,20 +1295,20 @@ fn load_all_symbols(conn: &rusqlite::Connection) -> Result<Vec<Symbol>, CodeGrap
     Ok(symbols)
 }
 
-fn load_call_sites_to_resolve(
+fn load_occurrences_to_resolve(
     conn: &rusqlite::Connection,
     new_file_ids: &[i64],
-    affected_occurrences: &std::collections::HashSet<CallId>,
-) -> Result<Vec<CallSite>, CodeGraphError> {
-    let mut call_sites = Vec::new();
+    affected_occurrences: &std::collections::HashSet<OccurrenceId>,
+) -> Result<Vec<Occurrence>, CodeGraphError> {
+    let mut occurrences = Vec::new();
     if new_file_ids.is_empty() && affected_occurrences.is_empty() {
-        return Ok(call_sites);
+        return Ok(occurrences);
     }
 
     let mut sql = "
-        SELECT cs.id, cs.file_id, cs.from_symbol_id, cs.raw_name,
-               cs.start_line, cs.start_col, cs.end_line, cs.end_col, f.path
-        FROM call_sites cs
+        SELECT cs.id, cs.file_id, cs.enclosing_symbol_id, cs.kind, cs.raw_text,
+               cs.start_line, cs.start_col, cs.end_line, cs.end_col, f.path, cs.language, cs.backend_id
+        FROM occurrences cs
         JOIN files f ON cs.file_id = f.id
         WHERE 1=0
     "
@@ -1226,20 +1331,24 @@ fn load_call_sites_to_resolve(
     let rows = stmt.query_map([], |row| {
         let id: i64 = row.get(0)?;
         let file_id: i64 = row.get(1)?;
-        let from_symbol_id: i64 = row.get(2)?;
-        let raw_name: String = row.get(3)?;
-        let start_line: usize = row.get(4)?;
-        let start_col: usize = row.get(5)?;
-        let end_line: usize = row.get(6)?;
-        let end_col: usize = row.get(7)?;
-        let file_path: String = row.get(8)?;
+        let enclosing_symbol_id: Option<i64> = row.get(2)?;
+        let kind_str: String = row.get(3)?;
+        let raw_text: String = row.get(4)?;
+        let start_line: usize = row.get(5)?;
+        let start_col: usize = row.get(6)?;
+        let end_line: usize = row.get(7)?;
+        let end_col: usize = row.get(8)?;
+        let file_path: String = row.get(9)?;
+        let language_str: String = row.get(10)?;
+        let backend_id: String = row.get(11)?;
 
-        Ok(CallSite {
-            id: Some(CallId(id)),
+        Ok(Occurrence {
+            id: Some(OccurrenceId(id)),
             file_id: Some(FileId(file_id)),
-            from: Some(SymbolId(from_symbol_id)),
-            from_temp_index: None,
-            raw_name,
+            enclosing_symbol: enclosing_symbol_id.map(SymbolId),
+            enclosing_temp_index: None,
+            kind: OccurrenceKind::from_str(&kind_str).unwrap_or(OccurrenceKind::Unknown),
+            raw_text,
             file: PathBuf::from(file_path),
             range: TextRange {
                 start_line,
@@ -1247,13 +1356,15 @@ fn load_call_sites_to_resolve(
                 end_line,
                 end_col,
             },
+            language: LanguageId(language_str),
+            backend_id,
         })
     })?;
 
     for r in rows {
-        call_sites.push(r?);
+        occurrences.push(r?);
     }
-    Ok(call_sites)
+    Ok(occurrences)
 }
 
 fn rebuild_affected_edges_in_tx(
@@ -1261,7 +1372,7 @@ fn rebuild_affected_edges_in_tx(
     workspace_root: &Path,
     options: &BuildIndexOptions,
     affected_files: &[FileId],
-    affected_occurrences: &std::collections::HashSet<CallId>,
+    affected_occurrences: &std::collections::HashSet<OccurrenceId>,
 ) -> Result<(), CodeGraphError> {
     rebuild_affected_edges_in_tx_with_registry(
         tx,
@@ -1278,7 +1389,7 @@ fn rebuild_affected_edges_in_tx_with_registry(
     workspace_root: &Path,
     options: &BuildIndexOptions,
     affected_files: &[FileId],
-    affected_occurrences: &std::collections::HashSet<CallId>,
+    affected_occurrences: &std::collections::HashSet<OccurrenceId>,
     registry: &BackendRegistry,
 ) -> Result<(), CodeGraphError> {
     let mut file_ids = Vec::new();
@@ -1286,17 +1397,17 @@ fn rebuild_affected_edges_in_tx_with_registry(
         file_ids.push(fid.0);
     }
 
-    let call_sites = load_call_sites_to_resolve(tx, &file_ids, affected_occurrences)?;
-    if call_sites.is_empty() {
+    let occurrences = load_occurrences_to_resolve(tx, &file_ids, affected_occurrences)?;
+    if occurrences.is_empty() {
         return Ok(());
     }
 
-    let cs_ids: Vec<String> = call_sites
+    let cs_ids: Vec<String> = occurrences
         .iter()
         .map(|cs| cs.id.unwrap().0.to_string())
         .collect();
     let sql = format!(
-        "DELETE FROM call_edges WHERE call_site_id IN ({})",
+        "DELETE FROM edges WHERE occurrence_id IN ({})",
         cs_ids.join(",")
     );
     tx.execute(&sql, [])?;
@@ -1304,14 +1415,20 @@ fn rebuild_affected_edges_in_tx_with_registry(
     let all_symbols = load_all_symbols(tx)?;
 
     let mut edge_stmt = tx.prepare(
-        "INSERT INTO call_edges (from_symbol_id, to_symbol_id, call_site_id, raw_name, confidence)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO edges (kind, from_file_id, from_symbol_id, to_symbol_id, occurrence_id, raw_text, start_line, start_col, end_line, end_col, confidence, produced_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
 
-    for cs in &call_sites {
-        let from_id = match cs.from {
+    for cs in &occurrences {
+        if cs.kind != OccurrenceKind::Call {
+            continue;
+        }
+
+        let from_id = match cs.enclosing_symbol {
             Some(id) => id,
-            None => continue,
+            None => {
+                continue;
+            }
         };
 
         let mut resolved_idx = None;
@@ -1324,7 +1441,7 @@ fn rebuild_affected_edges_in_tx_with_registry(
             if let Some(res) = resolver {
                 let resolve_input = crate::backend::ResolveInput {
                     workspace_root,
-                    call_site: cs,
+                    occurrence: cs,
                     symbols: &all_symbols,
                 };
                 match res.resolve(resolve_input) {
@@ -1335,7 +1452,7 @@ fn rebuild_affected_edges_in_tx_with_registry(
                     Err(err) => {
                         eprintln!(
                             "LSP resolution warning for call to {}: {}",
-                            cs.raw_name, err
+                            cs.raw_text, err
                         );
                     }
                 }
@@ -1344,20 +1461,28 @@ fn rebuild_affected_edges_in_tx_with_registry(
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
-                resolve_name_only(&cs.raw_name, &all_symbols, &cs.file);
+                crate::resolver::noop::resolve_name_only_occurrence(cs, &all_symbols);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }
 
         let to_db_id = resolved_idx.and_then(|idx| all_symbols[idx].id);
         let cs_id = cs.id.unwrap();
+        let file_id = cs.file_id.unwrap();
 
         edge_stmt.execute(rusqlite::params![
+            EdgeKind::Call.as_str(),
+            file_id.0,
             from_id.0,
             to_db_id.map(|id| id.0),
             cs_id.0,
-            cs.raw_name,
+            cs.raw_text,
+            cs.range.start_line,
+            cs.range.start_col,
+            cs.range.end_line,
+            cs.range.end_col,
             confidence.as_str(),
+            resolver.map(|r| r.resolver_id().0.clone()).unwrap_or_else(|| "noop".to_string()),
         ])?;
     }
 
@@ -1377,38 +1502,38 @@ pub fn validate_index_invariants(conn: &rusqlite::Connection) -> Result<(), Code
         )));
     }
 
-    let invalid_call_sites: i64 = conn.query_row(
-        "SELECT count(*) FROM call_sites WHERE file_id NOT IN (SELECT id FROM files)",
+    let invalid_occurrences: i64 = conn.query_row(
+        "SELECT count(*) FROM occurrences WHERE file_id NOT IN (SELECT id FROM files)",
         [],
         |row| row.get(0),
     )?;
-    if invalid_call_sites > 0 {
+    if invalid_occurrences > 0 {
         return Err(CodeGraphError::Parse(format!(
-            "Invariant violation: {} call sites with invalid file_id",
-            invalid_call_sites
+            "Invariant violation: {} occurrences with invalid file_id",
+            invalid_occurrences
         )));
     }
 
     let invalid_edges_source: i64 = conn.query_row(
-        "SELECT count(*) FROM call_edges WHERE from_symbol_id NOT IN (SELECT id FROM symbols)",
+        "SELECT count(*) FROM edges WHERE from_symbol_id IS NOT NULL AND from_symbol_id NOT IN (SELECT id FROM symbols)",
         [],
         |row| row.get(0),
     )?;
     if invalid_edges_source > 0 {
         return Err(CodeGraphError::Parse(format!(
-            "Invariant violation: {} call edges with invalid source symbol id",
+            "Invariant violation: {} edges with invalid source symbol id",
             invalid_edges_source
         )));
     }
 
     let invalid_edges_target: i64 = conn.query_row(
-        "SELECT count(*) FROM call_edges WHERE to_symbol_id IS NOT NULL AND to_symbol_id NOT IN (SELECT id FROM symbols)",
+        "SELECT count(*) FROM edges WHERE to_symbol_id IS NOT NULL AND to_symbol_id NOT IN (SELECT id FROM symbols)",
         [],
         |row| row.get(0),
     )?;
     if invalid_edges_target > 0 {
         return Err(CodeGraphError::Parse(format!(
-            "Invariant violation: {} call edges pointing to non-existent symbol",
+            "Invariant violation: {} edges pointing to non-existent symbol",
             invalid_edges_target
         )));
     }
@@ -1457,7 +1582,7 @@ fn run_full_rebuild_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "3")?;
+    write_meta(&tx, "schema_version", "4")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -1627,7 +1752,7 @@ pub fn run_incremental_update_with_registry(
             .parse_file(crate::backend::ParseInput { path })
             .map(|parsed| ParsedFile {
                 symbols: parsed.symbols,
-                call_sites: parsed.call_sites,
+                occurrences: parsed.occurrences,
             })
             .map_err(|e| e.to_string());
 
@@ -1652,7 +1777,7 @@ pub fn run_incremental_update_with_registry(
             .parse_file(crate::backend::ParseInput { path })
             .map(|parsed| ParsedFile {
                 symbols: parsed.symbols,
-                call_sites: parsed.call_sites,
+                occurrences: parsed.occurrences,
             })
             .map_err(|e| e.to_string());
 
@@ -1702,10 +1827,10 @@ pub fn run_incremental_update_with_registry(
     )?;
 
     let mut cs_stmt = tx.prepare(
-        "INSERT INTO call_sites (
-            file_id, from_symbol_id, raw_name,
-            start_line, start_col, end_line, end_col
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO occurrences (
+            file_id, enclosing_symbol_id, kind, raw_text,
+            start_line, start_col, end_line, end_col, language, backend_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
 
     let mut delete_file_contents_stmt = tx.prepare("DELETE FROM symbols WHERE file_id = ?1")?;
@@ -1759,7 +1884,7 @@ pub fn run_incremental_update_with_registry(
                 parsed_files_count += 1;
 
                 let mut file_symbols = parsed.symbols.clone();
-                let mut file_call_sites = parsed.call_sites.clone();
+                let mut file_occurrences = parsed.occurrences.clone();
 
                 if !options.include_tests {
                     let mut new_symbols = Vec::new();
@@ -1772,16 +1897,16 @@ pub fn run_incremental_update_with_registry(
                     }
                     file_symbols = new_symbols;
 
-                    file_call_sites.retain(|cs| {
-                        if let Some(old_idx) = cs.from_temp_index {
+                    file_occurrences.retain(|cs| {
+                        if let Some(old_idx) = cs.enclosing_temp_index {
                             index_map.contains_key(&old_idx)
                         } else {
                             true
                         }
                     });
 
-                    for cs in &mut file_call_sites {
-                        if let Some(ref mut idx) = cs.from_temp_index {
+                    for cs in &mut file_occurrences {
+                        if let Some(ref mut idx) = cs.enclosing_temp_index {
                             if let Some(&new_idx) = index_map.get(idx) {
                                 *idx = new_idx;
                             }
@@ -1816,19 +1941,22 @@ pub fn run_incremental_update_with_registry(
                     symbols_written += 1;
                 }
 
-                for cs in &file_call_sites {
-                    let from_db_id = match cs.from_temp_index {
-                        Some(idx) => sym_ids[idx],
-                        None => continue,
+                for cs in &file_occurrences {
+                    let from_db_id = match cs.enclosing_temp_index {
+                        Some(idx) => Some(sym_ids[idx]),
+                        None => None,
                     };
                     cs_stmt.execute(rusqlite::params![
                         file_id,
                         from_db_id,
-                        cs.raw_name,
+                        cs.kind.as_str(),
+                        cs.raw_text,
                         cs.range.start_line,
                         cs.range.start_col,
                         cs.range.end_line,
                         cs.range.end_col,
+                        cs.language.as_str(),
+                        cs.backend_id,
                     ])?;
                     call_sites_written += 1;
                 }
@@ -1886,7 +2014,7 @@ pub fn run_incremental_update_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "3")?;
+    write_meta(&tx, "schema_version", "4")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -2151,8 +2279,8 @@ pub fn load_callees(
         "
         SELECT 
             e.to_symbol_id,
-            e.call_site_id,
-            e.raw_name,
+            e.occurrence_id,
+            e.raw_text,
             e.confidence,
             c.start_line,
             c.start_col,
@@ -2172,24 +2300,24 @@ pub fn load_callees(
             s.body_end_line,
             s.body_end_col,
             f.path
-        FROM call_edges e
-        LEFT JOIN call_sites c ON e.call_site_id = c.id
+        FROM edges e
+        LEFT JOIN occurrences c ON e.occurrence_id = c.id
         LEFT JOIN symbols s ON e.to_symbol_id = s.id
         LEFT JOIN files f ON s.file_id = f.id
-        WHERE e.from_symbol_id = ?1
+        WHERE e.from_symbol_id = ?1 AND e.kind = 'Call'
     ",
     )?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
         let to_symbol_id: Option<i64> = row.get(0)?;
-        let call_site_id: i64 = row.get(1)?;
-        let raw_name: String = row.get(2)?;
+        let occurrence_id: Option<i64> = row.get(1)?;
+        let raw_name: String = row.get(2).unwrap_or_default();
         let confidence_str: String = row.get(3)?;
 
-        let cs_start_line: usize = row.get(4)?;
-        let cs_start_col: usize = row.get(5)?;
-        let cs_end_line: usize = row.get(6)?;
-        let cs_end_col: usize = row.get(7)?;
+        let cs_start_line: usize = row.get(4).unwrap_or(0);
+        let cs_start_col: usize = row.get(5).unwrap_or(0);
+        let cs_end_line: usize = row.get(6).unwrap_or(0);
+        let cs_end_col: usize = row.get(7).unwrap_or(0);
 
         let call_range = TextRange {
             start_line: cs_start_line,
@@ -2199,13 +2327,18 @@ pub fn load_callees(
         };
 
         let edge = CallEdge {
-            from: symbol_id,
-            to: to_symbol_id.map(SymbolId),
-            call_site_id: Some(crate::model::CallId(call_site_id)),
-            raw_name,
-            call_range,
+            id: None,
+            kind: EdgeKind::Call,
+            from_file_id: None,
+            from_symbol_id: Some(symbol_id),
+            to_symbol_id: to_symbol_id.map(SymbolId),
+            to_external: None,
+            occurrence_id: occurrence_id.map(OccurrenceId),
+            raw_text: Some(raw_name),
+            range: Some(call_range),
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
+            produced_by: None,
         };
 
         let target_symbol = if let Some(to_id) = to_symbol_id {
@@ -2274,8 +2407,8 @@ pub fn load_callers(
         "
         SELECT 
             e.from_symbol_id,
-            e.call_site_id,
-            e.raw_name,
+            e.occurrence_id,
+            e.raw_text,
             e.confidence,
             c.start_line,
             c.start_col,
@@ -2295,24 +2428,24 @@ pub fn load_callers(
             s.body_end_line,
             s.body_end_col,
             f.path
-        FROM call_edges e
-        LEFT JOIN call_sites c ON e.call_site_id = c.id
+        FROM edges e
+        LEFT JOIN occurrences c ON e.occurrence_id = c.id
         LEFT JOIN symbols s ON e.from_symbol_id = s.id
         LEFT JOIN files f ON s.file_id = f.id
-        WHERE e.to_symbol_id = ?1
+        WHERE e.to_symbol_id = ?1 AND e.kind = 'Call'
     ",
     )?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
-        let from_symbol_id: i64 = row.get(0)?;
-        let call_site_id: i64 = row.get(1)?;
-        let raw_name: String = row.get(2)?;
+        let from_symbol_id: Option<i64> = row.get(0)?;
+        let occurrence_id: Option<i64> = row.get(1)?;
+        let raw_name: String = row.get(2).unwrap_or_default();
         let confidence_str: String = row.get(3)?;
 
-        let cs_start_line: usize = row.get(4)?;
-        let cs_start_col: usize = row.get(5)?;
-        let cs_end_line: usize = row.get(6)?;
-        let cs_end_col: usize = row.get(7)?;
+        let cs_start_line: usize = row.get(4).unwrap_or(0);
+        let cs_start_col: usize = row.get(5).unwrap_or(0);
+        let cs_end_line: usize = row.get(6).unwrap_or(0);
+        let cs_end_col: usize = row.get(7).unwrap_or(0);
 
         let call_range = TextRange {
             start_line: cs_start_line,
@@ -2321,14 +2454,23 @@ pub fn load_callers(
             end_col: cs_end_col,
         };
 
+        let from_symbol_id = from_symbol_id.ok_or_else(|| {
+            CodeGraphError::Parse("Caller edge without from_symbol_id".to_string())
+        })?;
+
         let edge = CallEdge {
-            from: SymbolId(from_symbol_id),
-            to: Some(symbol_id),
-            call_site_id: Some(crate::model::CallId(call_site_id)),
-            raw_name,
-            call_range,
+            id: None,
+            kind: EdgeKind::Call,
+            from_file_id: None,
+            from_symbol_id: Some(SymbolId(from_symbol_id)),
+            to_symbol_id: Some(symbol_id),
+            to_external: None,
+            occurrence_id: occurrence_id.map(OccurrenceId),
+            raw_text: Some(raw_name),
+            range: Some(call_range),
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
+            produced_by: None,
         };
 
         let s_file_id: i64 = row.get(8)?;
@@ -2489,8 +2631,8 @@ mod tests {
         assert!(tables.contains(&"metadata".to_string()));
         assert!(tables.contains(&"files".to_string()));
         assert!(tables.contains(&"symbols".to_string()));
-        assert!(tables.contains(&"call_sites".to_string()));
-        assert!(tables.contains(&"call_edges".to_string()));
+        assert!(tables.contains(&"occurrences".to_string()));
+        assert!(tables.contains(&"edges".to_string()));
     }
 
     #[test]
@@ -2551,12 +2693,13 @@ mod tests {
                     body_range: None,
                 },
             ],
-            call_sites: vec![CallSite {
+            occurrences: vec![Occurrence {
                 id: None,
                 file_id: None,
-                from: Some(SymbolId(0)),
-                from_temp_index: Some(0),
-                raw_name: "load".to_string(),
+                enclosing_symbol: Some(SymbolId(0)),
+                enclosing_temp_index: Some(0),
+                kind: OccurrenceKind::Call,
+                raw_text: "load".to_string(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 3,
@@ -2564,19 +2707,43 @@ mod tests {
                     end_line: 3,
                     end_col: 10,
                 },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
             }],
-            edges: vec![CallEdge {
-                from: SymbolId(0),
-                to: Some(SymbolId(1)),
-                call_site_id: Some(CallId(0)),
-                raw_name: "load".to_string(),
-                call_range: TextRange {
+            call_sites: vec![Occurrence {
+                id: None,
+                file_id: None,
+                enclosing_symbol: Some(SymbolId(0)),
+                enclosing_temp_index: Some(0),
+                kind: OccurrenceKind::Call,
+                raw_text: "load".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
                     start_line: 3,
                     start_col: 5,
                     end_line: 3,
                     end_col: 10,
                 },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
+            }],
+            edges: vec![CallEdge {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(0)),
+                to_symbol_id: Some(SymbolId(1)),
+                to_external: None,
+                occurrence_id: Some(OccurrenceId(0)),
+                raw_text: Some("load".to_string()),
+                range: Some(TextRange {
+                    start_line: 3,
+                    start_col: 5,
+                    end_line: 3,
+                    end_col: 10,
+                }),
                 confidence: ResolutionConfidence::Heuristic,
+                produced_by: None,
             }],
         };
 
@@ -2593,8 +2760,8 @@ mod tests {
         assert_eq!(loaded.symbols[1].name, "load");
 
         let edge = &loaded.edges[0];
-        assert_eq!(edge.from, loaded.symbols[0].id.unwrap());
-        assert_eq!(edge.to, Some(loaded.symbols[1].id.unwrap()));
+        assert_eq!(edge.from_symbol_id, loaded.symbols[0].id);
+        assert_eq!(edge.to_symbol_id, loaded.symbols[1].id);
 
         // 5.3 Clear index removes old data
         clear_index(&mut conn).unwrap();
@@ -2645,6 +2812,7 @@ mod tests {
                 },
                 body_range: None,
             }],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![],
         };
@@ -2755,6 +2923,7 @@ mod tests {
                     body_range: None,
                 },
             ],
+            occurrences: vec![],
             call_sites: vec![],
             edges: vec![],
         };
@@ -2891,13 +3060,14 @@ mod tests {
                     body_range: None,
                 },
             ],
-            call_sites: vec![
-                CallSite {
+            occurrences: vec![
+                Occurrence {
                     id: None,
                     file_id: None,
-                    from: Some(SymbolId(0)),
-                    from_temp_index: Some(0),
-                    raw_name: "load".to_string(),
+                    enclosing_symbol: Some(SymbolId(0)),
+                    enclosing_temp_index: Some(0),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "load".to_string(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 3,
@@ -2905,13 +3075,16 @@ mod tests {
                         end_line: 3,
                         end_col: 10,
                     },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
                 },
-                CallSite {
+                Occurrence {
                     id: None,
                     file_id: None,
-                    from: Some(SymbolId(0)),
-                    from_temp_index: Some(0),
-                    raw_name: "process".to_string(),
+                    enclosing_symbol: Some(SymbolId(0)),
+                    enclosing_temp_index: Some(0),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "process".to_string(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 4,
@@ -2919,13 +3092,16 @@ mod tests {
                         end_line: 4,
                         end_col: 15,
                     },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
                 },
-                CallSite {
+                Occurrence {
                     id: None,
                     file_id: None,
-                    from: Some(SymbolId(3)),
-                    from_temp_index: Some(3),
-                    raw_name: "load".to_string(),
+                    enclosing_symbol: Some(SymbolId(3)),
+                    enclosing_temp_index: Some(3),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "load".to_string(),
                     file: PathBuf::from("src/lib.rs"),
                     range: TextRange {
                         start_line: 18,
@@ -2933,47 +3109,117 @@ mod tests {
                         end_line: 18,
                         end_col: 10,
                     },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
+                },
+            ],
+            call_sites: vec![
+                Occurrence {
+                    id: None,
+                    file_id: None,
+                    enclosing_symbol: Some(SymbolId(0)),
+                    enclosing_temp_index: Some(0),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "load".to_string(),
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 3,
+                        start_col: 5,
+                        end_line: 3,
+                        end_col: 10,
+                },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
+                },
+                Occurrence {
+                    id: None,
+                    file_id: None,
+                    enclosing_symbol: Some(SymbolId(0)),
+                    enclosing_temp_index: Some(0),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "process".to_string(),
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 4,
+                        start_col: 5,
+                        end_line: 4,
+                        end_col: 15,
+                    },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
+                },
+                Occurrence {
+                    id: None,
+                    file_id: None,
+                    enclosing_symbol: Some(SymbolId(3)),
+                    enclosing_temp_index: Some(3),
+                    kind: OccurrenceKind::Call,
+                    raw_text: "load".to_string(),
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 18,
+                        start_col: 5,
+                        end_line: 18,
+                        end_col: 10,
+                    },
+                    language: LanguageId::rust(),
+                    backend_id: "rust-backend".to_string(),
                 },
             ],
             edges: vec![
                 CallEdge {
-                    from: SymbolId(0),
-                    to: Some(SymbolId(1)),
-                    call_site_id: Some(CallId(0)),
-                    raw_name: "load".to_string(),
-                    call_range: TextRange {
+                    id: None,
+                    kind: EdgeKind::Call,
+                    from_file_id: None,
+                    from_symbol_id: Some(SymbolId(0)),
+                    to_symbol_id: Some(SymbolId(1)),
+                    to_external: None,
+                    occurrence_id: Some(OccurrenceId(0)),
+                    raw_text: Some("load".to_string()),
+                    range: Some(TextRange {
                         start_line: 3,
                         start_col: 5,
                         end_line: 3,
                         end_col: 10,
-                    },
+                    }),
                     confidence: ResolutionConfidence::Heuristic,
+                    produced_by: None,
                 },
                 CallEdge {
-                    from: SymbolId(0),
-                    to: Some(SymbolId(2)),
-                    call_site_id: Some(CallId(1)),
-                    raw_name: "process".to_string(),
-                    call_range: TextRange {
+                    id: None,
+                    kind: EdgeKind::Call,
+                    from_file_id: None,
+                    from_symbol_id: Some(SymbolId(0)),
+                    to_symbol_id: Some(SymbolId(2)),
+                    to_external: None,
+                    occurrence_id: Some(OccurrenceId(1)),
+                    raw_text: Some("process".to_string()),
+                    range: Some(TextRange {
                         start_line: 4,
                         start_col: 5,
                         end_line: 4,
                         end_col: 15,
-                    },
+                    }),
                     confidence: ResolutionConfidence::Heuristic,
+                    produced_by: None,
                 },
                 CallEdge {
-                    from: SymbolId(3),
-                    to: Some(SymbolId(1)),
-                    call_site_id: Some(CallId(2)),
-                    raw_name: "load".to_string(),
-                    call_range: TextRange {
+                    id: None,
+                    kind: EdgeKind::Call,
+                    from_file_id: None,
+                    from_symbol_id: Some(SymbolId(3)),
+                    to_symbol_id: Some(SymbolId(1)),
+                    to_external: None,
+                    occurrence_id: Some(OccurrenceId(2)),
+                    raw_text: Some("load".to_string()),
+                    range: Some(TextRange {
                         start_line: 18,
                         start_col: 5,
                         end_line: 18,
                         end_col: 10,
-                    },
+                    }),
                     confidence: ResolutionConfidence::Heuristic,
+                    produced_by: None,
                 },
             ],
         };

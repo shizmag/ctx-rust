@@ -8,3 +8,4 @@ run/.ctx-codegraph/codegraph.sqlite
 .ctx_*/
 prompts/
 AGENTS.md
+/docs/

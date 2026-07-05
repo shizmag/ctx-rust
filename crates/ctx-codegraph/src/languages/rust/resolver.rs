@@ -1,6 +1,6 @@
 use crate::backend::{ResolveInput, ResolveOutput, ResolverBackend, ResolverId};
 use crate::error::CodeGraphError;
-use crate::model::{CallSite, ResolutionConfidence, Symbol, SymbolKind};
+use crate::model::{Occurrence, ResolutionConfidence, Symbol, SymbolKind};
 use crate::resolver::lsp_transport::GenericLspClient;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,7 +44,7 @@ impl ResolverBackend for RustResolver {
                     let delay = std::time::Duration::from_millis(200);
 
                     while start.elapsed() < timeout {
-                        let res = resolve_via_lsp(&mut c, input.call_site, input.symbols);
+                        let res = resolve_via_lsp(&mut c, input.occurrence, input.symbols);
                         match res {
                             Err(err)
                                 if err.contains("-32603") || err.contains("file not found") =>
@@ -76,7 +76,7 @@ impl ResolverBackend for RustResolver {
         let mut confidence = ResolutionConfidence::Unresolved;
 
         if let Some((_, ref mut client)) = *client_lock {
-            match resolve_via_lsp(client, input.call_site, input.symbols) {
+            match resolve_via_lsp(client, input.occurrence, input.symbols) {
                 Ok(Some(idx)) => {
                     resolved_symbol_index = Some(idx);
                     confidence = ResolutionConfidence::LspExact;
@@ -85,17 +85,16 @@ impl ResolverBackend for RustResolver {
                 Err(err) => {
                     eprintln!(
                         "LSP resolution warning for call to {}: {}",
-                        input.call_site.raw_name, err
+                        input.occurrence.raw_text, err
                     );
                 }
             }
         }
 
         if resolved_symbol_index.is_none() {
-            let (fallback_idx, fallback_conf) = crate::resolver::noop::resolve_name_only(
-                &input.call_site.raw_name,
+            let (fallback_idx, fallback_conf) = crate::resolver::noop::resolve_name_only_occurrence(
+                input.occurrence,
                 input.symbols,
-                &input.call_site.file,
             );
             resolved_symbol_index = fallback_idx;
             confidence = fallback_conf;
@@ -199,28 +198,28 @@ fn find_matching_symbol(
 
 fn resolve_via_lsp(
     client: &mut GenericLspClient,
-    call_site: &CallSite,
+    occurrence: &Occurrence,
     symbols: &[Symbol],
 ) -> Result<Option<usize>, String> {
     let file_uri = format!(
         "file://{}",
-        call_site
+        occurrence
             .file
             .canonicalize()
-            .unwrap_or_else(|_| call_site.file.clone())
+            .unwrap_or_else(|_| occurrence.file.clone())
             .display()
     );
 
-    let name_segment = crate::resolver::noop::parse_raw_name(&call_site.raw_name);
-    let offset = call_site.raw_name.len() - name_segment.len();
+    let name_segment = crate::resolver::noop::parse_raw_name(&occurrence.raw_text);
+    let offset = occurrence.raw_text.len() - name_segment.len();
 
     let params = serde_json::json!({
         "textDocument": {
             "uri": file_uri
         },
         "position": {
-            "line": call_site.range.start_line - 1,
-            "character": call_site.range.start_col - 1 + offset
+            "line": occurrence.range.start_line - 1,
+            "character": occurrence.range.start_col - 1 + offset
         }
     });
 

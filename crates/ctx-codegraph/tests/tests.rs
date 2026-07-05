@@ -39,9 +39,9 @@ fn test_parse_rust_code() {
     assert_eq!(new_method.kind, SymbolKind::Method);
     assert_eq!(new_method.qualified_name, "MyStruct::new");
 
-    let load_call = call_sites.iter().find(|c| c.raw_name == "load").unwrap();
+    let load_call = call_sites.iter().find(|c| c.raw_text == "load").unwrap();
     assert_eq!(
-        load_call.from_temp_index,
+        load_call.enclosing_temp_index,
         Some(
             symbols
                 .iter()
@@ -181,12 +181,13 @@ fn test_sqlite_and_find_symbols() {
                 body_range: None,
             },
         ],
-        call_sites: vec![CallSite {
+        occurrences: vec![Occurrence {
             id: None,
             file_id: None,
-            from: Some(SymbolId(0)),
-            from_temp_index: Some(0),
-            raw_name: "bar_func".to_string(),
+            enclosing_symbol: Some(SymbolId(0)),
+            enclosing_temp_index: Some(0),
+            kind: OccurrenceKind::Call,
+            raw_text: "bar_func".to_string(),
             file: PathBuf::from("src/lib.rs"),
             range: TextRange {
                 start_line: 3,
@@ -194,19 +195,43 @@ fn test_sqlite_and_find_symbols() {
                 end_line: 3,
                 end_col: 15,
             },
+            language: LanguageId::rust(),
+            backend_id: "rust-backend".to_string(),
         }],
-        edges: vec![CallEdge {
-            from: SymbolId(0),
-            to: Some(SymbolId(1)),
-            call_site_id: Some(CallId(0)),
-            raw_name: "bar_func".to_string(),
-            call_range: TextRange {
+        call_sites: vec![Occurrence {
+            id: None,
+            file_id: None,
+            enclosing_symbol: Some(SymbolId(0)),
+            enclosing_temp_index: Some(0),
+            kind: OccurrenceKind::Call,
+            raw_text: "bar_func".to_string(),
+            file: PathBuf::from("src/lib.rs"),
+            range: TextRange {
                 start_line: 3,
                 start_col: 5,
                 end_line: 3,
                 end_col: 15,
             },
+            language: LanguageId::rust(),
+            backend_id: "rust-backend".to_string(),
+        }],
+        edges: vec![CallEdge {
+            id: None,
+            kind: EdgeKind::Call,
+            from_file_id: None,
+            from_symbol_id: Some(SymbolId(0)),
+            to_symbol_id: Some(SymbolId(1)),
+            to_external: None,
+            occurrence_id: Some(OccurrenceId(0)),
+            raw_text: Some("bar_func".to_string()),
+            range: Some(TextRange {
+                start_line: 3,
+                start_col: 5,
+                end_line: 3,
+                end_col: 15,
+            }),
             confidence: ResolutionConfidence::Heuristic,
+            produced_by: None,
         }],
     };
 
@@ -289,33 +314,44 @@ fn test_slices() {
                 body_range: None,
             },
         ],
+        occurrences: vec![],
         call_sites: vec![],
         edges: vec![
             CallEdge {
-                from: SymbolId(0),
-                to: Some(SymbolId(1)),
-                call_site_id: None,
-                raw_name: "b".to_string(),
-                call_range: TextRange {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(0)),
+                to_symbol_id: Some(SymbolId(1)),
+                to_external: None,
+                occurrence_id: None,
+                raw_text: Some("b".to_string()),
+                range: Some(TextRange {
                     start_line: 1,
                     start_col: 1,
                     end_line: 1,
                     end_col: 1,
-                },
+                }),
                 confidence: ResolutionConfidence::Heuristic,
+                produced_by: None,
             },
             CallEdge {
-                from: SymbolId(1),
-                to: Some(SymbolId(2)),
-                call_site_id: None,
-                raw_name: "c".to_string(),
-                call_range: TextRange {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(1)),
+                to_symbol_id: Some(SymbolId(2)),
+                to_external: None,
+                occurrence_id: None,
+                raw_text: Some("c".to_string()),
+                range: Some(TextRange {
                     start_line: 3,
                     start_col: 1,
                     end_line: 3,
                     end_col: 1,
-                },
+                }),
                 confidence: ResolutionConfidence::Heuristic,
+                produced_by: None,
             },
         ],
     };
@@ -509,7 +545,7 @@ fn test_integration_with_rust_analyzer() {
     )
     .unwrap();
 
-    let load_edge = index.edges.iter().find(|e| e.raw_name == "load").unwrap();
+    let load_edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("load")).unwrap();
     assert_eq!(load_edge.confidence, ResolutionConfidence::LspExact);
 }
 
@@ -603,13 +639,14 @@ fn test_service_context_selection() {
                 body_range: None,
             },
         ],
-        call_sites: vec![
-            CallSite {
-                id: Some(CallId(0)),
+        occurrences: vec![
+            Occurrence {
+                id: Some(OccurrenceId(0)),
                 file_id: None,
-                from: Some(SymbolId(0)),
-                from_temp_index: None,
-                raw_name: "b".to_string(),
+                enclosing_symbol: Some(SymbolId(0)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "b".to_string(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 2,
@@ -617,13 +654,16 @@ fn test_service_context_selection() {
                     end_line: 2,
                     end_col: 5,
                 },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
             },
-            CallSite {
-                id: Some(CallId(1)),
+            Occurrence {
+                id: Some(OccurrenceId(1)),
                 file_id: None,
-                from: Some(SymbolId(1)),
-                from_temp_index: None,
-                raw_name: "c".to_string(),
+                enclosing_symbol: Some(SymbolId(1)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "c".to_string(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 7,
@@ -631,13 +671,16 @@ fn test_service_context_selection() {
                     end_line: 7,
                     end_col: 5,
                 },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
             },
-            CallSite {
-                id: Some(CallId(2)),
+            Occurrence {
+                id: Some(OccurrenceId(2)),
                 file_id: None,
-                from: Some(SymbolId(2)),
-                from_temp_index: None,
-                raw_name: "d".to_string(),
+                enclosing_symbol: Some(SymbolId(2)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "d".to_string(),
                 file: PathBuf::from("src/lib.rs"),
                 range: TextRange {
                     start_line: 12,
@@ -645,47 +688,117 @@ fn test_service_context_selection() {
                     end_line: 12,
                     end_col: 5,
                 },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
+            },
+        ],
+        call_sites: vec![
+            Occurrence {
+                id: Some(OccurrenceId(0)),
+                file_id: None,
+                enclosing_symbol: Some(SymbolId(0)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "b".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 2,
+                    start_col: 1,
+                    end_line: 2,
+                    end_col: 5,
+                },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
+            },
+            Occurrence {
+                id: Some(OccurrenceId(1)),
+                file_id: None,
+                enclosing_symbol: Some(SymbolId(1)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "c".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 7,
+                    start_col: 1,
+                    end_line: 7,
+                    end_col: 5,
+                },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
+            },
+            Occurrence {
+                id: Some(OccurrenceId(2)),
+                file_id: None,
+                enclosing_symbol: Some(SymbolId(2)),
+                enclosing_temp_index: None,
+                kind: OccurrenceKind::Call,
+                raw_text: "d".to_string(),
+                file: PathBuf::from("src/lib.rs"),
+                range: TextRange {
+                    start_line: 12,
+                    start_col: 1,
+                    end_line: 12,
+                    end_col: 5,
+                },
+                language: LanguageId::rust(),
+                backend_id: "rust-backend".to_string(),
             },
         ],
         edges: vec![
             CallEdge {
-                from: SymbolId(0),
-                to: Some(SymbolId(1)),
-                call_site_id: Some(CallId(0)),
-                raw_name: "b".to_string(),
-                call_range: TextRange {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(0)),
+                to_symbol_id: Some(SymbolId(1)),
+                to_external: None,
+                occurrence_id: Some(OccurrenceId(0)),
+                raw_text: Some("b".to_string()),
+                range: Some(TextRange {
                     start_line: 2,
                     start_col: 1,
                     end_line: 2,
                     end_col: 5,
-                },
+                }),
                 confidence: ResolutionConfidence::LspExact,
+                produced_by: None,
             },
             CallEdge {
-                from: SymbolId(1),
-                to: Some(SymbolId(2)),
-                call_site_id: Some(CallId(1)),
-                raw_name: "c".to_string(),
-                call_range: TextRange {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(1)),
+                to_symbol_id: Some(SymbolId(2)),
+                to_external: None,
+                occurrence_id: Some(OccurrenceId(1)),
+                raw_text: Some("c".to_string()),
+                range: Some(TextRange {
                     start_line: 7,
                     start_col: 1,
                     end_line: 7,
                     end_col: 5,
-                },
+                }),
                 confidence: ResolutionConfidence::LspExact,
+                produced_by: None,
             },
             CallEdge {
-                from: SymbolId(2),
-                to: Some(SymbolId(3)),
-                call_site_id: Some(CallId(2)),
-                raw_name: "d".to_string(),
-                call_range: TextRange {
+                id: None,
+                kind: EdgeKind::Call,
+                from_file_id: None,
+                from_symbol_id: Some(SymbolId(2)),
+                to_symbol_id: Some(SymbolId(3)),
+                to_external: None,
+                occurrence_id: Some(OccurrenceId(2)),
+                raw_text: Some("d".to_string()),
+                range: Some(TextRange {
                     start_line: 12,
                     start_col: 1,
                     end_line: 12,
                     end_col: 5,
-                },
+                }),
                 confidence: ResolutionConfidence::LspExact,
+                produced_by: None,
             },
         ],
     };
@@ -908,7 +1021,7 @@ fn test_edge_resolution_quality_variants() {
     let edge_a_b = index
         .edges
         .iter()
-        .find(|e| e.raw_name == "b" && e.from == sym_a.id.unwrap())
+        .find(|e| e.raw_text.as_deref() == Some("b") && e.from_symbol_id == Some(sym_a.id.unwrap()))
         .unwrap();
     assert_eq!(edge_a_b.confidence, ResolutionConfidence::Syntax);
 
@@ -916,16 +1029,16 @@ fn test_edge_resolution_quality_variants() {
     let edge_unres = index
         .edges
         .iter()
-        .find(|e| e.raw_name == "unresolved_call" && e.from == sym_a.id.unwrap())
+        .find(|e| e.raw_text.as_deref() == Some("unresolved_call") && e.from_symbol_id == Some(sym_a.id.unwrap()))
         .unwrap();
     assert_eq!(edge_unres.confidence, ResolutionConfidence::Unresolved);
-    assert!(edge_unres.to.is_none());
+    assert!(edge_unres.to_symbol_id.is_none());
 
     // Verify b(); inside d() is Heuristic (different file)
     let edge_d_b = index
         .edges
         .iter()
-        .find(|e| e.raw_name == "b" && e.from == sym_d.id.unwrap())
+        .find(|e| e.raw_text.as_deref() == Some("b") && e.from_symbol_id == Some(sym_d.id.unwrap()))
         .unwrap();
     assert_eq!(edge_d_b.confidence, ResolutionConfidence::Heuristic);
 }
@@ -1038,7 +1151,7 @@ fn test_db_correctness_after_incremental_update() {
         index
             .edges
             .iter()
-            .any(|e| e.raw_name == "b" && e.to.is_some())
+            .any(|e| e.raw_text.as_deref() == Some("b") && e.to_symbol_id.is_some())
     );
 
     // Modify file: change lib.rs so a calls c instead, and define c in lib.rs
@@ -1047,8 +1160,8 @@ fn test_db_correctness_after_incremental_update() {
 
     let (index_mod, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(index_mod.symbols.iter().any(|s| s.name == "c"));
-    assert!(!index_mod.edges.iter().any(|e| e.raw_name == "b")); // old edge b disappeared
-    assert!(index_mod.edges.iter().any(|e| e.raw_name == "c")); // new edge c appeared
+    assert!(!index_mod.edges.iter().any(|e| e.raw_text.as_deref() == Some("b"))); // old edge b disappeared
+    assert!(index_mod.edges.iter().any(|e| e.raw_text.as_deref() == Some("c"))); // new edge c appeared
 
     // Scenario 2: Add file
     // Add file d.rs: d calls a
@@ -1061,7 +1174,7 @@ fn test_db_correctness_after_incremental_update() {
         index_add
             .edges
             .iter()
-            .any(|e| e.raw_name == "a" && e.to.is_some())
+            .any(|e| e.raw_text.as_deref() == Some("a") && e.to_symbol_id.is_some())
     );
 
     // Scenario 3: Delete file
@@ -1083,8 +1196,8 @@ fn test_db_correctness_after_incremental_update() {
     let (index_rename, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(!index_rename.symbols.iter().any(|s| s.name == "c"));
     assert!(index_rename.symbols.iter().any(|s| s.name == "new_name"));
-    assert!(!index_rename.edges.iter().any(|e| e.raw_name == "c"));
-    assert!(index_rename.edges.iter().any(|e| e.raw_name == "new_name"));
+    assert!(!index_rename.edges.iter().any(|e| e.raw_text.as_deref() == Some("c")));
+    assert!(index_rename.edges.iter().any(|e| e.raw_text.as_deref() == Some("new_name")));
 }
 
 #[test]
@@ -1205,9 +1318,9 @@ while True:
     assert!(report.full_rebuild);
     assert_eq!(report.lsp_edges_exact, 1);
 
-    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
     assert_eq!(edge.confidence, ResolutionConfidence::LspExact);
-    assert!(edge.to.is_some());
+    assert!(edge.to_symbol_id.is_some());
 }
 
 #[test]
@@ -1407,8 +1520,8 @@ fn test_affected_set_callee_pulls_callers() {
 
     // Build the initial index
     let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
-    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
-    assert!(edge.to.is_some()); // resolved to b()
+    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    assert!(edge.to_symbol_id.is_some()); // resolved to b()
 
     // Now modify b.rs
     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1420,8 +1533,8 @@ fn test_affected_set_callee_pulls_callers() {
     assert_eq!(report.unchanged_files, 1); // lib.rs unchanged
 
     // Check if the edge calling b is still resolved correctly
-    let edge2 = index2.edges.iter().find(|e| e.raw_name == "b").unwrap();
-    assert!(edge2.to.is_some());
+    let edge2 = index2.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    assert!(edge2.to_symbol_id.is_some());
 }
 
 #[test]
@@ -1587,9 +1700,9 @@ while True:
     assert!(report.full_rebuild);
     assert_eq!(report.lsp_edges_exact, 0);
 
-    let edge = index.edges.iter().find(|e| e.raw_name == "b").unwrap();
+    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
     assert_eq!(edge.confidence, ResolutionConfidence::Syntax);
-    assert!(edge.to.is_some());
+    assert!(edge.to_symbol_id.is_some());
 }
 
 #[test]
@@ -1617,6 +1730,7 @@ fn test_db_transaction_rollback_on_failure() {
             parse_status: FileParseStatus::Success,
         }],
         symbols: vec![],
+        occurrences: vec![],
         call_sites: vec![],
         edges: vec![],
     };

@@ -1,6 +1,6 @@
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
-use crate::model::{CallSite, Language, ResolutionConfidence, Symbol};
+use crate::model::{Language, Occurrence, ResolutionConfidence, Symbol};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -57,12 +57,12 @@ pub struct ParseInput<'a> {
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     pub symbols: Vec<Symbol>,
-    pub call_sites: Vec<CallSite>,
+    pub occurrences: Vec<Occurrence>,
 }
 
 pub struct ResolveInput<'a> {
     pub workspace_root: &'a Path,
-    pub call_site: &'a CallSite,
+    pub occurrence: &'a Occurrence,
     pub symbols: &'a [Symbol],
 }
 

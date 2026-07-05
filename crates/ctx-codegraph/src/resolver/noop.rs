@@ -1,5 +1,12 @@
-use crate::model::{ResolutionConfidence, Symbol, SymbolKind};
+use crate::model::{Occurrence, ResolutionConfidence, Symbol, SymbolKind};
 use std::path::Path;
+
+pub fn resolve_name_only_occurrence(
+    occurrence: &Occurrence,
+    symbols: &[Symbol],
+) -> (Option<usize>, ResolutionConfidence) {
+    resolve_name_only(&occurrence.raw_text, symbols, &occurrence.file)
+}
 
 pub fn parse_raw_name(raw_name: &str) -> &str {
     if let Some(idx) = raw_name.rfind("::") {

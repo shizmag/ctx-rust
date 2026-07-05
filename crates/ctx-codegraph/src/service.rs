@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use crate::error::CodeGraphError;
 use crate::model::{
     ContextFileSpan, GraphContextDiagnostic, GraphContextMode, GraphContextOptions,
-    GraphContextResult, GraphEdge, LanguageObject, LanguageObjectKind, SourceRange, SymbolId,
+    GraphContextResult, GraphContextEdge, LanguageObject, LanguageObjectKind, SourceRange, SymbolId,
     SymbolResolution,
 };
 
@@ -174,14 +174,14 @@ impl GraphContextService {
 
             if traverse_forward {
                 for edge in &index.edges {
-                    if edge.from == curr {
-                        if let Some(to_id) = edge.to {
-                            let edge_key = (edge.from, to_id, edge.raw_name.clone());
+                    if edge.from_symbol_id == Some(curr) {
+                        if let Some(to_id) = edge.to_symbol_id {
+                            let edge_key = (curr, to_id, edge.raw_text.clone());
                             if seen_edges.insert(edge_key) {
-                                edges.push(GraphEdge {
-                                    from: edge.from,
+                                edges.push(GraphContextEdge {
+                                    from: curr,
                                     to: to_id,
-                                    label: Some(edge.raw_name.clone()),
+                                    label: edge.raw_text.clone(),
                                 });
                             }
 
@@ -207,28 +207,29 @@ impl GraphContextService {
 
             if traverse_backward {
                 for edge in &index.edges {
-                    if edge.to == Some(curr) {
-                        let from_id = edge.from;
-                        let edge_key = (from_id, curr, edge.raw_name.clone());
-                        if seen_edges.insert(edge_key) {
-                            edges.push(GraphEdge {
-                                from: from_id,
-                                to: curr,
-                                label: Some(edge.raw_name.clone()),
-                            });
-                        }
-
-                        if !visited.contains(&from_id) {
-                            visited.insert(from_id);
-                            queue.push_back((from_id, depth + 1));
-                        } else {
-                            let diag_msg =
-                                format!("Cycle or loop detected at symbol: {}", sym.qualified_name);
-                            if seen_diagnostics.insert(diag_msg.clone()) {
-                                diagnostics.push(GraphContextDiagnostic {
-                                    severity: "info".to_string(),
-                                    message: diag_msg,
+                    if edge.to_symbol_id == Some(curr) {
+                        if let Some(from_id) = edge.from_symbol_id {
+                            let edge_key = (from_id, curr, edge.raw_text.clone());
+                            if seen_edges.insert(edge_key) {
+                                edges.push(GraphContextEdge {
+                                    from: from_id,
+                                    to: curr,
+                                    label: edge.raw_text.clone(),
                                 });
+                            }
+
+                            if !visited.contains(&from_id) {
+                                visited.insert(from_id);
+                                queue.push_back((from_id, depth + 1));
+                            } else {
+                                let diag_msg =
+                                    format!("Cycle or loop detected at symbol: {}", sym.qualified_name);
+                                if seen_diagnostics.insert(diag_msg.clone()) {
+                                    diagnostics.push(GraphContextDiagnostic {
+                                        severity: "info".to_string(),
+                                        message: diag_msg,
+                                    });
+                                }
                             }
                         }
                     }

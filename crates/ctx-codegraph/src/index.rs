@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 
 use crate::backend::{BackendRegistry, ParseInput, ResolveInput, global_registry};
 use crate::error::CodeGraphError;
-use crate::model::{CallEdge, CodeIndex, FileParseStatus, FileSnapshot, SymbolId, SymbolKind};
+use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, SymbolId, SymbolKind, GraphEdge, Occurrence};
 use crate::resolver::noop::resolve_name_only;
 
 #[derive(Debug, Clone)]
@@ -143,7 +143,7 @@ pub fn build_index_with_registry(
 ) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
     let mut global_symbols = Vec::new();
-    let mut global_call_sites = Vec::new();
+    let mut global_occurrences = Vec::new();
 
     // Find files
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
@@ -195,7 +195,7 @@ pub fn build_index_with_registry(
         };
         files.push(source_file);
 
-        let (mut file_symbols, mut file_call_sites) = (parsed.symbols, parsed.call_sites);
+        let (mut file_symbols, mut file_occurrences) = (parsed.symbols, parsed.occurrences);
 
         if !options.include_tests {
             let mut new_symbols = Vec::new();
@@ -208,16 +208,16 @@ pub fn build_index_with_registry(
             }
             file_symbols = new_symbols;
 
-            file_call_sites.retain(|cs| {
-                if let Some(old_idx) = cs.from_temp_index {
+            file_occurrences.retain(|cs| {
+                if let Some(old_idx) = cs.enclosing_temp_index {
                     index_map.contains_key(&old_idx)
                 } else {
                     true
                 }
             });
 
-            for cs in &mut file_call_sites {
-                if let Some(ref mut idx) = cs.from_temp_index {
+            for cs in &mut file_occurrences {
+                if let Some(ref mut idx) = cs.enclosing_temp_index {
                     if let Some(&new_idx) = index_map.get(idx) {
                         *idx = new_idx;
                     }
@@ -226,14 +226,14 @@ pub fn build_index_with_registry(
         }
 
         let start_sym_idx = global_symbols.len();
-        for cs in &mut file_call_sites {
-            if let Some(ref mut idx) = cs.from_temp_index {
+        for cs in &mut file_occurrences {
+            if let Some(ref mut idx) = cs.enclosing_temp_index {
                 *idx += start_sym_idx;
             }
         }
 
         global_symbols.extend(file_symbols);
-        global_call_sites.extend(file_call_sites);
+        global_occurrences.extend(file_occurrences);
     }
 
     // Set temporary symbol IDs
@@ -241,20 +241,27 @@ pub fn build_index_with_registry(
         sym.id = Some(SymbolId(i as i64));
     }
 
-    // Set temporary from IDs on call sites
-    for cs in &mut global_call_sites {
-        if let Some(from_idx) = cs.from_temp_index {
-            cs.from = Some(SymbolId(from_idx as i64));
+    // Set temporary enclosing symbol IDs on occurrences
+    for cs in &mut global_occurrences {
+        if let Some(from_idx) = cs.enclosing_temp_index {
+            cs.enclosing_symbol = Some(SymbolId(from_idx as i64));
         }
     }
 
-    // Resolve call sites
+    // Resolve call occurrences
     let mut edges = Vec::new();
 
-    for (call_site_idx, cs) in global_call_sites.iter().enumerate() {
-        let from_id = match cs.from {
+    for (call_site_idx, cs) in global_occurrences.iter().enumerate() {
+        if cs.kind != crate::model::OccurrenceKind::Call {
+            continue;
+        }
+
+        let from_id = match cs.enclosing_symbol {
             Some(id) => id,
-            None => continue,
+            None => {
+                // Correct invariant: occurrence without enclosing symbol has no symbol-to-symbol edge
+                continue;
+            }
         };
 
         let mut resolved_idx = None;
@@ -267,7 +274,7 @@ pub fn build_index_with_registry(
             if let Some(res) = resolver {
                 let resolve_input = ResolveInput {
                     workspace_root: root,
-                    call_site: cs,
+                    occurrence: cs,
                     symbols: &global_symbols,
                 };
                 match res.resolve(resolve_input) {
@@ -278,7 +285,7 @@ pub fn build_index_with_registry(
                     Err(err) => {
                         eprintln!(
                             "LSP resolution warning for call to {}: {}",
-                            cs.raw_name, err
+                            cs.raw_text, err
                         );
                     }
                 }
@@ -287,27 +294,39 @@ pub fn build_index_with_registry(
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
-                resolve_name_only(&cs.raw_name, &global_symbols, &cs.file);
+                resolve_name_only(&cs.raw_text, &global_symbols, &cs.file);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }
 
-        let edge = CallEdge {
-            from: from_id,
-            to: resolved_idx.map(|idx| SymbolId(idx as i64)),
-            call_site_id: Some(crate::model::CallId(call_site_idx as i64)),
-            raw_name: cs.raw_name.clone(),
-            call_range: cs.range.clone(),
+        let edge = GraphEdge {
+            id: None,
+            kind: crate::model::EdgeKind::Call,
+            from_file_id: cs.file_id,
+            from_symbol_id: Some(from_id),
+            to_symbol_id: resolved_idx.map(|idx| SymbolId(idx as i64)),
+            to_external: None,
+            occurrence_id: Some(crate::model::OccurrenceId(call_site_idx as i64)),
+            raw_text: Some(cs.raw_text.clone()),
+            range: Some(cs.range.clone()),
             confidence,
+            produced_by: Some(resolver.map(|r| r.resolver_id().0.clone()).unwrap_or_else(|| "noop".to_string())),
         };
         edges.push(edge);
     }
+
+    let call_sites_compat = global_occurrences
+        .iter()
+        .filter(|o| o.kind == crate::model::OccurrenceKind::Call)
+        .cloned()
+        .collect();
 
     Ok(CodeIndex {
         root: root.to_path_buf(),
         files,
         symbols: global_symbols,
-        call_sites: global_call_sites,
+        occurrences: global_occurrences,
         edges,
+        call_sites: call_sites_compat,
     })
 }

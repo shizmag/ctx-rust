@@ -557,11 +557,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                     match target {
                         Some(t) => println!(
                             "  - {} -> {} ({})",
-                            edge.raw_name, t.qualified_name, edge.confidence
+                            edge.raw_text.as_deref().unwrap_or_default(), t.qualified_name, edge.confidence
                         ),
                         None => println!(
                             "  - {} -> [Unresolved] ({})",
-                            edge.raw_name, edge.confidence
+                            edge.raw_text.as_deref().unwrap_or_default(), edge.confidence
                         ),
                     }
                 }
@@ -590,12 +590,18 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 println!("  (none)");
             } else {
                 for (edge, caller) in callers {
+                    let range = edge.range.clone().unwrap_or_else(|| ctx_codegraph::model::TextRange {
+                        start_line: 0,
+                        start_col: 0,
+                        end_line: 0,
+                        end_col: 0,
+                    });
                     println!(
                         "  - {} via `{}` at L{}:{} ({})",
                         caller.qualified_name,
-                        edge.raw_name,
-                        edge.call_range.start_line,
-                        edge.call_range.start_col,
+                        edge.raw_text.as_deref().unwrap_or_default(),
+                        range.start_line,
+                        range.start_col,
                         edge.confidence
                     );
                 }
@@ -849,8 +855,8 @@ fn print_slice_tree_helper(
 
     let mut seen_targets = HashSet::new();
     for edge in &index.edges {
-        if edge.from == curr_id {
-            if let Some(to_id) = edge.to {
+        if edge.from_symbol_id == Some(curr_id) {
+            if let Some(to_id) = edge.to_symbol_id {
                 if !seen_targets.insert(to_id) {
                     continue;
                 }

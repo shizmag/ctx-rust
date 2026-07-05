@@ -1,6 +1,6 @@
 use crate::backend::{ParseInput, ParsedFile, ParserBackend, ParserId};
 use crate::error::CodeGraphError;
-use crate::model::{CallSite, Language, Symbol, SymbolKind, TextRange};
+use crate::model::{Language, Occurrence, Symbol, SymbolKind, TextRange};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
@@ -16,10 +16,10 @@ impl ParserBackend for RustParser {
     }
 
     fn parse_file(&self, input: ParseInput<'_>) -> Result<ParsedFile, CodeGraphError> {
-        let (symbols, call_sites) = parse_rust_file(input.path)?;
+        let (symbols, occurrences) = parse_rust_file(input.path)?;
         Ok(ParsedFile {
             symbols,
-            call_sites,
+            occurrences,
         })
     }
 }
@@ -29,7 +29,7 @@ struct ParserState<'a> {
     file_path: PathBuf,
     file_stem: String,
     symbols: Vec<Symbol>,
-    call_sites: Vec<CallSite>,
+    occurrences: Vec<Occurrence>,
 }
 
 fn to_text_range(range: tree_sitter::Range) -> TextRange {
@@ -260,19 +260,22 @@ impl<'a> ParserState<'a> {
             }
             "call_expression" => {
                 if let Some(func_node) = node.child_by_field_name("function") {
-                    let raw_name = get_node_text(func_node, self.source).to_string();
+                    let raw_text = get_node_text(func_node, self.source).to_string();
                     let range = to_text_range(func_node.range());
 
-                    let call_site = CallSite {
+                    let occurrence = Occurrence {
                         id: None,
                         file_id: None,
-                        from: None,
-                        from_temp_index: current_function_idx,
-                        raw_name,
+                        enclosing_symbol: None,
+                        enclosing_temp_index: current_function_idx,
+                        kind: crate::model::OccurrenceKind::Call,
+                        raw_text,
                         file: self.file_path.clone(),
                         range,
+                        language: crate::model::LanguageId::rust(),
+                        backend_id: "rust".to_string(),
                     };
-                    self.call_sites.push(call_site);
+                    self.occurrences.push(occurrence);
                 }
             }
             _ => {}
@@ -290,7 +293,7 @@ impl<'a> ParserState<'a> {
     }
 }
 
-pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), CodeGraphError> {
+pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<Occurrence>), CodeGraphError> {
     let content_str = std::fs::read_to_string(path)?;
     let source = content_str.as_bytes();
     let mut parser = Parser::new();
@@ -320,10 +323,10 @@ pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<CallSite>), Code
         file_path: path.to_path_buf(),
         file_stem,
         symbols: Vec::new(),
-        call_sites: Vec::new(),
+        occurrences: Vec::new(),
     };
 
     state.visit(tree.root_node(), None, None, None);
 
-    Ok((state.symbols, state.call_sites))
+    Ok((state.symbols, state.occurrences))
 }

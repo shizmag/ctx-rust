@@ -95,7 +95,7 @@ impl ParserBackend for MockParser {
         }
         Ok(ParsedFile {
             symbols,
-            call_sites: Vec::new(),
+            occurrences: Vec::new(),
         })
     }
 }
