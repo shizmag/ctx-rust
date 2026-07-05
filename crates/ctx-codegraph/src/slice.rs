@@ -94,7 +94,7 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallEdge, LanguageId, ResolutionConfidence, Symbol, TextRange, Occurrence};
+    use crate::model::{CallEdge, LanguageId, ResolutionConfidence, Symbol, TextRange};
     use std::path::PathBuf;
 
     fn make_test_symbol(id: i64, name: &str, kind: SymbolKind) -> Symbol {

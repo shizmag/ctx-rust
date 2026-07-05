@@ -1,12 +1,12 @@
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::backend::{BackendRegistry, ParseInput, ResolveInput, global_registry};
 use crate::error::CodeGraphError;
-use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, SymbolId, SymbolKind, GraphEdge, Occurrence};
+use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, GraphEdge, SymbolId, SymbolKind};
 use crate::resolver::noop::resolve_name_only;
 
 #[derive(Debug, Clone)]
@@ -117,6 +117,7 @@ pub fn create_file_snapshot_with_registry(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn should_index_path(path: &Path) -> bool {
     should_index_path_with_registry(path, global_registry())
 }
@@ -310,7 +311,11 @@ pub fn build_index_with_registry(
             raw_text: Some(cs.raw_text.clone()),
             range: Some(cs.range.clone()),
             confidence,
-            produced_by: Some(resolver.map(|r| r.resolver_id().0.clone()).unwrap_or_else(|| "noop".to_string())),
+            produced_by: Some(
+                resolver
+                    .map(|r| r.resolver_id().0.clone())
+                    .unwrap_or_else(|| "noop".to_string()),
+            ),
         };
         edges.push(edge);
     }

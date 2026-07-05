@@ -1,16 +1,12 @@
-use std::collections::{HashSet, HashMap, VecDeque};
-use std::path::{Path, PathBuf};
 use crate::error::CodeGraphError;
 use crate::model::{
-    Symbol, SymbolId, SymbolKind, TextRange, SourceRange, Occurrence, OccurrenceId,
-    OccurrenceKind, EdgeId, GraphEdge, LanguageId, LanguageObject, LanguageObjectKind,
-    EdgeDirection, ResolvedEdgeTarget, GraphContextEdge, GraphContextMode,
-    GraphContextDiagnostic, EdgeKind, FileId, Language, ResolutionConfidence,
+    EdgeDirection, EdgeKind, FileId, GraphContextDiagnostic, GraphContextEdge, GraphContextMode,
+    Language, LanguageObject, LanguageObjectKind, ResolutionConfidence, ResolvedEdgeTarget,
+    SourceRange, Symbol, SymbolId, SymbolKind, TextRange,
 };
-use crate::storage::{
-    load_symbol, load_symbols_by_ids, load_edges_for_symbol, load_occurrence, load_file_span,
-    load_edges_from, load_edges_to,
-};
+use crate::storage::{load_edges_for_symbol, load_edges_from, load_edges_to, load_symbol};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DepthLimit {
@@ -90,6 +86,10 @@ pub struct ContextPack {
     pub query: String,
     pub mode: GraphContextMode,
     pub token_budget: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_token_budget: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_token_budget: Option<usize>,
     pub estimated_tokens: usize,
     pub roots: Vec<LanguageObject>,
     pub nodes: Vec<LanguageObject>,
@@ -112,11 +112,7 @@ impl ContextBudget {
         let max_from_window = match self.model_context_window {
             Some(w) => {
                 let reserved = self.reserve_output_tokens + self.reserve_instruction_tokens;
-                if w > reserved {
-                    w - reserved
-                } else {
-                    0
-                }
+                if w > reserved { w - reserved } else { 0 }
             }
             None => usize::MAX,
         };
@@ -140,7 +136,11 @@ impl TokenEstimator for ApproxTokenEstimator {
 }
 
 pub trait ContextRanker {
-    fn rank(&self, query: &ContextQuery, candidates: Vec<ContextCandidate>) -> Vec<ContextCandidate>;
+    fn rank(
+        &self,
+        query: &ContextQuery,
+        candidates: Vec<ContextCandidate>,
+    ) -> Vec<ContextCandidate>;
 }
 
 pub struct ContextQuery {
@@ -151,7 +151,11 @@ pub struct ContextQuery {
 
 pub struct GraphRanker;
 impl ContextRanker for GraphRanker {
-    fn rank(&self, query: &ContextQuery, candidates: Vec<ContextCandidate>) -> Vec<ContextCandidate> {
+    fn rank(
+        &self,
+        query: &ContextQuery,
+        candidates: Vec<ContextCandidate>,
+    ) -> Vec<ContextCandidate> {
         let mut scored = candidates;
         for c in &mut scored {
             let mut graph_score = 0.0;
@@ -165,15 +169,16 @@ impl ContextRanker for GraphRanker {
             }
             // 2. Locality weight: same file (+2.0) or same folder (+1.0) as any root
             let same_file = query.roots.iter().any(|r| r.file_path == c.file_path);
-            let same_dir = query.roots.iter().any(|r| {
-                r.file_path.parent() == c.file_path.parent()
-            });
+            let same_dir = query
+                .roots
+                .iter()
+                .any(|r| r.file_path.parent() == c.file_path.parent());
             if same_file {
                 graph_score += 2.0;
             } else if same_dir {
                 graph_score += 1.0;
             }
-            
+
             // 3. Edge confidence weight
             if let Some(ref edge) = c.via_edge {
                 if let Some(ref conf) = edge.confidence {
@@ -189,27 +194,36 @@ impl ContextRanker for GraphRanker {
             // 4. Test penalty
             let is_test = c.node.name.to_lowercase().contains("test")
                 || c.node.qualified_name.to_lowercase().contains("test")
-                || c.file_path.to_string_lossy().to_lowercase().contains("test");
+                || c.file_path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .contains("test");
             if is_test && !query.include_tests {
                 graph_score -= 2.0;
             }
             // 5. Vendor/generated penalty
             let path_str = c.file_path.to_string_lossy().to_lowercase();
-            let is_vendor_or_gen = path_str.contains("vendor") 
-                || path_str.contains("generated") 
-                || path_str.contains("target") 
+            let is_vendor_or_gen = path_str.contains("vendor")
+                || path_str.contains("generated")
+                || path_str.contains("target")
                 || path_str.contains("node_modules");
             if is_vendor_or_gen {
                 graph_score -= 4.0;
             }
-            
+
             c.graph_score = graph_score;
             c.combined_score = graph_score;
         }
         scored.sort_by(|a, b| {
-            b.combined_score.partial_cmp(&a.combined_score)
+            b.combined_score
+                .partial_cmp(&a.combined_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.node.qualified_name.len().cmp(&b.node.qualified_name.len()))
+                .then_with(|| {
+                    a.node
+                        .qualified_name
+                        .len()
+                        .cmp(&b.node.qualified_name.len())
+                })
         });
         scored
     }
@@ -217,35 +231,46 @@ impl ContextRanker for GraphRanker {
 
 pub struct LexicalRanker;
 impl ContextRanker for LexicalRanker {
-    fn rank(&self, query: &ContextQuery, candidates: Vec<ContextCandidate>) -> Vec<ContextCandidate> {
+    fn rank(
+        &self,
+        query: &ContextQuery,
+        candidates: Vec<ContextCandidate>,
+    ) -> Vec<ContextCandidate> {
         let mut scored = candidates;
         let total_docs = scored.len();
         let query_terms = tokenize(&query.query_string);
         if query_terms.is_empty() {
             return scored;
         }
-        
+
         let mut doc_freq = HashMap::new();
         for cand in &scored {
             let mut unique_terms = HashSet::new();
-            for term in tokenize(&cand.node.name) { unique_terms.insert(term); }
-            for term in tokenize(&cand.node.qualified_name) { unique_terms.insert(term); }
-            for term in tokenize(&cand.file_path.to_string_lossy()) { unique_terms.insert(term); }
+            for term in tokenize(&cand.node.name) {
+                unique_terms.insert(term);
+            }
+            for term in tokenize(&cand.node.qualified_name) {
+                unique_terms.insert(term);
+            }
+            for term in tokenize(&cand.file_path.to_string_lossy()) {
+                unique_terms.insert(term);
+            }
             for term in unique_terms {
                 *doc_freq.entry(term).or_insert(0) += 1;
             }
         }
-        
+
         for c in &mut scored {
             let name_terms = tokenize(&c.node.name);
             let qual_terms = tokenize(&c.node.qualified_name);
             let path_terms = tokenize(&c.file_path.to_string_lossy());
-            
+
             let mut lex_score = 0.0;
             for q in &query_terms {
                 let n = *doc_freq.get(q).unwrap_or(&0);
-                let idf = (((total_docs as f32 - n as f32 + 0.5) / (n as f32 + 0.5) + 1.0).ln()).max(0.1);
-                
+                let idf =
+                    (((total_docs as f32 - n as f32 + 0.5) / (n as f32 + 0.5) + 1.0).ln()).max(0.1);
+
                 let mut term_score: f32 = 0.0;
                 for t in &name_terms {
                     if t == q {
@@ -278,9 +303,15 @@ impl ContextRanker for LexicalRanker {
             c.combined_score = lex_score;
         }
         scored.sort_by(|a, b| {
-            b.combined_score.partial_cmp(&a.combined_score)
+            b.combined_score
+                .partial_cmp(&a.combined_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.node.qualified_name.len().cmp(&b.node.qualified_name.len()))
+                .then_with(|| {
+                    a.node
+                        .qualified_name
+                        .len()
+                        .cmp(&b.node.qualified_name.len())
+                })
         });
         scored
     }
@@ -291,7 +322,11 @@ pub struct HybridRanker {
     pub lexical_weight: f32,
 }
 impl ContextRanker for HybridRanker {
-    fn rank(&self, query: &ContextQuery, candidates: Vec<ContextCandidate>) -> Vec<ContextCandidate> {
+    fn rank(
+        &self,
+        query: &ContextQuery,
+        candidates: Vec<ContextCandidate>,
+    ) -> Vec<ContextCandidate> {
         let mut scored = GraphRanker.rank(query, candidates);
         let total_docs = scored.len();
         let query_terms = tokenize(&query.query_string);
@@ -299,24 +334,32 @@ impl ContextRanker for HybridRanker {
             let mut doc_freq = HashMap::new();
             for cand in &scored {
                 let mut unique_terms = HashSet::new();
-                for term in tokenize(&cand.node.name) { unique_terms.insert(term); }
-                for term in tokenize(&cand.node.qualified_name) { unique_terms.insert(term); }
-                for term in tokenize(&cand.file_path.to_string_lossy()) { unique_terms.insert(term); }
+                for term in tokenize(&cand.node.name) {
+                    unique_terms.insert(term);
+                }
+                for term in tokenize(&cand.node.qualified_name) {
+                    unique_terms.insert(term);
+                }
+                for term in tokenize(&cand.file_path.to_string_lossy()) {
+                    unique_terms.insert(term);
+                }
                 for term in unique_terms {
                     *doc_freq.entry(term).or_insert(0) += 1;
                 }
             }
-            
+
             for c in &mut scored {
                 let name_terms = tokenize(&c.node.name);
                 let qual_terms = tokenize(&c.node.qualified_name);
                 let path_terms = tokenize(&c.file_path.to_string_lossy());
-                
+
                 let mut lex_score = 0.0;
                 for q in &query_terms {
                     let n = *doc_freq.get(q).unwrap_or(&0);
-                    let idf = (((total_docs as f32 - n as f32 + 0.5) / (n as f32 + 0.5) + 1.0).ln()).max(0.1);
-                    
+                    let idf = (((total_docs as f32 - n as f32 + 0.5) / (n as f32 + 0.5) + 1.0)
+                        .ln())
+                    .max(0.1);
+
                     let mut term_score: f32 = 0.0;
                     for t in &name_terms {
                         if t == q {
@@ -346,7 +389,8 @@ impl ContextRanker for HybridRanker {
                     lex_score += term_score;
                 }
                 c.lexical_score = lex_score;
-                c.combined_score = self.graph_weight * c.graph_score + self.lexical_weight * lex_score;
+                c.combined_score =
+                    self.graph_weight * c.graph_score + self.lexical_weight * lex_score;
             }
         } else {
             for c in &mut scored {
@@ -354,11 +398,17 @@ impl ContextRanker for HybridRanker {
                 c.combined_score = self.graph_weight * c.graph_score;
             }
         }
-        
+
         scored.sort_by(|a, b| {
-            b.combined_score.partial_cmp(&a.combined_score)
+            b.combined_score
+                .partial_cmp(&a.combined_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.node.qualified_name.len().cmp(&b.node.qualified_name.len()))
+                .then_with(|| {
+                    a.node
+                        .qualified_name
+                        .len()
+                        .cmp(&b.node.qualified_name.len())
+                })
         });
         scored
     }
@@ -367,7 +417,7 @@ impl ContextRanker for HybridRanker {
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
-    
+
     let chars: Vec<char> = text.chars().collect();
     for i in 0..chars.len() {
         let c = chars[i];
@@ -377,8 +427,8 @@ pub fn tokenize(text: &str) -> Vec<String> {
                 current.clear();
             }
         } else if c.is_uppercase() {
-            let prev_is_lower = i > 0 && chars[i-1].is_lowercase();
-            let next_is_lower = i + 1 < chars.len() && chars[i+1].is_lowercase();
+            let prev_is_lower = i > 0 && chars[i - 1].is_lowercase();
+            let next_is_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
             if prev_is_lower || next_is_lower {
                 if !current.is_empty() {
                     tokens.push(current.to_lowercase());
@@ -398,12 +448,12 @@ pub fn tokenize(text: &str) -> Vec<String> {
     if !current.is_empty() {
         tokens.push(current.to_lowercase());
     }
-    
+
     let lower = text.to_lowercase();
     if !tokens.contains(&lower) {
         tokens.push(lower);
     }
-    
+
     tokens
 }
 
@@ -436,12 +486,12 @@ pub fn extract_snippet(
     if lines.is_empty() {
         return Ok("".to_string());
     }
-    
+
     let mut start_line = range.start_line;
     let mut end_line = range.end_line;
-    
+
     let limit = if is_root { 160 } else { 80 };
-    
+
     if let Some(br) = body_range {
         let body_len = br.end_line.saturating_sub(br.start_line) + 1;
         if body_len <= limit {
@@ -450,10 +500,10 @@ pub fn extract_snippet(
         } else {
             let top_limit = 15;
             let bottom_limit = 15;
-            
+
             let top_end = br.start_line + top_limit;
             let bottom_start = br.end_line.saturating_sub(bottom_limit);
-            
+
             let mut snippet = String::new();
             let start = range.start_line.saturating_sub(context_lines).max(1);
             let end_top = top_end.min(lines.len());
@@ -461,12 +511,12 @@ pub fn extract_snippet(
                 snippet.push_str(lines[i]);
                 snippet.push('\n');
             }
-            
+
             let omitted = bottom_start.saturating_sub(end_top);
             if omitted > 0 {
                 snippet.push_str(&format!("// ... {} lines omitted ...\n", omitted));
             }
-            
+
             let start_bot = bottom_start.max(end_top + 1);
             let end_bot = (br.end_line + context_lines).min(lines.len());
             for i in (start_bot - 1)..end_bot {
@@ -479,7 +529,7 @@ pub fn extract_snippet(
         start_line = start_line.saturating_sub(context_lines).max(1);
         end_line = (end_line + context_lines).min(lines.len());
     }
-    
+
     if start_line > lines.len() {
         return Ok("".to_string());
     }
@@ -487,13 +537,13 @@ pub fn extract_snippet(
     if start_line > end {
         return Ok("".to_string());
     }
-    
+
     let mut snippet = String::new();
     for i in (start_line - 1)..end {
         snippet.push_str(lines[i]);
         snippet.push('\n');
     }
-    
+
     Ok(snippet)
 }
 
@@ -502,14 +552,16 @@ pub fn resolve_roots(
     query: &str,
     max_roots: usize,
 ) -> Result<Vec<LanguageObject>, CodeGraphError> {
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
                s.start_line, s.start_col, s.end_line, s.end_col,
                s.body_start_line, s.body_start_col, s.body_end_line, s.body_end_col,
                f.path
         FROM symbols s
         JOIN files f ON s.file_id = f.id
-    ")?;
+    ",
+    )?;
     let mut all_rows = stmt.query([])?;
     let mut all_symbols = Vec::new();
     while let Some(row) = all_rows.next()? {
@@ -576,7 +628,11 @@ pub fn resolve_roots(
         let qual_lower = sym.qualified_name.to_lowercase();
         let file_str = sym.file.to_string_lossy();
         let file_lower = file_str.to_lowercase();
-        let file_stem = sym.file.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let file_stem = sym
+            .file
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
 
         let mut match_type = 6;
         let mut score = 0.0;
@@ -620,21 +676,21 @@ pub fn resolve_roots(
         }
 
         if score > 0.0 {
-            let is_test = name_lower.contains("test") 
-                || qual_lower.contains("test") 
+            let is_test = name_lower.contains("test")
+                || qual_lower.contains("test")
                 || file_lower.contains("test");
             if is_test {
                 score -= 5.0;
             }
-            
-            let is_external = file_lower.contains("vendor") 
-                || file_lower.contains("node_modules") 
+
+            let is_external = file_lower.contains("vendor")
+                || file_lower.contains("node_modules")
                 || file_lower.contains("generated")
                 || file_lower.contains("target");
             if is_external {
                 score -= 10.0;
             }
-            
+
             scored_candidates.push(RootCandidate {
                 symbol: sym,
                 score,
@@ -644,9 +700,15 @@ pub fn resolve_roots(
     }
 
     scored_candidates.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score)
+        b.score
+            .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.symbol.qualified_name.len().cmp(&b.symbol.qualified_name.len()))
+            .then_with(|| {
+                a.symbol
+                    .qualified_name
+                    .len()
+                    .cmp(&b.symbol.qualified_name.len())
+            })
     });
 
     let mut exact_matches = Vec::new();
@@ -706,12 +768,36 @@ pub fn retrieve_graph_context(
     include_unresolved: bool,
     explain_ranking: bool,
 ) -> Result<ContextPack, CodeGraphError> {
+    let mut diagnostics = Vec::new();
+    let mut requested_token_budget = None;
+    let mut effective_token_budget = None;
+    let mut raw_budget = budget.effective_budget();
+
+    if budget.token_budget < 100 {
+        diagnostics.push(GraphContextDiagnostic {
+            severity: "warning".to_string(),
+            message: format!(
+                "Requested token budget {} is below minimum 100; using 100.",
+                budget.token_budget
+            ),
+        });
+        raw_budget = 100;
+        requested_token_budget = Some(budget.token_budget);
+        effective_token_budget = Some(100);
+    }
+
     let roots = resolve_roots(conn, query_str, 5)?;
     if roots.is_empty() {
+        diagnostics.push(GraphContextDiagnostic {
+            severity: "error".to_string(),
+            message: format!("Symbol not found: {}", query_str),
+        });
         return Ok(ContextPack {
             query: query_str.to_string(),
             mode,
-            token_budget: budget.effective_budget(),
+            token_budget: raw_budget,
+            requested_token_budget,
+            effective_token_budget,
             estimated_tokens: 0,
             roots: Vec::new(),
             nodes: Vec::new(),
@@ -719,10 +805,7 @@ pub fn retrieve_graph_context(
             snippets: Vec::new(),
             sections: Vec::new(),
             omitted: Vec::new(),
-            diagnostics: vec![GraphContextDiagnostic {
-                severity: "error".to_string(),
-                message: format!("Symbol not found: {}", query_str),
-            }],
+            diagnostics,
         });
     }
 
@@ -732,13 +815,24 @@ pub fn retrieve_graph_context(
                 vec![EdgeKind::Call, EdgeKind::Reference]
             }
             GraphContextMode::Dependencies | GraphContextMode::Dependents => {
-                vec![EdgeKind::Import, EdgeKind::Call, EdgeKind::TypeUse, EdgeKind::Reference]
+                vec![
+                    EdgeKind::Import,
+                    EdgeKind::Call,
+                    EdgeKind::TypeUse,
+                    EdgeKind::Reference,
+                ]
             }
             _ => {
                 vec![
-                    EdgeKind::Call, EdgeKind::Reference, EdgeKind::Import, EdgeKind::Export,
-                    EdgeKind::TypeUse, EdgeKind::Inherits, EdgeKind::Implements, EdgeKind::DataFlow,
-                    EdgeKind::Contains
+                    EdgeKind::Call,
+                    EdgeKind::Reference,
+                    EdgeKind::Import,
+                    EdgeKind::Export,
+                    EdgeKind::TypeUse,
+                    EdgeKind::Inherits,
+                    EdgeKind::Implements,
+                    EdgeKind::DataFlow,
+                    EdgeKind::Contains,
                 ]
             }
         }
@@ -768,7 +862,7 @@ pub fn retrieve_graph_context(
     }
     candidates.extend(current_layer.clone());
 
-    let mut remaining_budget = budget.effective_budget();
+    let mut remaining_budget = raw_budget;
 
     let auto_depth_min = 1;
     let auto_depth_max = 3;
@@ -784,17 +878,24 @@ pub fn retrieve_graph_context(
         DepthLimit::Auto => auto_depth_max,
     };
 
+    let mut unresolved_filtered_count = 0;
     let mut depth = 0;
     while depth < max_depth {
         let mut next_layer_candidates = Vec::new();
-        
+
         for parent in &current_layer {
             let mut traverse_directions = Vec::new();
             match mode {
-                GraphContextMode::Callers | GraphContextMode::Dependents | GraphContextMode::ReverseSlice | GraphContextMode::Reverse => {
+                GraphContextMode::Callers
+                | GraphContextMode::Dependents
+                | GraphContextMode::ReverseSlice
+                | GraphContextMode::Reverse => {
                     traverse_directions.push(EdgeDirection::Inbound);
                 }
-                GraphContextMode::Callees | GraphContextMode::Dependencies | GraphContextMode::ForwardSlice | GraphContextMode::Forward => {
+                GraphContextMode::Callees
+                | GraphContextMode::Dependencies
+                | GraphContextMode::ForwardSlice
+                | GraphContextMode::Forward => {
                     traverse_directions.push(EdgeDirection::Outbound);
                 }
                 GraphContextMode::Neighborhood => {
@@ -808,11 +909,12 @@ pub fn retrieve_graph_context(
                     }
                 }
             }
-            
+
             for dir in traverse_directions {
                 let edges = load_edges_for_symbol(conn, parent.node.id, dir, &kinds)?;
                 for (edge, target) in edges {
                     if !include_unresolved && edge.confidence == ResolutionConfidence::Unresolved {
+                        unresolved_filtered_count += 1;
                         continue;
                     }
                     let target_sym = match target {
@@ -831,24 +933,20 @@ pub fn retrieve_graph_context(
                             signature: None,
                             language: Some(target_sym.language.as_str().to_string()),
                         };
-                        
+
                         let via_context_edge = GraphContextEdge {
                             from: edge.from_symbol_id.unwrap_or(SymbolId(0)),
                             to: edge.to_symbol_id.unwrap_or(SymbolId(0)),
                             label: edge.raw_text.clone(),
                             confidence: Some(edge.confidence.as_str().to_string()),
                         };
-                        
+
                         let dir_str = match dir {
                             EdgeDirection::Inbound => "inbound",
                             EdgeDirection::Outbound => "outbound",
                         };
-                        let reason = format!(
-                            "{} relationship to {}",
-                            dir_str,
-                            parent.node.name
-                        );
-                        
+                        let reason = format!("{} relationship to {}", dir_str, parent.node.name);
+
                         let cand = ContextCandidate {
                             node,
                             distance: depth + 1,
@@ -867,32 +965,35 @@ pub fn retrieve_graph_context(
                 }
             }
         }
-        
+
         if next_layer_candidates.is_empty() {
             break;
         }
-        
+
         let query_obj = ContextQuery {
             query_string: query_str.to_string(),
             roots: roots.clone(),
             include_tests,
         };
-        
+
         let ranker: Box<dyn ContextRanker> = match ranking_mode {
             RankingMode::Graph => Box::new(GraphRanker),
             RankingMode::Lexical => Box::new(LexicalRanker),
-            RankingMode::Hybrid => Box::new(HybridRanker { graph_weight: 1.0, lexical_weight: 1.0 }),
+            RankingMode::Hybrid => Box::new(HybridRanker {
+                graph_weight: 1.0,
+                lexical_weight: 1.0,
+            }),
         };
-        
+
         let mut ranked_layer = ranker.rank(&query_obj, next_layer_candidates);
-        
+
         if is_auto {
             ranked_layer.retain(|cand| cand.combined_score >= marginal_score_threshold);
             ranked_layer.truncate(frontier_limit_per_depth);
             if ranked_layer.is_empty() {
                 break;
             }
-            
+
             let mut estimated_cost = 0;
             for c in &ranked_layer {
                 let range = c.range;
@@ -900,23 +1001,35 @@ pub fn retrieve_graph_context(
                     Ok(sym) => sym.body_range.map(SourceRange::from),
                     Err(_) => None,
                 };
-                if let Ok(snippet_text) = extract_snippet(&c.file_path, range, body_range, false, context_lines) {
+                if let Ok(snippet_text) =
+                    extract_snippet(&c.file_path, range, body_range, false, context_lines)
+                {
                     estimated_cost += ApproxTokenEstimator.estimate_tokens(&snippet_text);
                 } else {
                     estimated_cost += 100;
                 }
             }
-            
+
             if estimated_cost > remaining_budget && depth >= auto_depth_min {
                 break;
             }
-            
+
             remaining_budget = remaining_budget.saturating_sub(estimated_cost);
         }
-        
+
         candidates.extend(ranked_layer.clone());
         current_layer = ranked_layer;
         depth += 1;
+    }
+
+    if unresolved_filtered_count > 0 {
+        diagnostics.push(GraphContextDiagnostic {
+            severity: "info".to_string(),
+            message: format!(
+                "Filtered {} unresolved edges because include_unresolved=false.",
+                unresolved_filtered_count
+            ),
+        });
     }
 
     let query_obj = ContextQuery {
@@ -927,43 +1040,55 @@ pub fn retrieve_graph_context(
     let ranker: Box<dyn ContextRanker> = match ranking_mode {
         RankingMode::Graph => Box::new(GraphRanker),
         RankingMode::Lexical => Box::new(LexicalRanker),
-        RankingMode::Hybrid => Box::new(HybridRanker { graph_weight: 1.0, lexical_weight: 1.0 }),
+        RankingMode::Hybrid => Box::new(HybridRanker {
+            graph_weight: 1.0,
+            lexical_weight: 1.0,
+        }),
     };
     let mut final_ranked = ranker.rank(&query_obj, candidates);
 
     if explain_ranking {
         for c in &mut final_ranked {
-            c.reason = format!("{} (graph: {:.1}, lexical: {:.1})", c.reason, c.graph_score, c.lexical_score);
+            c.reason = format!(
+                "{} (graph: {:.1}, lexical: {:.1})",
+                c.reason, c.graph_score, c.lexical_score
+            );
         }
     }
 
-    let (roots_cand, mut neighbors_cand): (Vec<ContextCandidate>, Vec<ContextCandidate>) = 
-        final_ranked.into_iter().partition(|c| roots.iter().any(|r| r.id == c.node.id));
+    let (roots_cand, mut neighbors_cand): (Vec<ContextCandidate>, Vec<ContextCandidate>) =
+        final_ranked
+            .into_iter()
+            .partition(|c| roots.iter().any(|r| r.id == c.node.id));
 
-    neighbors_cand.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+    neighbors_cand.sort_by(|a, b| {
+        b.combined_score
+            .partial_cmp(&a.combined_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut included_snippets = Vec::new();
     let mut omitted_candidates = Vec::new();
-    let mut diagnostics = Vec::new();
-    
-    let mut current_budget = budget.effective_budget();
+
+    let mut current_budget = raw_budget;
 
     for mut root in roots_cand {
         let body_range = match load_symbol(conn, root.node.id) {
             Ok(sym) => sym.body_range.map(SourceRange::from),
             Err(_) => None,
         };
-        
+
         let text = if with_snippets {
-            extract_snippet(&root.file_path, root.range, body_range, true, context_lines).unwrap_or_default()
+            extract_snippet(&root.file_path, root.range, body_range, true, context_lines)
+                .unwrap_or_default()
         } else {
             "".to_string()
         };
-        
+
         let tokens = ApproxTokenEstimator.estimate_tokens(&text);
         root.estimated_tokens = tokens;
         current_budget = current_budget.saturating_sub(tokens);
-        
+
         let snippet = ContextSnippet {
             file_path: root.file_path.clone(),
             range: root.range,
@@ -993,7 +1118,7 @@ pub fn retrieve_graph_context(
             });
             continue;
         }
-        
+
         if !included_files.contains(&neighbor.file_path) {
             if included_files.len() >= max_files {
                 omitted_candidates.push(OmittedContext {
@@ -1006,18 +1131,25 @@ pub fn retrieve_graph_context(
                 continue;
             }
         }
-        
+
         let body_range = match load_symbol(conn, neighbor.node.id) {
             Ok(sym) => sym.body_range.map(SourceRange::from),
             Err(_) => None,
         };
-        
+
         let text = if with_snippets {
-            extract_snippet(&neighbor.file_path, neighbor.range, body_range, false, context_lines).unwrap_or_default()
+            extract_snippet(
+                &neighbor.file_path,
+                neighbor.range,
+                body_range,
+                false,
+                context_lines,
+            )
+            .unwrap_or_default()
         } else {
             "".to_string()
         };
-        
+
         let tokens = ApproxTokenEstimator.estimate_tokens(&text);
         if tokens > current_budget {
             omitted_candidates.push(OmittedContext {
@@ -1029,11 +1161,11 @@ pub fn retrieve_graph_context(
             });
             continue;
         }
-        
+
         neighbor.estimated_tokens = tokens;
         current_budget = current_budget.saturating_sub(tokens);
         included_files.insert(neighbor.file_path.clone());
-        
+
         let snippet = ContextSnippet {
             file_path: neighbor.file_path.clone(),
             range: neighbor.range,
@@ -1050,7 +1182,10 @@ pub fn retrieve_graph_context(
         let count = omitted_candidates.len();
         diagnostics.push(GraphContextDiagnostic {
             severity: "warning".to_string(),
-            message: format!("Context truncated: {} candidates omitted due to token budget.", count),
+            message: format!(
+                "Context truncated: {} candidates omitted due to token budget.",
+                count
+            ),
         });
     }
 
@@ -1058,12 +1193,22 @@ pub fn retrieve_graph_context(
     for r in &roots {
         let outbound = load_edges_from(conn, r.id, &kinds)?;
         for (edge, target) in outbound {
-            let target_name = target.map(|t| t.qualified_name).unwrap_or_else(|| edge.to_external.clone().unwrap_or_else(|| "unknown".to_string()));
-            relationship_lines.push(format!("  [out {:?}] {} -> {}", edge.kind, r.qualified_name, target_name));
+            let target_name = target.map(|t| t.qualified_name).unwrap_or_else(|| {
+                edge.to_external
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+            relationship_lines.push(format!(
+                "  [out {:?}] {} -> {}",
+                edge.kind, r.qualified_name, target_name
+            ));
         }
         let inbound = load_edges_to(conn, r.id, &kinds)?;
         for (edge, source) in inbound {
-            relationship_lines.push(format!("  [in {:?}] {} -> {}", edge.kind, source.qualified_name, r.qualified_name));
+            relationship_lines.push(format!(
+                "  [in {:?}] {} -> {}",
+                edge.kind, source.qualified_name, r.qualified_name
+            ));
         }
     }
     relationship_lines.sort();
@@ -1075,7 +1220,7 @@ pub fn retrieve_graph_context(
     for (_, snip) in &included_snippets {
         total_estimated_tokens += snip.estimated_tokens;
     }
-    
+
     let mut summary_text = String::new();
     summary_text.push_str(&format!("Query: {}\n", query_str));
     summary_text.push_str(&format!("Mode: {:?}\n", mode));
@@ -1094,7 +1239,12 @@ pub fn retrieve_graph_context(
     for r in &roots {
         root_text.push_str("Root\n");
         root_text.push_str(&format!("  {}\n", r.qualified_name));
-        root_text.push_str(&format!("  {}:{}-{}\n\n", r.file_path.display(), r.range.start_line, r.range.end_line));
+        root_text.push_str(&format!(
+            "  {}:{}-{}\n\n",
+            r.file_path.display(),
+            r.range.start_line,
+            r.range.end_line
+        ));
     }
     let root_tokens = ApproxTokenEstimator.estimate_tokens(&root_text);
     sections.push(ContextSection {
@@ -1122,7 +1272,10 @@ pub fn retrieve_graph_context(
 
     let mut files_text = String::new();
     files_text.push_str("Files to read\n");
-    let mut files_list: Vec<String> = included_snippets.iter().map(|(c, _)| c.file_path.to_string_lossy().to_string()).collect();
+    let mut files_list: Vec<String> = included_snippets
+        .iter()
+        .map(|(c, _)| c.file_path.to_string_lossy().to_string())
+        .collect();
     files_list.sort();
     files_list.dedup();
     for (i, f) in files_list.iter().enumerate() {
@@ -1139,11 +1292,15 @@ pub fn retrieve_graph_context(
 
     let mut snippets_text = String::new();
     snippets_text.push_str("Context\n");
-    
+
     let mut ordered_snippets = included_snippets.clone();
     match packing_mode {
         ContextPackingMode::Frontloaded => {
-            ordered_snippets.sort_by(|a, b| b.0.combined_score.partial_cmp(&a.0.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+            ordered_snippets.sort_by(|a, b| {
+                b.0.combined_score
+                    .partial_cmp(&a.0.combined_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
         ContextPackingMode::Sandwich => {
             // Keep default order (roots then neighbor scores) which naturally puts roots & highest score neighbors at top
@@ -1154,10 +1311,11 @@ pub fn retrieve_graph_context(
     }
 
     for (cand, snip) in &ordered_snippets {
-        snippets_text.push_str(&format!("  --- {}:{}-{} {}\n", 
-            cand.file_path.display(), 
-            cand.range.start_line, 
-            cand.range.end_line, 
+        snippets_text.push_str(&format!(
+            "  --- {}:{}-{} {}\n",
+            cand.file_path.display(),
+            cand.range.start_line,
+            cand.range.end_line,
             cand.node.qualified_name
         ));
         snippets_text.push_str(&snip.text);
@@ -1174,9 +1332,13 @@ pub fn retrieve_graph_context(
     });
 
     let mut end_text = String::new();
-    
+
     let mut sorted_recap = included_snippets.clone();
-    sorted_recap.sort_by(|a, b| b.0.combined_score.partial_cmp(&a.0.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_recap.sort_by(|a, b| {
+        b.0.combined_score
+            .partial_cmp(&a.0.combined_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if !sorted_recap.is_empty() {
         end_text.push_str("Most important context recap\n");
         for (i, (cand, _)) in sorted_recap.iter().take(3).enumerate() {
@@ -1185,14 +1347,22 @@ pub fn retrieve_graph_context(
                 1 => "Then read",
                 _ => "Then inspect",
             };
-            end_text.push_str(&format!("  {}. {} {}\n", i + 1, label, cand.node.qualified_name));
+            end_text.push_str(&format!(
+                "  {}. {} {}\n",
+                i + 1,
+                label,
+                cand.node.qualified_name
+            ));
         }
         end_text.push('\n');
     }
 
     if !omitted_candidates.is_empty() {
         end_text.push_str("Diagnostics\n");
-        end_text.push_str(&format!("  Context truncated: {} candidates omitted due to token budget.\n\n", omitted_candidates.len()));
+        end_text.push_str(&format!(
+            "  Context truncated: {} candidates omitted due to token budget.\n\n",
+            omitted_candidates.len()
+        ));
     }
     let end_tokens = ApproxTokenEstimator.estimate_tokens(&end_text);
     sections.push(ContextSection {
@@ -1202,14 +1372,25 @@ pub fn retrieve_graph_context(
     });
     total_estimated_tokens += end_tokens;
 
-    let nodes: Vec<LanguageObject> = included_snippets.iter().map(|(cand, _)| cand.node.clone()).collect();
-    let edges: Vec<GraphContextEdge> = included_snippets.iter().filter_map(|(cand, _)| cand.via_edge.clone()).collect();
-    let snippets: Vec<ContextSnippet> = included_snippets.into_iter().map(|(_, snip)| snip).collect();
+    let nodes: Vec<LanguageObject> = included_snippets
+        .iter()
+        .map(|(cand, _)| cand.node.clone())
+        .collect();
+    let edges: Vec<GraphContextEdge> = included_snippets
+        .iter()
+        .filter_map(|(cand, _)| cand.via_edge.clone())
+        .collect();
+    let snippets: Vec<ContextSnippet> = included_snippets
+        .into_iter()
+        .map(|(_, snip)| snip)
+        .collect();
 
     Ok(ContextPack {
         query: query_str.to_string(),
         mode,
-        token_budget: budget.effective_budget(),
+        token_budget: raw_budget,
+        requested_token_budget,
+        effective_token_budget,
         estimated_tokens: total_estimated_tokens,
         roots,
         nodes,

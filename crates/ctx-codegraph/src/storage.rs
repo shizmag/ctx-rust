@@ -1,14 +1,13 @@
-use crate::backend::{BackendRegistry, ParseInput, ParsedFile, ResolveInput, global_registry};
+use crate::backend::{BackendRegistry, ParsedFile, global_registry};
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
 use crate::model::{
-    AffectedSet, CallEdge, CallId, CallSite, CodeIndex, EdgeKind, FileChangeDetection, FileId,
-    FileParseStatus, FileSnapshot, IndexDiff, IndexState, Language, LanguageObject,
-    LanguageObjectKind, RebuildReason, ResolutionConfidence, SourceRange, Symbol, SymbolId,
-    SymbolKind, SymbolResolution, TextRange, Occurrence, OccurrenceId, OccurrenceKind, EdgeId, GraphEdge, LanguageId,
-    EdgeDirection, ResolvedEdgeTarget,
+    AffectedSet, CallEdge, CodeIndex, EdgeDirection, EdgeId, EdgeKind, FileChangeDetection, FileId,
+    FileParseStatus, FileSnapshot, GraphEdge, IndexDiff, IndexState, Language, LanguageId,
+    LanguageObject, LanguageObjectKind, Occurrence, OccurrenceId, OccurrenceKind, RebuildReason,
+    ResolutionConfidence, ResolvedEdgeTarget, SourceRange, Symbol, SymbolId, SymbolKind,
+    SymbolResolution, TextRange,
 };
-use crate::resolver::noop::resolve_name_only;
 use std::path::{Path, PathBuf};
 
 pub fn find_workspace_root(start_dir: &Path) -> PathBuf {
@@ -461,9 +460,11 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
     let mut needs_drop = false;
     if meta_exists {
         let schema_version: Option<String> = conn
-            .query_row("SELECT value FROM metadata WHERE key = 'schema_version'", [], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
             .ok();
         if schema_version.as_deref() != Some("4") {
             needs_drop = true;
@@ -471,7 +472,15 @@ pub fn init_schema(conn: &rusqlite::Connection) -> Result<(), CodeGraphError> {
     }
 
     if needs_drop {
-        let tables = vec!["metadata", "files", "symbols", "call_sites", "call_edges", "occurrences", "edges"];
+        let tables = vec![
+            "metadata",
+            "files",
+            "symbols",
+            "call_sites",
+            "call_edges",
+            "occurrences",
+            "edges",
+        ];
         for table in tables {
             let _ = conn.execute(&format!("DROP TABLE IF EXISTS {}", table), []);
         }
@@ -810,9 +819,13 @@ pub fn save_index(
             };
             let db_occurrence_id = match edge.occurrence_id {
                 Some(temp_call_id) => {
-                    let db_id = temp_call_to_db_id.get(&temp_call_id).copied().ok_or_else(|| {
-                        CodeGraphError::Parse("Edge occurrence not saved to DB".to_string())
-                    })?;
+                    let db_id =
+                        temp_call_to_db_id
+                            .get(&temp_call_id)
+                            .copied()
+                            .ok_or_else(|| {
+                                CodeGraphError::Parse("Edge occurrence not saved to DB".to_string())
+                            })?;
                     Some(db_id)
                 }
                 None => None,
@@ -821,19 +834,20 @@ pub fn save_index(
             let (from_file_db_id, raw_text, range) = match edge.occurrence_id {
                 Some(temp_id) => {
                     let cs = &index.occurrences[temp_id.0 as usize];
-                    (cs.file_id, Some(cs.raw_text.clone()), Some(cs.range.clone()))
+                    (
+                        cs.file_id,
+                        Some(cs.raw_text.clone()),
+                        Some(cs.range.clone()),
+                    )
                 }
                 None => {
-                    let file_id = edge.from_file_id.or_else(|| {
-                        None
-                    });
+                    let file_id = edge.from_file_id.or_else(|| None);
                     (file_id, edge.raw_text.clone(), edge.range.clone())
                 }
             };
 
-            let from_file_db_id = from_file_db_id.ok_or_else(|| {
-                CodeGraphError::Parse("Edge without valid file ID".to_string())
-            })?;
+            let from_file_db_id = from_file_db_id
+                .ok_or_else(|| CodeGraphError::Parse("Edge without valid file ID".to_string()))?;
 
             stmt.execute(rusqlite::params![
                 edge.kind.as_str(),
@@ -1231,8 +1245,7 @@ pub fn compute_affected_set_with_registry(
     }
 
     for &sym_id in &symbols {
-        let mut stmt =
-            conn.prepare("SELECT occurrence_id FROM edges WHERE to_symbol_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT occurrence_id FROM edges WHERE to_symbol_id = ?1")?;
         let rows = stmt.query_map([sym_id.0], |row| row.get::<_, i64>(0))?;
         for row in rows {
             if let Ok(cs_id) = row {
@@ -1368,6 +1381,7 @@ fn load_occurrences_to_resolve(
     Ok(occurrences)
 }
 
+#[allow(dead_code)]
 fn rebuild_affected_edges_in_tx(
     tx: &rusqlite::Transaction,
     workspace_root: &Path,
@@ -1483,7 +1497,9 @@ fn rebuild_affected_edges_in_tx_with_registry(
             cs.range.end_line,
             cs.range.end_col,
             confidence.as_str(),
-            resolver.map(|r| r.resolver_id().0.clone()).unwrap_or_else(|| "noop".to_string()),
+            resolver
+                .map(|r| r.resolver_id().0.clone())
+                .unwrap_or_else(|| "noop".to_string()),
         ])?;
     }
 
@@ -2280,8 +2296,12 @@ pub fn load_edges_from(
     if edge_kinds.is_empty() {
         return Ok(results);
     }
-    let placeholders: Vec<String> = edge_kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
-    let sql = format!("
+    let placeholders: Vec<String> = edge_kinds
+        .iter()
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect();
+    let sql = format!(
+        "
         SELECT 
             e.id,
             e.kind,
@@ -2315,7 +2335,9 @@ pub fn load_edges_from(
         LEFT JOIN symbols s ON e.to_symbol_id = s.id
         LEFT JOIN files f ON s.file_id = f.id
         WHERE e.from_symbol_id = ?1 AND e.kind IN ({})
-    ", placeholders.join(","));
+    ",
+        placeholders.join(",")
+    );
 
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
@@ -2429,8 +2451,12 @@ pub fn load_edges_to(
     if edge_kinds.is_empty() {
         return Ok(results);
     }
-    let placeholders: Vec<String> = edge_kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
-    let sql = format!("
+    let placeholders: Vec<String> = edge_kinds
+        .iter()
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect();
+    let sql = format!(
+        "
         SELECT 
             e.id,
             e.kind,
@@ -2464,7 +2490,9 @@ pub fn load_edges_to(
         JOIN symbols s ON e.from_symbol_id = s.id
         JOIN files f ON s.file_id = f.id
         WHERE e.to_symbol_id = ?1 AND e.kind IN ({})
-    ", placeholders.join(","));
+    ",
+        placeholders.join(",")
+    );
 
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
@@ -2512,9 +2540,8 @@ pub fn load_edges_to(
             produced_by,
         };
 
-        let from_id = from_symbol_id.ok_or_else(|| {
-            CodeGraphError::Parse("Edge without from_symbol_id".to_string())
-        })?;
+        let from_id = from_symbol_id
+            .ok_or_else(|| CodeGraphError::Parse("Edge without from_symbol_id".to_string()))?;
 
         let s_file_id: i64 = row.get(14)?;
         let s_name: String = row.get(15)?;
@@ -2578,22 +2605,26 @@ pub fn load_edges_for_symbol(
     match direction {
         EdgeDirection::Outbound => {
             let edges = load_edges_from(conn, symbol_id, edge_kinds)?;
-            Ok(edges.into_iter().map(|(edge, sym)| {
-                let target = if let Some(s) = sym {
-                    ResolvedEdgeTarget::Symbol(s)
-                } else if let Some(ref ext) = edge.to_external {
-                    ResolvedEdgeTarget::External(ext.clone())
-                } else {
-                    ResolvedEdgeTarget::None
-                };
-                (edge, target)
-            }).collect())
+            Ok(edges
+                .into_iter()
+                .map(|(edge, sym)| {
+                    let target = if let Some(s) = sym {
+                        ResolvedEdgeTarget::Symbol(s)
+                    } else if let Some(ref ext) = edge.to_external {
+                        ResolvedEdgeTarget::External(ext.clone())
+                    } else {
+                        ResolvedEdgeTarget::None
+                    };
+                    (edge, target)
+                })
+                .collect())
         }
         EdgeDirection::Inbound => {
             let edges = load_edges_to(conn, symbol_id, edge_kinds)?;
-            Ok(edges.into_iter().map(|(edge, sym)| {
-                (edge, ResolvedEdgeTarget::Symbol(sym))
-            }).collect())
+            Ok(edges
+                .into_iter()
+                .map(|(edge, sym)| (edge, ResolvedEdgeTarget::Symbol(sym)))
+                .collect())
         }
     }
 }
@@ -2602,7 +2633,8 @@ pub fn load_symbol(
     conn: &rusqlite::Connection,
     symbol_id: SymbolId,
 ) -> Result<Symbol, CodeGraphError> {
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
                s.start_line, s.start_col, s.end_line, s.end_col,
                s.body_start_line, s.body_start_col, s.body_end_line, s.body_end_col,
@@ -2610,7 +2642,8 @@ pub fn load_symbol(
         FROM symbols s
         JOIN files f ON s.file_id = f.id
         WHERE s.id = ?1
-    ")?;
+    ",
+    )?;
     stmt.query_row(rusqlite::params![symbol_id.0], |row| {
         let id: i64 = row.get(0)?;
         let file_id: i64 = row.get(1)?;
@@ -2657,11 +2690,12 @@ pub fn load_symbol(
             },
             body_range,
         })
-    }).map_err(|e| {
-        match e {
-            rusqlite::Error::QueryReturnedNoRows => CodeGraphError::SymbolNotFound(format!("{:?}", symbol_id)),
-            other => CodeGraphError::from(other),
+    })
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            CodeGraphError::SymbolNotFound(format!("{:?}", symbol_id))
         }
+        other => CodeGraphError::from(other),
     })
 }
 
@@ -2673,7 +2707,8 @@ pub fn load_symbols_by_ids(
         return Ok(Vec::new());
     }
     let placeholders: Vec<String> = ids.iter().map(|id| id.0.to_string()).collect();
-    let sql = format!("
+    let sql = format!(
+        "
         SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
                s.start_line, s.start_col, s.end_line, s.end_col,
                s.body_start_line, s.body_start_col, s.body_end_line, s.body_end_col,
@@ -2681,7 +2716,9 @@ pub fn load_symbols_by_ids(
         FROM symbols s
         JOIN files f ON s.file_id = f.id
         WHERE s.id IN ({})
-    ", placeholders.join(","));
+    ",
+        placeholders.join(",")
+    );
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     let mut results = Vec::new();
@@ -2739,14 +2776,16 @@ pub fn load_occurrence(
     conn: &rusqlite::Connection,
     occurrence_id: OccurrenceId,
 ) -> Result<Occurrence, CodeGraphError> {
-    let mut stmt = conn.prepare("
+    let mut stmt = conn.prepare(
+        "
         SELECT o.id, o.file_id, o.enclosing_symbol_id, o.kind, o.raw_text,
                o.start_line, o.start_col, o.end_line, o.end_col, o.language, o.backend_id,
                f.path
         FROM occurrences o
         JOIN files f ON o.file_id = f.id
         WHERE o.id = ?1
-    ")?;
+    ",
+    )?;
     stmt.query_row(rusqlite::params![occurrence_id.0], |row| {
         let id: i64 = row.get(0)?;
         let file_id: i64 = row.get(1)?;
@@ -2778,11 +2817,12 @@ pub fn load_occurrence(
             language: LanguageId(language_str),
             backend_id,
         })
-    }).map_err(|e| {
-        match e {
-            rusqlite::Error::QueryReturnedNoRows => CodeGraphError::Parse(format!("Occurrence not found: {:?}", occurrence_id)),
-            other => CodeGraphError::from(other),
+    })
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            CodeGraphError::Parse(format!("Occurrence not found: {:?}", occurrence_id))
         }
+        other => CodeGraphError::from(other),
     })
 }
 
@@ -2907,7 +2947,7 @@ pub fn load_symbols_for_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CallEdge, CallId, CallSite, Language, SymbolKind, TextRange};
+    use crate::model::{CallEdge, Language, SymbolKind, TextRange};
     use std::path::PathBuf;
 
     #[test]
@@ -3426,7 +3466,7 @@ mod tests {
                         start_col: 5,
                         end_line: 3,
                         end_col: 10,
-                },
+                    },
                     language: LanguageId::rust(),
                     backend_id: "rust-backend".to_string(),
                 },

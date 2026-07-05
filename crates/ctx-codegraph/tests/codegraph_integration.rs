@@ -69,18 +69,17 @@ fn test_integration_builds_simple_project_index_and_slice() {
     assert_eq!(save.kind, SymbolKind::Function);
 
     // Assert edges
-    let e_run_load = index
-        .edges
-        .iter()
-        .find(|e| e.from_symbol_id == Some(run_pipeline.id.unwrap()) && e.to_symbol_id == Some(load.id.unwrap()));
-    let e_run_proc = index
-        .edges
-        .iter()
-        .find(|e| e.from_symbol_id == Some(run_pipeline.id.unwrap()) && e.to_symbol_id == Some(process.id.unwrap()));
-    let e_proc_save = index
-        .edges
-        .iter()
-        .find(|e| e.from_symbol_id == Some(process.id.unwrap()) && e.to_symbol_id == Some(save.id.unwrap()));
+    let e_run_load = index.edges.iter().find(|e| {
+        e.from_symbol_id == Some(run_pipeline.id.unwrap())
+            && e.to_symbol_id == Some(load.id.unwrap())
+    });
+    let e_run_proc = index.edges.iter().find(|e| {
+        e.from_symbol_id == Some(run_pipeline.id.unwrap())
+            && e.to_symbol_id == Some(process.id.unwrap())
+    });
+    let e_proc_save = index.edges.iter().find(|e| {
+        e.from_symbol_id == Some(process.id.unwrap()) && e.to_symbol_id == Some(save.id.unwrap())
+    });
 
     assert!(e_run_load.is_some());
     assert!(e_run_proc.is_some());

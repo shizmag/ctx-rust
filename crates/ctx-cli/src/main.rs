@@ -365,8 +365,8 @@ enum GraphSubcommand {
         #[arg(long, default_value = "text")]
         format: String,
         /// Include snippets (default)
-        #[arg(long, overrides_with = "no_snippets")]
-        with_snippets: Option<bool>,
+        #[arg(long, conflicts_with = "no_snippets")]
+        with_snippets: bool,
         /// Disable snippets
         #[arg(long)]
         no_snippets: bool,
@@ -610,11 +610,14 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                     match target {
                         Some(t) => println!(
                             "  - {} -> {} ({})",
-                            edge.raw_text.as_deref().unwrap_or_default(), t.qualified_name, edge.confidence
+                            edge.raw_text.as_deref().unwrap_or_default(),
+                            t.qualified_name,
+                            edge.confidence
                         ),
                         None => println!(
                             "  - {} -> [Unresolved] ({})",
-                            edge.raw_text.as_deref().unwrap_or_default(), edge.confidence
+                            edge.raw_text.as_deref().unwrap_or_default(),
+                            edge.confidence
                         ),
                     }
                 }
@@ -643,12 +646,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 println!("  (none)");
             } else {
                 for (edge, caller) in callers {
-                    let range = edge.range.clone().unwrap_or_else(|| ctx_codegraph::model::TextRange {
-                        start_line: 0,
-                        start_col: 0,
-                        end_line: 0,
-                        end_col: 0,
-                    });
+                    let range =
+                        edge.range
+                            .clone()
+                            .unwrap_or_else(|| ctx_codegraph::model::TextRange {
+                                start_line: 0,
+                                start_col: 0,
+                                end_line: 0,
+                                end_col: 0,
+                            });
                     println!(
                         "  - {} via `{}` at L{}:{} ({})",
                         caller.qualified_name,
@@ -752,7 +758,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             include_tests,
             include_unresolved,
             format,
-            with_snippets,
+            with_snippets: _,
             no_snippets,
             context_lines,
             token_budget,
@@ -763,7 +769,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         } => {
             let conn =
                 get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
-            
+
             let ctx_mode = match mode.as_str() {
                 "callers" => ctx_codegraph::GraphContextMode::Callers,
                 "callees" => ctx_codegraph::GraphContextMode::Callees,
@@ -775,43 +781,47 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 "impact" => ctx_codegraph::GraphContextMode::Impact,
                 _ => ctx_codegraph::GraphContextMode::Neighborhood,
             };
-            
+
             let depth_limit = if depth == "auto" {
                 ctx_codegraph::DepthLimit::Auto
             } else if let Ok(d) = depth.parse::<usize>() {
                 ctx_codegraph::DepthLimit::Fixed(d)
             } else {
-                ctx_codegraph::DepthLimit::Auto
+                return Err(format!(
+                    "Invalid depth '{}'. Depth must be a non-negative integer or 'auto'.",
+                    depth
+                )
+                .into());
             };
-            
+
             let ranking_mode = match ranking.as_str() {
                 "graph" => ctx_codegraph::RankingMode::Graph,
                 "lexical" => ctx_codegraph::RankingMode::Lexical,
                 "hybrid" => ctx_codegraph::RankingMode::Hybrid,
                 _ => ctx_codegraph::RankingMode::Hybrid,
             };
-            
+
             let packing_mode = match packing.as_str() {
                 "frontloaded" => ctx_codegraph::ContextPackingMode::Frontloaded,
                 "sandwich" => ctx_codegraph::ContextPackingMode::Sandwich,
                 "balanced" => ctx_codegraph::ContextPackingMode::Balanced,
                 _ => ctx_codegraph::ContextPackingMode::Sandwich,
             };
-            
-            let use_snippets = if no_snippets { false } else { with_snippets.unwrap_or(true) };
-            
+
+            let use_snippets = !no_snippets;
+
             let budget = ctx_codegraph::ContextBudget {
                 token_budget,
                 model_context_window: Some(model_context_window),
                 reserve_output_tokens: 1000,
                 reserve_instruction_tokens: 1000,
             };
-            
+
             let parsed_edge_kinds: Vec<ctx_codegraph::EdgeKind> = edge_kind
                 .iter()
                 .filter_map(|k| ctx_codegraph::EdgeKind::from_str(k))
                 .collect();
-            
+
             let result = ctx_codegraph::retrieve_graph_context(
                 &conn,
                 &query,
@@ -829,7 +839,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 include_unresolved,
                 explain_ranking,
             )?;
-            
+
+            if format != "json" && format != "text" {
+                return Err(format!(
+                    "Invalid format '{}'. Supported formats are 'text' and 'json'.",
+                    format
+                )
+                .into());
+            }
+
             if format == "json" {
                 let json_str = serde_json::to_string_pretty(&result)?;
                 println!("{}", json_str);

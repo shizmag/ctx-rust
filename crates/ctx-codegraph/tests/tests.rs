@@ -545,7 +545,11 @@ fn test_integration_with_rust_analyzer() {
     )
     .unwrap();
 
-    let load_edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("load")).unwrap();
+    let load_edge = index
+        .edges
+        .iter()
+        .find(|e| e.raw_text.as_deref() == Some("load"))
+        .unwrap();
     assert_eq!(load_edge.confidence, ResolutionConfidence::LspExact);
 }
 
@@ -1029,7 +1033,10 @@ fn test_edge_resolution_quality_variants() {
     let edge_unres = index
         .edges
         .iter()
-        .find(|e| e.raw_text.as_deref() == Some("unresolved_call") && e.from_symbol_id == Some(sym_a.id.unwrap()))
+        .find(|e| {
+            e.raw_text.as_deref() == Some("unresolved_call")
+                && e.from_symbol_id == Some(sym_a.id.unwrap())
+        })
         .unwrap();
     assert_eq!(edge_unres.confidence, ResolutionConfidence::Unresolved);
     assert!(edge_unres.to_symbol_id.is_none());
@@ -1160,8 +1167,18 @@ fn test_db_correctness_after_incremental_update() {
 
     let (index_mod, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(index_mod.symbols.iter().any(|s| s.name == "c"));
-    assert!(!index_mod.edges.iter().any(|e| e.raw_text.as_deref() == Some("b"))); // old edge b disappeared
-    assert!(index_mod.edges.iter().any(|e| e.raw_text.as_deref() == Some("c"))); // new edge c appeared
+    assert!(
+        !index_mod
+            .edges
+            .iter()
+            .any(|e| e.raw_text.as_deref() == Some("b"))
+    ); // old edge b disappeared
+    assert!(
+        index_mod
+            .edges
+            .iter()
+            .any(|e| e.raw_text.as_deref() == Some("c"))
+    ); // new edge c appeared
 
     // Scenario 2: Add file
     // Add file d.rs: d calls a
@@ -1196,8 +1213,18 @@ fn test_db_correctness_after_incremental_update() {
     let (index_rename, _) = rebuild_index_db(root, options.clone()).unwrap();
     assert!(!index_rename.symbols.iter().any(|s| s.name == "c"));
     assert!(index_rename.symbols.iter().any(|s| s.name == "new_name"));
-    assert!(!index_rename.edges.iter().any(|e| e.raw_text.as_deref() == Some("c")));
-    assert!(index_rename.edges.iter().any(|e| e.raw_text.as_deref() == Some("new_name")));
+    assert!(
+        !index_rename
+            .edges
+            .iter()
+            .any(|e| e.raw_text.as_deref() == Some("c"))
+    );
+    assert!(
+        index_rename
+            .edges
+            .iter()
+            .any(|e| e.raw_text.as_deref() == Some("new_name"))
+    );
 }
 
 #[test]
@@ -1318,12 +1345,15 @@ while True:
     assert!(report.full_rebuild);
     assert_eq!(report.lsp_edges_exact, 1);
 
-    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    let edge = index
+        .edges
+        .iter()
+        .find(|e| e.raw_text.as_deref() == Some("b"))
+        .unwrap();
     assert_eq!(edge.confidence, ResolutionConfidence::LspExact);
     assert!(edge.to_symbol_id.is_some());
 }
 
-#[test]
 #[test]
 fn test_parse_failure_preserves_old_graph() {
     let dir = tempfile::tempdir().unwrap();
@@ -1520,7 +1550,11 @@ fn test_affected_set_callee_pulls_callers() {
 
     // Build the initial index
     let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
-    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    let edge = index
+        .edges
+        .iter()
+        .find(|e| e.raw_text.as_deref() == Some("b"))
+        .unwrap();
     assert!(edge.to_symbol_id.is_some()); // resolved to b()
 
     // Now modify b.rs
@@ -1533,7 +1567,11 @@ fn test_affected_set_callee_pulls_callers() {
     assert_eq!(report.unchanged_files, 1); // lib.rs unchanged
 
     // Check if the edge calling b is still resolved correctly
-    let edge2 = index2.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    let edge2 = index2
+        .edges
+        .iter()
+        .find(|e| e.raw_text.as_deref() == Some("b"))
+        .unwrap();
     assert!(edge2.to_symbol_id.is_some());
 }
 
@@ -1700,7 +1738,11 @@ while True:
     assert!(report.full_rebuild);
     assert_eq!(report.lsp_edges_exact, 0);
 
-    let edge = index.edges.iter().find(|e| e.raw_text.as_deref() == Some("b")).unwrap();
+    let edge = index
+        .edges
+        .iter()
+        .find(|e| e.raw_text.as_deref() == Some("b"))
+        .unwrap();
     assert_eq!(edge.confidence, ResolutionConfidence::Syntax);
     assert!(edge.to_symbol_id.is_some());
 }

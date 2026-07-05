@@ -375,7 +375,6 @@ pub enum ResolvedEdgeTarget {
     None,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GraphContextMode {
     Callers,

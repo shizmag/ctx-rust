@@ -423,3 +423,64 @@ fn test_cli_graph_affect() {
     assert!(val["token_budget"].as_u64().is_some());
     assert!(val["roots"].as_array().unwrap().len() >= 1);
 }
+
+#[test]
+fn test_cli_graph_affect_failures() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    // 1. Conflict check: with-snippets and no-snippets together
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--with-snippets",
+            "--no-snippets",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cannot be used with"));
+
+    // 2. Invalid format check
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--format",
+            "unknown_fmt",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Invalid format"));
+
+    // 3. Invalid depth check
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--depth",
+            "nope",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Invalid depth"));
+}

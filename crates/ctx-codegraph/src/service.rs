@@ -4,9 +4,9 @@ use std::sync::Mutex;
 
 use crate::error::CodeGraphError;
 use crate::model::{
-    ContextFileSpan, GraphContextDiagnostic, GraphContextMode, GraphContextOptions,
-    GraphContextResult, GraphContextEdge, LanguageObject, LanguageObjectKind, SourceRange, SymbolId,
-    SymbolResolution,
+    ContextFileSpan, GraphContextDiagnostic, GraphContextEdge, GraphContextMode,
+    GraphContextOptions, GraphContextResult, LanguageObject, LanguageObjectKind, SourceRange,
+    SymbolId, SymbolResolution,
 };
 
 /// Service for graph-based context selection.
@@ -224,8 +224,10 @@ impl GraphContextService {
                                 visited.insert(from_id);
                                 queue.push_back((from_id, depth + 1));
                             } else {
-                                let diag_msg =
-                                    format!("Cycle or loop detected at symbol: {}", sym.qualified_name);
+                                let diag_msg = format!(
+                                    "Cycle or loop detected at symbol: {}",
+                                    sym.qualified_name
+                                );
                                 if seen_diagnostics.insert(diag_msg.clone()) {
                                     diagnostics.push(GraphContextDiagnostic {
                                         severity: "info".to_string(),
