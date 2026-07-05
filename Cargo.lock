@@ -319,6 +319,7 @@ dependencies = [
  "ctx-render",
  "ctx-tui",
  "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 

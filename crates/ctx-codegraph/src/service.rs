@@ -182,6 +182,7 @@ impl GraphContextService {
                                     from: curr,
                                     to: to_id,
                                     label: edge.raw_text.clone(),
+                                    confidence: Some(edge.confidence.as_str().to_string()),
                                 });
                             }
 
@@ -215,6 +216,7 @@ impl GraphContextService {
                                     from: from_id,
                                     to: curr,
                                     label: edge.raw_text.clone(),
+                                    confidence: Some(edge.confidence.as_str().to_string()),
                                 });
                             }
 

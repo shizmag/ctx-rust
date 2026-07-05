@@ -6,6 +6,7 @@ use crate::model::{
     FileParseStatus, FileSnapshot, IndexDiff, IndexState, Language, LanguageObject,
     LanguageObjectKind, RebuildReason, ResolutionConfidence, SourceRange, Symbol, SymbolId,
     SymbolKind, SymbolResolution, TextRange, Occurrence, OccurrenceId, OccurrenceKind, EdgeId, GraphEdge, LanguageId,
+    EdgeDirection, ResolvedEdgeTarget,
 };
 use crate::resolver::noop::resolve_name_only;
 use std::path::{Path, PathBuf};
@@ -2270,22 +2271,32 @@ pub fn resolve_symbol(
     }
 }
 
-pub fn load_callees(
+pub fn load_edges_from(
     conn: &rusqlite::Connection,
     symbol_id: SymbolId,
-) -> Result<Vec<(CallEdge, Option<Symbol>)>, CodeGraphError> {
+    edge_kinds: &[EdgeKind],
+) -> Result<Vec<(GraphEdge, Option<Symbol>)>, CodeGraphError> {
     let mut results = Vec::new();
-    let mut stmt = conn.prepare(
-        "
+    if edge_kinds.is_empty() {
+        return Ok(results);
+    }
+    let placeholders: Vec<String> = edge_kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
+    let sql = format!("
         SELECT 
+            e.id,
+            e.kind,
+            e.from_file_id,
+            e.from_symbol_id,
             e.to_symbol_id,
+            e.to_external,
             e.occurrence_id,
             e.raw_text,
+            e.start_line,
+            e.start_col,
+            e.end_line,
+            e.end_col,
             e.confidence,
-            c.start_line,
-            c.start_col,
-            c.end_line,
-            c.end_col,
+            e.produced_by,
             s.file_id,
             s.name,
             s.qualified_name,
@@ -2301,61 +2312,72 @@ pub fn load_callees(
             s.body_end_col,
             f.path
         FROM edges e
-        LEFT JOIN occurrences c ON e.occurrence_id = c.id
         LEFT JOIN symbols s ON e.to_symbol_id = s.id
         LEFT JOIN files f ON s.file_id = f.id
-        WHERE e.from_symbol_id = ?1 AND e.kind = 'Call'
-    ",
-    )?;
+        WHERE e.from_symbol_id = ?1 AND e.kind IN ({})
+    ", placeholders.join(","));
+
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
-        let to_symbol_id: Option<i64> = row.get(0)?;
-        let occurrence_id: Option<i64> = row.get(1)?;
-        let raw_name: String = row.get(2).unwrap_or_default();
-        let confidence_str: String = row.get(3)?;
+        let edge_id: i64 = row.get(0)?;
+        let kind_str: String = row.get(1)?;
+        let from_file_id: i64 = row.get(2)?;
+        let from_symbol_id: Option<i64> = row.get(3)?;
+        let to_symbol_id: Option<i64> = row.get(4)?;
+        let to_external: Option<String> = row.get(5)?;
+        let occurrence_id: Option<i64> = row.get(6)?;
+        let raw_text: Option<String> = row.get(7)?;
+        let start_line: Option<usize> = row.get(8)?;
+        let start_col: Option<usize> = row.get(9)?;
+        let end_line: Option<usize> = row.get(10)?;
+        let end_col: Option<usize> = row.get(11)?;
+        let confidence_str: String = row.get(12)?;
+        let produced_by: Option<String> = row.get(13)?;
 
-        let cs_start_line: usize = row.get(4).unwrap_or(0);
-        let cs_start_col: usize = row.get(5).unwrap_or(0);
-        let cs_end_line: usize = row.get(6).unwrap_or(0);
-        let cs_end_col: usize = row.get(7).unwrap_or(0);
-
-        let call_range = TextRange {
-            start_line: cs_start_line,
-            start_col: cs_start_col,
-            end_line: cs_end_line,
-            end_col: cs_end_col,
+        let range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (start_line, start_col, end_line, end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
+        } else {
+            None
         };
 
-        let edge = CallEdge {
-            id: None,
-            kind: EdgeKind::Call,
-            from_file_id: None,
-            from_symbol_id: Some(symbol_id),
+        let edge = GraphEdge {
+            id: Some(EdgeId(edge_id)),
+            kind: EdgeKind::from_str(&kind_str).unwrap_or(EdgeKind::Unknown),
+            from_file_id: Some(FileId(from_file_id)),
+            from_symbol_id: from_symbol_id.map(SymbolId),
             to_symbol_id: to_symbol_id.map(SymbolId),
-            to_external: None,
+            to_external,
             occurrence_id: occurrence_id.map(OccurrenceId),
-            raw_text: Some(raw_name),
-            range: Some(call_range),
+            raw_text,
+            range,
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
-            produced_by: None,
+            produced_by,
         };
 
         let target_symbol = if let Some(to_id) = to_symbol_id {
-            let s_file_id: i64 = row.get(8)?;
-            let s_name: String = row.get(9)?;
-            let s_qualified_name: String = row.get(10)?;
-            let s_kind_str: String = row.get(11)?;
-            let s_lang_str: String = row.get(12)?;
-            let s_start_line: usize = row.get(13)?;
-            let s_start_col: usize = row.get(14)?;
-            let s_end_line: usize = row.get(15)?;
-            let s_end_col: usize = row.get(16)?;
-            let s_body_start_line: Option<usize> = row.get(17)?;
-            let s_body_start_col: Option<usize> = row.get(18)?;
-            let s_body_end_line: Option<usize> = row.get(19)?;
-            let s_body_end_col: Option<usize> = row.get(20)?;
-            let s_file_path: String = row.get(21)?;
+            let s_file_id: i64 = row.get(14)?;
+            let s_name: String = row.get(15)?;
+            let s_qualified_name: String = row.get(16)?;
+            let s_kind_str: String = row.get(17)?;
+            let s_lang_str: String = row.get(18)?;
+            let s_start_line: usize = row.get(19)?;
+            let s_start_col: usize = row.get(20)?;
+            let s_end_line: usize = row.get(21)?;
+            let s_end_col: usize = row.get(22)?;
+            let s_body_start_line: Option<usize> = row.get(23)?;
+            let s_body_start_col: Option<usize> = row.get(24)?;
+            let s_body_end_line: Option<usize> = row.get(25)?;
+            let s_body_end_col: Option<usize> = row.get(26)?;
+            let s_file_path: String = row.get(27)?;
 
             let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
                 s_body_start_line,
@@ -2398,22 +2420,32 @@ pub fn load_callees(
     Ok(results)
 }
 
-pub fn load_callers(
+pub fn load_edges_to(
     conn: &rusqlite::Connection,
     symbol_id: SymbolId,
-) -> Result<Vec<(CallEdge, Symbol)>, CodeGraphError> {
+    edge_kinds: &[EdgeKind],
+) -> Result<Vec<(GraphEdge, Symbol)>, CodeGraphError> {
     let mut results = Vec::new();
-    let mut stmt = conn.prepare(
-        "
+    if edge_kinds.is_empty() {
+        return Ok(results);
+    }
+    let placeholders: Vec<String> = edge_kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
+    let sql = format!("
         SELECT 
+            e.id,
+            e.kind,
+            e.from_file_id,
             e.from_symbol_id,
+            e.to_symbol_id,
+            e.to_external,
             e.occurrence_id,
             e.raw_text,
+            e.start_line,
+            e.start_col,
+            e.end_line,
+            e.end_col,
             e.confidence,
-            c.start_line,
-            c.start_col,
-            c.end_line,
-            c.end_col,
+            e.produced_by,
             s.file_id,
             s.name,
             s.qualified_name,
@@ -2429,64 +2461,75 @@ pub fn load_callers(
             s.body_end_col,
             f.path
         FROM edges e
-        LEFT JOIN occurrences c ON e.occurrence_id = c.id
-        LEFT JOIN symbols s ON e.from_symbol_id = s.id
-        LEFT JOIN files f ON s.file_id = f.id
-        WHERE e.to_symbol_id = ?1 AND e.kind = 'Call'
-    ",
-    )?;
+        JOIN symbols s ON e.from_symbol_id = s.id
+        JOIN files f ON s.file_id = f.id
+        WHERE e.to_symbol_id = ?1 AND e.kind IN ({})
+    ", placeholders.join(","));
+
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(rusqlite::params![symbol_id.0])?;
     while let Some(row) = rows.next()? {
-        let from_symbol_id: Option<i64> = row.get(0)?;
-        let occurrence_id: Option<i64> = row.get(1)?;
-        let raw_name: String = row.get(2).unwrap_or_default();
-        let confidence_str: String = row.get(3)?;
+        let edge_id: i64 = row.get(0)?;
+        let kind_str: String = row.get(1)?;
+        let from_file_id: i64 = row.get(2)?;
+        let from_symbol_id: Option<i64> = row.get(3)?;
+        let to_symbol_id: Option<i64> = row.get(4)?;
+        let to_external: Option<String> = row.get(5)?;
+        let occurrence_id: Option<i64> = row.get(6)?;
+        let raw_text: Option<String> = row.get(7)?;
+        let start_line: Option<usize> = row.get(8)?;
+        let start_col: Option<usize> = row.get(9)?;
+        let end_line: Option<usize> = row.get(10)?;
+        let end_col: Option<usize> = row.get(11)?;
+        let confidence_str: String = row.get(12)?;
+        let produced_by: Option<String> = row.get(13)?;
 
-        let cs_start_line: usize = row.get(4).unwrap_or(0);
-        let cs_start_col: usize = row.get(5).unwrap_or(0);
-        let cs_end_line: usize = row.get(6).unwrap_or(0);
-        let cs_end_col: usize = row.get(7).unwrap_or(0);
-
-        let call_range = TextRange {
-            start_line: cs_start_line,
-            start_col: cs_start_col,
-            end_line: cs_end_line,
-            end_col: cs_end_col,
+        let range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (start_line, start_col, end_line, end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
+        } else {
+            None
         };
 
-        let from_symbol_id = from_symbol_id.ok_or_else(|| {
-            CodeGraphError::Parse("Caller edge without from_symbol_id".to_string())
-        })?;
-
-        let edge = CallEdge {
-            id: None,
-            kind: EdgeKind::Call,
-            from_file_id: None,
-            from_symbol_id: Some(SymbolId(from_symbol_id)),
-            to_symbol_id: Some(symbol_id),
-            to_external: None,
+        let edge = GraphEdge {
+            id: Some(EdgeId(edge_id)),
+            kind: EdgeKind::from_str(&kind_str).unwrap_or(EdgeKind::Unknown),
+            from_file_id: Some(FileId(from_file_id)),
+            from_symbol_id: from_symbol_id.map(SymbolId),
+            to_symbol_id: to_symbol_id.map(SymbolId),
+            to_external,
             occurrence_id: occurrence_id.map(OccurrenceId),
-            raw_text: Some(raw_name),
-            range: Some(call_range),
+            raw_text,
+            range,
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
-            produced_by: None,
+            produced_by,
         };
 
-        let s_file_id: i64 = row.get(8)?;
-        let s_name: String = row.get(9)?;
-        let s_qualified_name: String = row.get(10)?;
-        let s_kind_str: String = row.get(11)?;
-        let s_lang_str: String = row.get(12)?;
-        let s_start_line: usize = row.get(13)?;
-        let s_start_col: usize = row.get(14)?;
-        let s_end_line: usize = row.get(15)?;
-        let s_end_col: usize = row.get(16)?;
-        let s_body_start_line: Option<usize> = row.get(17)?;
-        let s_body_start_col: Option<usize> = row.get(18)?;
-        let s_body_end_line: Option<usize> = row.get(19)?;
-        let s_body_end_col: Option<usize> = row.get(20)?;
-        let s_file_path: String = row.get(21)?;
+        let from_id = from_symbol_id.ok_or_else(|| {
+            CodeGraphError::Parse("Edge without from_symbol_id".to_string())
+        })?;
+
+        let s_file_id: i64 = row.get(14)?;
+        let s_name: String = row.get(15)?;
+        let s_qualified_name: String = row.get(16)?;
+        let s_kind_str: String = row.get(17)?;
+        let s_lang_str: String = row.get(18)?;
+        let s_start_line: usize = row.get(19)?;
+        let s_start_col: usize = row.get(20)?;
+        let s_end_line: usize = row.get(21)?;
+        let s_end_col: usize = row.get(22)?;
+        let s_body_start_line: Option<usize> = row.get(23)?;
+        let s_body_start_col: Option<usize> = row.get(24)?;
+        let s_body_end_line: Option<usize> = row.get(25)?;
+        let s_body_end_col: Option<usize> = row.get(26)?;
+        let s_file_path: String = row.get(27)?;
 
         let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
             s_body_start_line,
@@ -2504,8 +2547,8 @@ pub fn load_callers(
             None
         };
 
-        let caller_symbol = Symbol {
-            id: Some(SymbolId(from_symbol_id)),
+        let source_symbol = Symbol {
+            id: Some(SymbolId(from_id)),
             file_id: Some(FileId(s_file_id)),
             name: s_name,
             qualified_name: s_qualified_name,
@@ -2521,9 +2564,265 @@ pub fn load_callers(
             body_range,
         };
 
-        results.push((edge, caller_symbol));
+        results.push((edge, source_symbol));
     }
     Ok(results)
+}
+
+pub fn load_edges_for_symbol(
+    conn: &rusqlite::Connection,
+    symbol_id: SymbolId,
+    direction: EdgeDirection,
+    edge_kinds: &[EdgeKind],
+) -> Result<Vec<(GraphEdge, ResolvedEdgeTarget)>, CodeGraphError> {
+    match direction {
+        EdgeDirection::Outbound => {
+            let edges = load_edges_from(conn, symbol_id, edge_kinds)?;
+            Ok(edges.into_iter().map(|(edge, sym)| {
+                let target = if let Some(s) = sym {
+                    ResolvedEdgeTarget::Symbol(s)
+                } else if let Some(ref ext) = edge.to_external {
+                    ResolvedEdgeTarget::External(ext.clone())
+                } else {
+                    ResolvedEdgeTarget::None
+                };
+                (edge, target)
+            }).collect())
+        }
+        EdgeDirection::Inbound => {
+            let edges = load_edges_to(conn, symbol_id, edge_kinds)?;
+            Ok(edges.into_iter().map(|(edge, sym)| {
+                (edge, ResolvedEdgeTarget::Symbol(sym))
+            }).collect())
+        }
+    }
+}
+
+pub fn load_symbol(
+    conn: &rusqlite::Connection,
+    symbol_id: SymbolId,
+) -> Result<Symbol, CodeGraphError> {
+    let mut stmt = conn.prepare("
+        SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
+               s.start_line, s.start_col, s.end_line, s.end_col,
+               s.body_start_line, s.body_start_col, s.body_end_line, s.body_end_col,
+               f.path
+        FROM symbols s
+        JOIN files f ON s.file_id = f.id
+        WHERE s.id = ?1
+    ")?;
+    stmt.query_row(rusqlite::params![symbol_id.0], |row| {
+        let id: i64 = row.get(0)?;
+        let file_id: i64 = row.get(1)?;
+        let name: String = row.get(2)?;
+        let qualified_name: String = row.get(3)?;
+        let kind_str: String = row.get(4)?;
+        let lang_str: String = row.get(5)?;
+        let start_line: usize = row.get(6)?;
+        let start_col: usize = row.get(7)?;
+        let end_line: usize = row.get(8)?;
+        let end_col: usize = row.get(9)?;
+        let body_start_line: Option<usize> = row.get(10)?;
+        let body_start_col: Option<usize> = row.get(11)?;
+        let body_end_line: Option<usize> = row.get(12)?;
+        let body_end_col: Option<usize> = row.get(13)?;
+        let file_path: String = row.get(14)?;
+
+        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (body_start_line, body_start_col, body_end_line, body_end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
+        } else {
+            None
+        };
+
+        Ok(Symbol {
+            id: Some(SymbolId(id)),
+            file_id: Some(FileId(file_id)),
+            name,
+            qualified_name,
+            kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
+            language: Language(lang_str),
+            file: PathBuf::from(file_path),
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
+            body_range,
+        })
+    }).map_err(|e| {
+        match e {
+            rusqlite::Error::QueryReturnedNoRows => CodeGraphError::SymbolNotFound(format!("{:?}", symbol_id)),
+            other => CodeGraphError::from(other),
+        }
+    })
+}
+
+pub fn load_symbols_by_ids(
+    conn: &rusqlite::Connection,
+    ids: &[SymbolId],
+) -> Result<Vec<Symbol>, CodeGraphError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = ids.iter().map(|id| id.0.to_string()).collect();
+    let sql = format!("
+        SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.language,
+               s.start_line, s.start_col, s.end_line, s.end_col,
+               s.body_start_line, s.body_start_col, s.body_end_line, s.body_end_col,
+               f.path
+        FROM symbols s
+        JOIN files f ON s.file_id = f.id
+        WHERE s.id IN ({})
+    ", placeholders.join(","));
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let file_id: i64 = row.get(1)?;
+        let name: String = row.get(2)?;
+        let qualified_name: String = row.get(3)?;
+        let kind_str: String = row.get(4)?;
+        let lang_str: String = row.get(5)?;
+        let start_line: usize = row.get(6)?;
+        let start_col: usize = row.get(7)?;
+        let end_line: usize = row.get(8)?;
+        let end_col: usize = row.get(9)?;
+        let body_start_line: Option<usize> = row.get(10)?;
+        let body_start_col: Option<usize> = row.get(11)?;
+        let body_end_line: Option<usize> = row.get(12)?;
+        let body_end_col: Option<usize> = row.get(13)?;
+        let file_path: String = row.get(14)?;
+
+        let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
+            (body_start_line, body_start_col, body_end_line, body_end_col)
+        {
+            Some(TextRange {
+                start_line: sl,
+                start_col: sc,
+                end_line: el,
+                end_col: ec,
+            })
+        } else {
+            None
+        };
+
+        results.push(Symbol {
+            id: Some(SymbolId(id)),
+            file_id: Some(FileId(file_id)),
+            name,
+            qualified_name,
+            kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
+            language: Language(lang_str),
+            file: PathBuf::from(file_path),
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
+            body_range,
+        });
+    }
+    Ok(results)
+}
+
+pub fn load_occurrence(
+    conn: &rusqlite::Connection,
+    occurrence_id: OccurrenceId,
+) -> Result<Occurrence, CodeGraphError> {
+    let mut stmt = conn.prepare("
+        SELECT o.id, o.file_id, o.enclosing_symbol_id, o.kind, o.raw_text,
+               o.start_line, o.start_col, o.end_line, o.end_col, o.language, o.backend_id,
+               f.path
+        FROM occurrences o
+        JOIN files f ON o.file_id = f.id
+        WHERE o.id = ?1
+    ")?;
+    stmt.query_row(rusqlite::params![occurrence_id.0], |row| {
+        let id: i64 = row.get(0)?;
+        let file_id: i64 = row.get(1)?;
+        let enclosing_symbol_id: Option<i64> = row.get(2)?;
+        let kind_str: String = row.get(3)?;
+        let raw_text: String = row.get(4)?;
+        let start_line: usize = row.get(5)?;
+        let start_col: usize = row.get(6)?;
+        let end_line: usize = row.get(7)?;
+        let end_col: usize = row.get(8)?;
+        let language_str: String = row.get(9)?;
+        let backend_id: String = row.get(10)?;
+        let file_path: String = row.get(11)?;
+
+        Ok(Occurrence {
+            id: Some(OccurrenceId(id)),
+            file_id: Some(FileId(file_id)),
+            enclosing_symbol: enclosing_symbol_id.map(SymbolId),
+            enclosing_temp_index: None,
+            kind: OccurrenceKind::from_str(&kind_str).unwrap_or(OccurrenceKind::Unknown),
+            raw_text,
+            file: PathBuf::from(file_path),
+            range: TextRange {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            },
+            language: LanguageId(language_str),
+            backend_id,
+        })
+    }).map_err(|e| {
+        match e {
+            rusqlite::Error::QueryReturnedNoRows => CodeGraphError::Parse(format!("Occurrence not found: {:?}", occurrence_id)),
+            other => CodeGraphError::from(other),
+        }
+    })
+}
+
+pub fn load_file_span(
+    conn: &rusqlite::Connection,
+    file_id: FileId,
+    range: TextRange,
+) -> Result<String, CodeGraphError> {
+    let mut stmt = conn.prepare("SELECT path FROM files WHERE id = ?1")?;
+    let path_str: String = stmt.query_row(rusqlite::params![file_id.0], |row| row.get(0))?;
+    let path = PathBuf::from(path_str);
+    let content = std::fs::read_to_string(&path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    if range.start_line == 0 || range.start_line > lines.len() {
+        return Ok("".to_string());
+    }
+    let end = std::cmp::min(range.end_line, lines.len());
+    if range.start_line > end {
+        return Ok("".to_string());
+    }
+    let mut result = String::new();
+    for i in (range.start_line - 1)..end {
+        result.push_str(lines[i]);
+        result.push('\n');
+    }
+    Ok(result)
+}
+
+pub fn load_callees(
+    conn: &rusqlite::Connection,
+    symbol_id: SymbolId,
+) -> Result<Vec<(CallEdge, Option<Symbol>)>, CodeGraphError> {
+    load_edges_from(conn, symbol_id, &[EdgeKind::Call])
+}
+
+pub fn load_callers(
+    conn: &rusqlite::Connection,
+    symbol_id: SymbolId,
+) -> Result<Vec<(CallEdge, Symbol)>, CodeGraphError> {
+    load_edges_to(conn, symbol_id, &[EdgeKind::Call])
 }
 
 pub fn load_symbols_for_file(

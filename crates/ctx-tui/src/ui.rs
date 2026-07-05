@@ -1086,7 +1086,10 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
                 ctx_codegraph::GraphContextMode::Dependents => "Dependents",
                 ctx_codegraph::GraphContextMode::ForwardSlice => "Forward slice",
                 ctx_codegraph::GraphContextMode::ReverseSlice => "Reverse slice",
+                ctx_codegraph::GraphContextMode::Forward => "Forward",
+                ctx_codegraph::GraphContextMode::Reverse => "Reverse",
                 ctx_codegraph::GraphContextMode::Neighborhood => "Neighborhood",
+                ctx_codegraph::GraphContextMode::Impact => "Impact",
             };
 
             let option_items = vec![

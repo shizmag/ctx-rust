@@ -336,6 +336,59 @@ enum GraphSubcommand {
         #[arg(long, default_value = "50")]
         max_nodes: usize,
     },
+    /// Retrieve ranked code context under token budget around symbol
+    Affect {
+        /// The query to resolve (symbol name, qualified name, file path, etc.)
+        query: String,
+        /// Traversal mode (callers, callees, dependencies, dependents, forward, reverse, neighborhood, impact)
+        #[arg(long, default_value = "neighborhood")]
+        mode: String,
+        /// Traversal depth (e.g. 2 or auto)
+        #[arg(long, default_value = "auto")]
+        depth: String,
+        /// Maximum traversal nodes
+        #[arg(long, default_value = "40")]
+        max_nodes: usize,
+        /// Maximum traversal files
+        #[arg(long, default_value = "12")]
+        max_files: usize,
+        /// Specific edge kinds to traverse (repeatable)
+        #[arg(long, short = 'e')]
+        edge_kind: Vec<String>,
+        /// Include test symbols
+        #[arg(long, default_value_t = false)]
+        include_tests: bool,
+        /// Include unresolved edges
+        #[arg(long, default_value_t = false)]
+        include_unresolved: bool,
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Include snippets (default)
+        #[arg(long, overrides_with = "no_snippets")]
+        with_snippets: Option<bool>,
+        /// Disable snippets
+        #[arg(long)]
+        no_snippets: bool,
+        /// Context lines around snippets
+        #[arg(long, default_value = "3")]
+        context_lines: usize,
+        /// Token budget
+        #[arg(long, default_value = "12000")]
+        token_budget: usize,
+        /// Context window size
+        #[arg(long, default_value = "32000")]
+        model_context_window: usize,
+        /// Packing strategy (balanced, frontloaded, sandwich)
+        #[arg(long, default_value = "sandwich")]
+        packing: String,
+        /// Ranking strategy (graph, lexical, hybrid)
+        #[arg(long, default_value = "hybrid")]
+        ranking: String,
+        /// Explain ranking
+        #[arg(long, default_value_t = false)]
+        explain_ranking: bool,
+    },
 }
 
 fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -686,6 +739,103 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 ctx_codegraph::SymbolResolution::NotFound => {
                     eprintln!("Symbol not found: {}", symbol);
                     std::process::exit(1);
+                }
+            }
+        }
+        GraphSubcommand::Affect {
+            query,
+            mode,
+            depth,
+            max_nodes,
+            max_files,
+            edge_kind,
+            include_tests,
+            include_unresolved,
+            format,
+            with_snippets,
+            no_snippets,
+            context_lines,
+            token_budget,
+            model_context_window,
+            packing,
+            ranking,
+            explain_ranking,
+        } => {
+            let conn =
+                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+            
+            let ctx_mode = match mode.as_str() {
+                "callers" => ctx_codegraph::GraphContextMode::Callers,
+                "callees" => ctx_codegraph::GraphContextMode::Callees,
+                "dependencies" => ctx_codegraph::GraphContextMode::Dependencies,
+                "dependents" => ctx_codegraph::GraphContextMode::Dependents,
+                "forward" => ctx_codegraph::GraphContextMode::Forward,
+                "reverse" => ctx_codegraph::GraphContextMode::Reverse,
+                "neighborhood" => ctx_codegraph::GraphContextMode::Neighborhood,
+                "impact" => ctx_codegraph::GraphContextMode::Impact,
+                _ => ctx_codegraph::GraphContextMode::Neighborhood,
+            };
+            
+            let depth_limit = if depth == "auto" {
+                ctx_codegraph::DepthLimit::Auto
+            } else if let Ok(d) = depth.parse::<usize>() {
+                ctx_codegraph::DepthLimit::Fixed(d)
+            } else {
+                ctx_codegraph::DepthLimit::Auto
+            };
+            
+            let ranking_mode = match ranking.as_str() {
+                "graph" => ctx_codegraph::RankingMode::Graph,
+                "lexical" => ctx_codegraph::RankingMode::Lexical,
+                "hybrid" => ctx_codegraph::RankingMode::Hybrid,
+                _ => ctx_codegraph::RankingMode::Hybrid,
+            };
+            
+            let packing_mode = match packing.as_str() {
+                "frontloaded" => ctx_codegraph::ContextPackingMode::Frontloaded,
+                "sandwich" => ctx_codegraph::ContextPackingMode::Sandwich,
+                "balanced" => ctx_codegraph::ContextPackingMode::Balanced,
+                _ => ctx_codegraph::ContextPackingMode::Sandwich,
+            };
+            
+            let use_snippets = if no_snippets { false } else { with_snippets.unwrap_or(true) };
+            
+            let budget = ctx_codegraph::ContextBudget {
+                token_budget,
+                model_context_window: Some(model_context_window),
+                reserve_output_tokens: 1000,
+                reserve_instruction_tokens: 1000,
+            };
+            
+            let parsed_edge_kinds: Vec<ctx_codegraph::EdgeKind> = edge_kind
+                .iter()
+                .filter_map(|k| ctx_codegraph::EdgeKind::from_str(k))
+                .collect();
+            
+            let result = ctx_codegraph::retrieve_graph_context(
+                &conn,
+                &query,
+                ctx_mode,
+                depth_limit,
+                max_nodes,
+                max_files,
+                ranking_mode,
+                packing_mode,
+                use_snippets,
+                context_lines,
+                &budget,
+                include_tests,
+                &parsed_edge_kinds,
+                include_unresolved,
+                explain_ranking,
+            )?;
+            
+            if format == "json" {
+                let json_str = serde_json::to_string_pretty(&result)?;
+                println!("{}", json_str);
+            } else {
+                for s in &result.sections {
+                    print!("{}", s.text);
                 }
             }
         }

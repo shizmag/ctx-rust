@@ -371,3 +371,55 @@ fn test_cli_graph_context_ambiguous() {
     assert!(stderr.contains("m1::ambig"));
     assert!(stderr.contains("m2::ambig"));
 }
+
+#[test]
+fn test_cli_graph_affect() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    // 1. Text mode
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--token-budget",
+            "12000",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph affect");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("run_pipeline"));
+    assert!(stdout.contains("load"));
+    assert!(stdout.contains("process"));
+
+    // 2. JSON mode
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_json = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--token-budget",
+            "12000",
+            "--format",
+            "json",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph affect json");
+
+    assert!(output_json.status.success());
+    let stdout_json = String::from_utf8(output_json.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&stdout_json).unwrap();
+    assert_eq!(val["query"], "run_pipeline");
+    assert!(val["token_budget"].as_u64().is_some());
+    assert!(val["roots"].as_array().unwrap().len() >= 1);
+}

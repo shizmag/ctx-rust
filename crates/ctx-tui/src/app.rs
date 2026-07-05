@@ -335,7 +335,10 @@ impl TuiApp {
             ctx_codegraph::GraphContextMode::Dependents => "Dependents",
             ctx_codegraph::GraphContextMode::ForwardSlice => "Forward slice",
             ctx_codegraph::GraphContextMode::ReverseSlice => "Reverse slice",
+            ctx_codegraph::GraphContextMode::Forward => "Forward",
+            ctx_codegraph::GraphContextMode::Reverse => "Reverse",
             ctx_codegraph::GraphContextMode::Neighborhood => "Neighborhood",
+            ctx_codegraph::GraphContextMode::Impact => "Impact",
         };
         out.push_str("Mode:\n");
         out.push_str(&format!("  {}, depth {}\n\n", mode_str, self.graph_depth));

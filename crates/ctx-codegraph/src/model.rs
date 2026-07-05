@@ -139,7 +139,7 @@ pub struct TextRange {
     pub end_col: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     pub id: Option<SymbolId>,
     pub file_id: Option<FileId>,
@@ -362,6 +362,20 @@ pub enum SymbolResolution {
     NotFound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum EdgeDirection {
+    Inbound,
+    Outbound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ResolvedEdgeTarget {
+    Symbol(Symbol),
+    External(String),
+    None,
+}
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GraphContextMode {
     Callers,
@@ -370,7 +384,10 @@ pub enum GraphContextMode {
     Dependents,
     ForwardSlice,
     ReverseSlice,
+    Forward,
+    Reverse,
     Neighborhood,
+    Impact,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -386,6 +403,7 @@ pub struct GraphContextEdge {
     pub from: SymbolId,
     pub to: SymbolId,
     pub label: Option<String>,
+    pub confidence: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
