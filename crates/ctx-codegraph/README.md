@@ -50,6 +50,12 @@ ctx graph slice <symbol>
 ```
 Prints the recursive forward dependency tree of the symbol (all transitive callees).
 
+### 6. Retrieve ranked context under token budget
+```bash
+ctx graph affect <symbol-query> [options]
+```
+Retrieves a ranked, token-budgeted semantic context containing code snippets around a symbol (e.g. `auth_service`). Supports BFS traversal with adaptive depth, hybrid scoring, and Sandwich packing mode.
+
 ---
 
 ## ⚠️ Limitations
