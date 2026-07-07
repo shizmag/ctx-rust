@@ -42,6 +42,7 @@ pub fn global_registry() -> &'static BackendRegistry {
     REGISTRY.get_or_init(|| {
         let mut reg = BackendRegistry::new();
         reg.register(Box::new(crate::languages::rust::RustBackend::new()));
+        reg.register(Box::new(crate::languages::python::PythonBackend::new()));
         reg.register(Box::new(crate::languages::MockBackend::new()));
         reg
     })
