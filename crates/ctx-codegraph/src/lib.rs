@@ -8,6 +8,7 @@ pub mod resolver;
 pub mod service;
 pub mod slice;
 pub mod storage;
+pub mod mcp;
 
 pub use context::{
     ApproxTokenEstimator, ContextBudget, ContextCandidate, ContextPack, ContextPackingMode,

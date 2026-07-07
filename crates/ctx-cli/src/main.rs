@@ -114,6 +114,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cmd) = args.command {
         match cmd {
             Command::Graph(g) => return handle_graph_command(g),
+            Command::Mcp => {
+                if let Err(e) = ctx_codegraph::mcp::run_mcp_server() {
+                    eprintln!("MCP Server Error: {}", e);
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
         }
     }
     run_with_args(args, ctx_tui::run_interactive)
@@ -238,6 +245,8 @@ enum Command {
     /// Analyze the project and query dependency or symbol relationships
     #[command(visible_alias = "g")]
     Graph(GraphCommand),
+    /// Start the Model Context Protocol (MCP) server over stdio
+    Mcp,
 }
 
 #[derive(clap::Args, Debug)]

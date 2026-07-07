@@ -117,3 +117,35 @@ def main():
     let retrieve_call = calls.iter().find(|c| c.raw_text == "self.retrieve").unwrap();
     assert_eq!(retrieve_call.enclosing_temp_index, Some(3));
 }
+
+#[test]
+fn test_parse_python_trim_body_range() {
+    let content = r#"class TestClass:
+    def method(self):
+        print("hello")
+        # indented comment inside method body
+    # unindented comment at class level
+# unindented comment at module level
+"#;
+
+    let mut temp = NamedTempFile::new().unwrap();
+    write!(temp, "{}", content).unwrap();
+
+    let (symbols, _) = parse_python_file(temp.path()).unwrap();
+
+    assert_eq!(symbols.len(), 2);
+
+    let class_sym = &symbols[0];
+    assert_eq!(class_sym.name, "TestClass");
+    let class_body = class_sym.body_range.as_ref().unwrap();
+    // Class body should include up to line 5 (unindented comment at class level) but not line 6
+    assert_eq!(class_body.start_line, 2);
+    assert_eq!(class_body.end_line, 5);
+
+    let method_sym = &symbols[1];
+    assert_eq!(method_sym.name, "method");
+    let method_body = method_sym.body_range.as_ref().unwrap();
+    // Method body should include up to line 4 (indented comment) but not line 5
+    assert_eq!(method_body.start_line, 3);
+    assert_eq!(method_body.end_line, 4);
+}

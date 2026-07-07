@@ -45,6 +45,70 @@ fn get_node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
 }
 
+fn trim_body_range(
+    source: &[u8],
+    def_range: TextRange,
+    body_range: TextRange,
+) -> TextRange {
+    let source_str = std::str::from_utf8(source).unwrap_or("");
+    let lines: Vec<&str> = source_str.lines().collect();
+
+    let mut end_line = body_range.end_line;
+    let mut end_col = body_range.end_col;
+
+    // Find the indentation of the definition line
+    let def_indent = if def_range.start_line <= lines.len() {
+        let def_line = lines[def_range.start_line - 1];
+        def_line.len() - def_line.trim_start().len()
+    } else {
+        0
+    };
+
+    while end_line > body_range.start_line {
+        if end_line > lines.len() {
+            end_line -= 1;
+            if end_line <= lines.len() {
+                end_col = lines[end_line - 1].len() + 1;
+            }
+            continue;
+        }
+
+        let line = lines[end_line - 1];
+        let trimmed = line.trim_start();
+        
+        // Check if line is empty/whitespace
+        if trimmed.is_empty() {
+            end_line -= 1;
+            if end_line <= lines.len() {
+                end_col = lines[end_line - 1].len() + 1;
+            }
+            continue;
+        }
+
+        // Check if line is a comment
+        if trimmed.starts_with('#') {
+            let comment_indent = line.len() - trimmed.len();
+            if comment_indent <= def_indent {
+                // Unindented trailing comment!
+                end_line -= 1;
+                if end_line <= lines.len() {
+                    end_col = lines[end_line - 1].len() + 1;
+                }
+                continue;
+            }
+        }
+
+        break;
+    }
+
+    TextRange {
+        start_line: body_range.start_line,
+        start_col: body_range.start_col,
+        end_line,
+        end_col,
+    }
+}
+
 impl<'a> ParserState<'a> {
     fn visit(
         &mut self,
@@ -69,7 +133,7 @@ impl<'a> ParserState<'a> {
 
                     let body_range = node
                         .child_by_field_name("body")
-                        .map(|b| to_text_range(b.range()));
+                        .map(|b| trim_body_range(self.source, range.clone(), to_text_range(b.range())));
 
                     let symbol = Symbol {
                         id: None,
@@ -98,7 +162,7 @@ impl<'a> ParserState<'a> {
                     
                     let body_range = node
                         .child_by_field_name("body")
-                        .map(|b| to_text_range(b.range()));
+                        .map(|b| trim_body_range(self.source, range.clone(), to_text_range(b.range())));
 
                     let kind = if current_class.is_some() {
                         SymbolKind::Method
