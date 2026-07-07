@@ -125,7 +125,18 @@ pub(crate) fn should_index_path(path: &Path) -> bool {
 pub(crate) fn should_index_path_with_registry(path: &Path, registry: &BackendRegistry) -> bool {
     for component in path.components() {
         if let Some(s) = component.as_os_str().to_str() {
-            if s == "target" || s == ".git" || s == ".codegraph" || s == ".ctx-codegraph" {
+            if s == "target"
+                || s == ".git"
+                || s == ".codegraph"
+                || s == ".ctx-codegraph"
+                || s == ".venv"
+                || s == "venv"
+                || s == ".env"
+                || s == "node_modules"
+                || s == "__pycache__"
+                || s == "build"
+                || s == "dist"
+            {
                 return false;
             }
         }
@@ -155,6 +166,13 @@ pub fn build_index_with_registry(
                     || name == ".git"
                     || name == ".codegraph"
                     || name == ".ctx-codegraph"
+                    || name == ".venv"
+                    || name == "venv"
+                    || name == ".env"
+                    || name == "node_modules"
+                    || name == "__pycache__"
+                    || name == "build"
+                    || name == "dist"
                 {
                     return false;
                 }
