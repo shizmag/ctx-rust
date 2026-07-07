@@ -30,15 +30,65 @@ impl GraphContextService {
 
     pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
         let workspace_root = crate::storage::find_workspace_root(repo_root);
-        let options = crate::index::BuildIndexOptions {
+        let default_options = crate::index::BuildIndexOptions {
             use_lsp: false,
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
         };
-        if !crate::storage::validate_index_db(&workspace_root, &options)? {
-            let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;
+
+        let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+        if !db_path.exists() {
+            let _ = crate::storage::rebuild_index_db(&workspace_root, default_options)?;
+        } else {
+            let mut options = default_options;
+            if let Ok(conn) = crate::storage::open_db(&workspace_root) {
+                let get_meta = |key: &str| -> Option<String> {
+                    conn.query_row("SELECT value FROM metadata WHERE key = ?", [key], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .ok()
+                };
+
+                if get_meta("schema_version").as_deref() == Some("4") {
+                    if let Some(resolver_id) = get_meta("resolver_id") {
+                        options.use_lsp = resolver_id == "lsp";
+                    }
+                    if let Some(change_detection_strategy) = get_meta("change_detection_strategy") {
+                        options.change_detection = match change_detection_strategy.as_str() {
+                            "ContentHash" => crate::model::FileChangeDetection::ContentHash,
+                            _ => crate::model::FileChangeDetection::MtimeAndSize,
+                        };
+                    }
+                    if let Some(stored_hash) = get_meta("parser_config_hash") {
+                        let expected_true_hash = {
+                            use sha2::{Digest, Sha256};
+                            let mut hasher = Sha256::new();
+                            hasher.update(b"include_tests:true");
+                            format!("{:x}", hasher.finalize())
+                        };
+                        options.include_tests = stored_hash == expected_true_hash;
+                    }
+                }
+            }
+
+            if let Ok(state) = crate::storage::get_index_state(&workspace_root, &options) {
+                match state {
+                    crate::model::IndexState::Ready => {
+                        // Do not rebuild or update if index is already up to date
+                    }
+                    crate::model::IndexState::NeedsIncrementalUpdate(_) => {
+                        let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;
+                    }
+                    crate::model::IndexState::NeedsFullRebuild(_) | crate::model::IndexState::Missing => {
+                        let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;
+                    }
+                }
+            } else {
+                let _ = crate::storage::rebuild_index_db(&workspace_root, options)?;
+            }
         }
+
         let conn = crate::storage::open_db(&workspace_root)?;
         Ok(Self {
             repo_root: workspace_root,
