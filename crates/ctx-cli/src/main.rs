@@ -249,8 +249,8 @@ enum Command {
                   to understand how functions are connected.\n\n\
                   By default, ctx builds a fast tree-sitter based graph. Edges are labeled with \
                   their resolution confidence: Syntax, Heuristic, Unresolved. Use --with-lsp to \
-                  ask rust-analyzer to enrich resolvable edges as LspExact. This is slower but \
-                  more semantically precise.",
+                  ask language servers (e.g. rust-analyzer for Rust, pyright-langserver for Python) \
+                  to enrich resolvable edges as LspExact. This is slower but more semantically precise.",
     after_help = "Examples:\n  \
                   ctx graph build\n  \
                   ctx graph build --with-lsp\n  \
@@ -268,11 +268,11 @@ struct GraphCommand {
     #[arg(default_value = ".", global = true)]
     path: PathBuf,
 
-    /// Disable rust-analyzer database fallback (forces tree-sitter fallback only)
+    /// Disable language server database fallback (forces tree-sitter fallback only)
     #[arg(long, global = true)]
     no_rust_analyzer: bool,
 
-    /// Enable rust-analyzer database fallback (slow but precise call resolution, marks edges as LspExact)
+    /// Enable language server database fallback (slow but precise call resolution, marks edges as LspExact)
     #[arg(long, global = true)]
     with_lsp: bool,
 
@@ -399,7 +399,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
 
     match graph_args.command {
         GraphSubcommand::Build => {
-            println!("Building codegraph index...");
+            let start_time = std::time::Instant::now();
+            println!("\x1b[36m\x1b[1mBuilding codegraph index...\x1b[0m");
             let options = BuildIndexOptions {
                 use_lsp: use_rust_analyzer,
                 max_depth: None,
@@ -407,17 +408,19 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
             };
             let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
+            let elapsed = start_time.elapsed();
+
             if graph_args.verbose {
-                println!("--- Codegraph Build Report ---");
+                println!("\x1b[35m\x1b[1m--- Codegraph Build Report ---\x1b[0m");
                 println!(
                     "Full Rebuild: {}",
-                    if report.full_rebuild { "yes" } else { "no" }
+                    if report.full_rebuild { "\x1b[33myes\x1b[0m" } else { "\x1b[32mno\x1b[0m" }
                 );
                 if let Some(reason) = report.full_rebuild_reason {
                     println!("Full Rebuild Reason: {:?}", reason);
                 }
                 println!(
-                    "Files: {} added, {} modified, {} deleted, {} unchanged",
+                    "Files: \x1b[32m{} added\x1b[0m, \x1b[33m{} modified\x1b[0m, \x1b[31m{} deleted\x1b[0m, \x1b[90m{} unchanged\x1b[0m",
                     report.added_files,
                     report.modified_files,
                     report.deleted_files,
@@ -438,78 +441,49 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                     report.heuristic_edges,
                     report.unresolved_edges
                 );
-                println!("-----------------------------");
+                println!("Build Time: \x1b[36m{:.2?}\x1b[0m", elapsed);
+                println!("\x1b[35m\x1b[1m-----------------------------\x1b[0m");
             } else {
                 if report.full_rebuild {
-                    if let Some(reason) = report.full_rebuild_reason {
+                    let suffix = if let Some(reason) = report.full_rebuild_reason {
                         match reason {
-                            ctx_codegraph::model::RebuildReason::MissingDatabase => {
-                                println!("Full rebuild completed (Index not found).");
-                            }
-                            ctx_codegraph::model::RebuildReason::CorruptDatabase => {
-                                println!("Full rebuild completed (Database corrupted).");
-                            }
-                            ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
-                                println!("Full rebuild completed (Schema version changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
-                                println!("Full rebuild completed (Indexer version changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::BackendSetChanged => {
-                                println!("Full rebuild completed (Backend set changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
-                                println!("Full rebuild completed (Backend version changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
-                                println!("Full rebuild completed (Parser version changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
-                                println!("Full rebuild completed (Parser configuration changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
-                                println!("Full rebuild completed (Resolver version changed).");
-                            }
-                            ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
-                                println!(
-                                    "Full rebuild completed (Resolver configuration changed)."
-                                );
-                            }
-                            ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
-                                println!(
-                                    "Full rebuild completed (Discovery configuration changed)."
-                                );
-                            }
-                            ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
-                                println!(
-                                    "Full rebuild completed (Change detection strategy changed)."
-                                );
-                            }
-                            ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
-                                println!("Full rebuild completed (Previous run was incomplete).");
-                            }
-                            ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
-                                println!("Full rebuild completed (Previous run failed).");
-                            }
+                            ctx_codegraph::model::RebuildReason::MissingDatabase => " (Index not found)",
+                            ctx_codegraph::model::RebuildReason::CorruptDatabase => " (Database corrupted)",
+                            ctx_codegraph::model::RebuildReason::SchemaVersionChanged => " (Schema version changed)",
+                            ctx_codegraph::model::RebuildReason::IndexerVersionChanged => " (Indexer version changed)",
+                            ctx_codegraph::model::RebuildReason::BackendSetChanged => " (Backend set changed)",
+                            ctx_codegraph::model::RebuildReason::BackendVersionChanged => " (Backend version changed)",
+                            ctx_codegraph::model::RebuildReason::ParserVersionChanged => " (Parser version changed)",
+                            ctx_codegraph::model::RebuildReason::ParserConfigChanged => " (Parser configuration changed)",
+                            ctx_codegraph::model::RebuildReason::ResolverVersionChanged => " (Resolver version changed)",
+                            ctx_codegraph::model::RebuildReason::ResolverConfigChanged => " (Resolver configuration changed)",
+                            ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => " (Discovery configuration changed)",
+                            ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => " (Change detection strategy changed)",
+                            ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => " (Previous run was incomplete)",
+                            ctx_codegraph::model::RebuildReason::PreviousRunFailed => " (Previous run failed)",
                         }
                     } else {
-                        println!("Full rebuild completed.");
-                    }
+                        ""
+                    };
+                    println!("\x1b[32m✨ Full rebuild completed{}.\x1b[0m", suffix);
                 } else {
-                    println!("Incremental update completed.");
+                    println!("\x1b[32m✨ Incremental update completed.\x1b[0m");
                 }
                 println!(
-                    "Files: {} added, {} modified, {} deleted, {} unchanged",
+                    "\x1b[34m📂 Files:\x1b[0m \x1b[32m{} added\x1b[0m, \x1b[33m{} modified\x1b[0m, \x1b[31m{} deleted\x1b[0m, \x1b[90m{} unchanged\x1b[0m",
                     report.added_files,
                     report.modified_files,
                     report.deleted_files,
                     report.unchanged_files
                 );
                 println!(
-                    "Symbols updated: {}, call sites updated: {}, edges updated: {}",
+                    "\x1b[35m🕸️  Symbols updated:\x1b[0m \x1b[1m{}\x1b[0m | \x1b[36mcall sites updated:\x1b[0m \x1b[1m{}\x1b[0m | \x1b[33medges updated:\x1b[0m \x1b[1m{}\x1b[0m",
                     report.symbols_written, report.call_sites_written, report.edges_written
                 );
-                println!("Index successfully built at .ctx-codegraph/codegraph.sqlite");
+                println!(
+                    "\x1b[32m✔ Index successfully built at\x1b[0m \x1b[4m.ctx-codegraph/codegraph.sqlite\x1b[0m \x1b[36m[in {:.2?}]\x1b[0m",
+                    elapsed
+                );
             }
         }
         GraphSubcommand::Symbols { mut query } => {
