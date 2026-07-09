@@ -282,3 +282,135 @@ fn ensure_gitignore_entries(root: &Path) {
         let _ = std::fs::write(&gitignore_path, content);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn parse_gitignore_handles_empty_content() {
+        let parsed = parse_gitignore("");
+        assert!(parsed.normal_rules.is_empty());
+        assert!(parsed.ctx_rules.is_empty());
+    }
+
+    #[test]
+    fn parse_gitignore_handles_whitespace_only_blocks() {
+        let parsed = parse_gitignore("   \n\n\t\n");
+        assert!(parsed.normal_rules.is_empty());
+        assert!(parsed.ctx_rules.is_empty());
+    }
+
+    #[test]
+    fn parse_gitignore_splits_normal_and_ctx_blocks() {
+        let content = "\
+ignored_dir/
+normal.txt
+
+#[ctx]
+ctx_dir/
+bypass.txt
+";
+        let parsed = parse_gitignore(content);
+
+        assert_eq!(parsed.normal_rules, vec!["ignored_dir/", "normal.txt"]);
+        assert_eq!(parsed.ctx_rules, vec!["ctx_dir/", "bypass.txt"]);
+    }
+
+    #[test]
+    fn parse_gitignore_handles_multiple_ctx_blocks() {
+        let content = "\
+first_ctx/
+#[ctx]
+second_ctx/
+#[ctx]
+third_ctx/
+";
+        let parsed = parse_gitignore(content);
+
+        assert_eq!(parsed.normal_rules, vec!["first_ctx/"]);
+        assert_eq!(parsed.ctx_rules, vec!["second_ctx/", "third_ctx/"]);
+    }
+
+    #[test]
+    fn parse_gitignore_preserves_rule_whitespace() {
+        let content = "  spaced_rule/\n";
+        let parsed = parse_gitignore(content);
+
+        assert_eq!(parsed.normal_rules, vec!["  spaced_rule/"]);
+    }
+
+    #[test]
+    fn parse_gitignore_recognizes_trimmed_ctx_marker() {
+        let content = "  #[ctx]  \nvisible.txt\n";
+        let parsed = parse_gitignore(content);
+
+        assert!(parsed.normal_rules.is_empty());
+        assert_eq!(parsed.ctx_rules, vec!["visible.txt"]);
+    }
+
+    #[test]
+    fn ensure_gitignore_entries_creates_file_when_git_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        ensure_gitignore_entries(root);
+
+        let gitignore_path = root.join(".gitignore");
+        assert!(gitignore_path.exists());
+        let content = fs::read_to_string(gitignore_path).unwrap();
+        assert!(content.contains(".ctx-codegraph/"));
+        assert!(content.contains(".ctx_*/"));
+    }
+
+    #[test]
+    fn ensure_gitignore_entries_appends_missing_entries_without_duplicates() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path();
+        let gitignore_path = root.join(".gitignore");
+        fs::write(&gitignore_path, "target/\n.ctx-codegraph/\n").unwrap();
+
+        ensure_gitignore_entries(root);
+
+        let content = fs::read_to_string(gitignore_path).unwrap();
+        assert!(content.starts_with("target/\n.ctx-codegraph/\n"));
+        assert!(content.contains(".ctx_*/"));
+        assert_eq!(content.matches(".ctx-codegraph/").count(), 1);
+        assert_eq!(content.matches(".ctx_*/").count(), 1);
+    }
+
+    #[test]
+    fn ignore_stack_honors_exclude_patterns() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        fs::create_dir_all(root.join("vendor/pkg")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("vendor/pkg/lib.rs"), "fn lib() {}\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut stack = IgnoreStack::new(root.clone(), &["vendor/".to_string()]);
+
+        assert!(stack.is_ignored(&root.join("vendor"), true));
+        assert!(!stack.is_ignored(&root.join("src/main.rs"), false));
+    }
+
+    #[test]
+    fn ignore_stack_applies_ctx_bypass_rules() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        fs::create_dir_all(root.join("ignored")).unwrap();
+        fs::write(root.join("ignored/secret.txt"), "secret\n").unwrap();
+        fs::write(
+            root.join(".gitignore"),
+            "ignored/\n\n#[ctx]\nignored/secret.txt\n",
+        )
+        .unwrap();
+
+        let mut stack = IgnoreStack::new(root.clone(), &[]);
+
+        assert!(stack.is_ignored(&root.join("ignored"), true));
+        assert!(!stack.is_ignored(&root.join("ignored/secret.txt"), false));
+    }
+}

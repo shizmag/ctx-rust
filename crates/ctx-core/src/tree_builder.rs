@@ -154,3 +154,142 @@ fn sort_tree(node: &mut TreeNode) {
         sort_tree(child);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_stats(lines: usize, bytes: u64) -> NodeStats {
+        NodeStats {
+            files: 1,
+            dirs: 0,
+            lines,
+            bytes,
+            tokens: lines,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
+        }
+    }
+
+    #[test]
+    fn new_creates_root_directory_node() {
+        let root_path = PathBuf::from("/tmp/my-project");
+        let builder = TreeBuilder::new(root_path.clone());
+
+        assert_eq!(builder.root.name, "my-project");
+        assert_eq!(builder.root.path, root_path);
+        assert_eq!(builder.root.kind, NodeKind::Directory);
+        assert!(builder.root.children.is_empty());
+    }
+
+    #[test]
+    fn add_node_ignores_paths_outside_root() {
+        let root_path = PathBuf::from("/tmp/project");
+        let mut builder = TreeBuilder::new(root_path);
+
+        builder.add_node(
+            Path::new("/other/file.rs"),
+            NodeKind::File,
+            file_stats(1, 10),
+        );
+
+        assert!(builder.root.children.is_empty());
+    }
+
+    #[test]
+    fn add_node_builds_nested_structure_and_aggregates_stats() {
+        let root_path = PathBuf::from("/tmp/project");
+        let mut builder = TreeBuilder::new(root_path.clone());
+
+        builder.add_node(
+            &root_path.join("src/main.rs"),
+            NodeKind::File,
+            file_stats(5, 50),
+        );
+        builder.add_node(
+            &root_path.join("src/lib.rs"),
+            NodeKind::File,
+            file_stats(3, 30),
+        );
+        builder.add_node(&root_path.join("docs"), NodeKind::Directory, NodeStats {
+            files: 0,
+            dirs: 1,
+            lines: 0,
+            bytes: 0,
+            tokens: 0,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
+        });
+
+        let root = builder.finish();
+
+        assert_eq!(root.stats.files, 2);
+        assert_eq!(root.stats.dirs, 3); // root + src + docs
+        assert_eq!(root.stats.lines, 8);
+        assert_eq!(root.stats.bytes, 80);
+
+        let child_names: Vec<_> = root.children.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(child_names, vec!["docs", "src"]);
+
+        let src = root.children.iter().find(|node| node.name == "src").unwrap();
+        assert_eq!(src.stats.files, 2);
+        assert_eq!(src.stats.lines, 8);
+        let src_child_names: Vec<_> = src.children.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(src_child_names, vec!["lib.rs", "main.rs"]);
+    }
+
+    #[test]
+    fn add_node_skips_duplicate_leaf_nodes() {
+        let root_path = PathBuf::from("/tmp/project");
+        let mut builder = TreeBuilder::new(root_path.clone());
+
+        builder.add_node(
+            &root_path.join("README.md"),
+            NodeKind::File,
+            file_stats(1, 10),
+        );
+        builder.add_node(
+            &root_path.join("README.md"),
+            NodeKind::File,
+            file_stats(99, 999),
+        );
+
+        let root = builder.finish();
+
+        assert_eq!(root.stats.files, 1);
+        assert_eq!(root.stats.lines, 1);
+        assert_eq!(root.stats.bytes, 10);
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].name, "README.md");
+    }
+
+    #[test]
+    fn finish_sorts_directories_before_files() {
+        let root_path = PathBuf::from("/tmp/project");
+        let mut builder = TreeBuilder::new(root_path.clone());
+
+        builder.add_node(
+            &root_path.join("zebra.rs"),
+            NodeKind::File,
+            file_stats(1, 1),
+        );
+        builder.add_node(&root_path.join("alpha"), NodeKind::Directory, NodeStats {
+            files: 0,
+            dirs: 1,
+            lines: 0,
+            bytes: 0,
+            tokens: 0,
+            tests: 0,
+            covered_lines: 0,
+            coverable_lines: 0,
+        });
+        builder.add_node(&root_path.join("beta.txt"), NodeKind::File, file_stats(1, 1));
+
+        let root = builder.finish();
+        let names: Vec<_> = root.children.iter().map(|node| node.name.as_str()).collect();
+
+        assert_eq!(names, vec!["alpha", "beta.txt", "zebra.rs"]);
+    }
+}
