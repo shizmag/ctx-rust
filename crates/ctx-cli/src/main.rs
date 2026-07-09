@@ -305,7 +305,7 @@ struct StatsCommand {
 
 #[derive(clap::Args, Debug)]
 struct InstallCommand {
-    /// Which clients to target (comma separated). Defaults to common ones. Examples: claude,cursor,gemini,continue
+    /// Which clients to target (comma separated). Defaults to common ones. Examples: claude,cursor,gemini,continue,code,vscode
     #[arg(long, value_delimiter = ',')]
     clients: Vec<String>,
 
@@ -1428,6 +1428,11 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
         "Continue",
         home.as_ref().map(|h| h.join(".config/continue")),
     );
+    detect_and_print(
+        "VS Code",
+        home.as_ref()
+            .map(|h| h.join("Library/Application Support/Code/User")),
+    );
     if Path::new(".cursor").exists() || Path::new("mcp.json").exists() {
         println!("  - Cursor project-level config possible in current dir");
     }
@@ -1445,30 +1450,68 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
                 if let Some(home) = std::env::var_os("HOME") {
                     let path = PathBuf::from(home)
                         .join("Library/Application Support/Claude/claude_desktop_config.json");
-                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Claude Desktop")?;
+                    any_written |= write_mcp_entry(
+                        &path,
+                        &exe,
+                        args.dry_run,
+                        "Claude Desktop",
+                        "mcpServers",
+                        false,
+                    )?;
                 }
             }
             "cursor" => {
                 // Global
                 if let Some(home) = std::env::var_os("HOME") {
                     let global = PathBuf::from(home).join(".cursor/mcp.json");
-                    any_written |= write_mcp_entry(&global, &exe, args.dry_run, "Cursor (global)")?;
+                    any_written |= write_mcp_entry(
+                        &global,
+                        &exe,
+                        args.dry_run,
+                        "Cursor (global)",
+                        "mcpServers",
+                        false,
+                    )?;
                 }
                 // Project-local (very common and recommended)
                 let local = PathBuf::from(".cursor/mcp.json");
-                any_written |= write_mcp_entry(&local, &exe, args.dry_run, "Cursor (project)")?;
+                any_written |= write_mcp_entry(
+                    &local,
+                    &exe,
+                    args.dry_run,
+                    "Cursor (project)",
+                    "mcpServers",
+                    false,
+                )?;
             }
             "gemini" => {
                 if let Some(home) = std::env::var_os("HOME") {
                     let path = PathBuf::from(home).join(".gemini/config/mcp_config.json");
-                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Gemini")?;
+                    any_written |=
+                        write_mcp_entry(&path, &exe, args.dry_run, "Gemini", "mcpServers", false)?;
                 }
             }
             "continue" => {
                 if let Some(home) = std::env::var_os("HOME") {
                     // Common locations observed in the wild (mac + linux ~/.config)
                     let path = PathBuf::from(home).join(".config/continue/mcpServers/mcp.json");
-                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Continue.dev")?;
+                    any_written |= write_mcp_entry(
+                        &path,
+                        &exe,
+                        args.dry_run,
+                        "Continue.dev",
+                        "mcpServers",
+                        false,
+                    )?;
+                }
+            }
+            "code" | "vscode" => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    // VS Code (and some derivatives) on macOS
+                    let path =
+                        PathBuf::from(home).join("Library/Application Support/Code/User/mcp.json");
+                    any_written |=
+                        write_mcp_entry(&path, &exe, args.dry_run, "VS Code", "servers", true)?;
                 }
             }
             other => {
@@ -1488,12 +1531,16 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// Helper: ensure parent dir, load or create mcpServers json, set/overwrite the "ctx" entry, write if not dry.
+/// Helper: ensure parent dir, load or create the appropriate servers json, set/overwrite the "ctx" entry.
+/// root_key: "mcpServers" (most) or "servers" (VS Code style)
+/// with_type: if true, add "type": "stdio" (for VS Code style)
 fn write_mcp_entry(
     target: &Path,
     exe: &str,
     dry_run: bool,
     label: &str,
+    root_key: &str,
+    with_type: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
 
@@ -1513,16 +1560,19 @@ fn write_mcp_entry(
     let servers = doc
         .as_object_mut()
         .and_then(|o| {
-            o.entry("mcpServers")
+            o.entry(root_key)
                 .or_insert(serde_json::json!({}))
                 .as_object_mut()
         })
-        .ok_or("invalid mcpServers structure")?;
+        .ok_or_else(|| format!("invalid {} structure", root_key))?;
 
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "command": exe,
         "args": ["mcp"]
     });
+    if with_type {
+        entry["type"] = serde_json::json!("stdio");
+    }
 
     let existing = servers.get("ctx");
     if existing.is_none() || existing != Some(&entry) {
@@ -1540,7 +1590,10 @@ fn write_mcp_entry(
                 label,
                 target.display()
             );
-            println!("  Content diff would affect the 'ctx' entry under mcpServers.");
+            println!(
+                "  Content diff would affect the 'ctx' entry under {}.",
+                root_key
+            );
         } else {
             fs::write(target, pretty + "\n")?;
             println!(
