@@ -3,8 +3,11 @@ use super::protocol::{
     parse_edge_kinds, parse_graph_context_mode, text_tool_result,
 };
 use super::render::{
-    format_symbol_not_found, handle_symbol_resolution, render_affected_context_text,
-    render_caller_edges, render_call_edges, render_context_to_markdown, render_symbols_list,
+    format_ambiguous_symbols_json, format_ambiguous_symbols_yaml, format_symbol_not_found,
+    handle_symbol_resolution, render_affected_context_json, render_affected_context_text,
+    render_affected_context_yaml, render_caller_edges, render_call_edges,
+    render_context_to_json, render_context_to_markdown, render_context_to_yaml,
+    render_symbols_list,
 };
 use crate::index::BuildIndexOptions;
 use crate::model::{FileChangeDetection, GraphContextOptions, SymbolResolution};
@@ -18,6 +21,222 @@ use ctx_config::find_and_load_config;
 use ctx_core::scan;
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+/// Simple in-memory usage metrics for MCP server (session scoped).
+/// Comprehensive for comparing ctx MCP vs other MCP servers:
+/// - per-tool call counts, success/error rates
+/// - time per call (durations)
+/// - token usage (input est via approx + context output est where available)
+/// - ambiguous disambig events, rebuilds via MCP
+/// - context sizes (nodes, omitted due to budget)
+/// - format used (text/json/yaml)
+/// Toggle via env CTX_MCP_COLLECT_STATS=0 to disable (integrates with settings).
+#[derive(Default, Debug, Clone, serde::Serialize)]
+pub(crate) struct UsageStats {
+    pub tool_calls: HashMap<String, u64>,
+    pub tool_successes: HashMap<String, u64>,
+    pub tool_errors: HashMap<String, u64>,
+    /// context output tokens (from pack.estimated_tokens for affected_context)
+    pub context_estimated_tokens: HashMap<String, Vec<usize>>,
+    pub durations_ms: HashMap<String, Vec<u64>>,
+    pub input_estimated_tokens: HashMap<String, Vec<usize>>,
+    pub ambiguous_resolutions: u64,
+    pub rebuilds: u64,
+    pub formats_used: HashMap<String, u64>,
+    pub context_nodes: HashMap<String, Vec<usize>>,
+    pub context_omitted: HashMap<String, Vec<usize>>,
+}
+
+static USAGE: OnceLock<Mutex<UsageStats>> = OnceLock::new();
+
+fn collect_enabled() -> bool {
+    // Env overrides for testing/CI
+    if let Ok(v) = std::env::var("CTX_MCP_COLLECT_STATS") {
+        return !matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+    }
+    // Integrate with new settings (from .ctxconfig stats_enabled / collect_stats / stats)
+    // Ties to settings/DTO work for AI agent opt: user can set stats_enabled=false to disable collection.
+    if let Ok(dir) = std::env::current_dir() {
+        if let Ok(cfg) = find_and_load_config(&dir) {
+            if let Some(enabled) = cfg.stats_enabled {
+                return enabled;
+            }
+        }
+    }
+    true
+}
+
+pub(crate) fn record_ambiguous() {
+    if !collect_enabled() {
+        return;
+    }
+    let mut stats = get_usage_stats();
+    stats.ambiguous_resolutions += 1;
+}
+
+pub(crate) fn record_rebuild() {
+    if !collect_enabled() {
+        return;
+    }
+    let mut stats = get_usage_stats();
+    stats.rebuilds += 1;
+}
+
+pub(crate) fn get_usage_stats() -> std::sync::MutexGuard<'static, UsageStats> {
+    USAGE
+        .get_or_init(|| Mutex::new(UsageStats::default()))
+        .lock()
+        .unwrap()
+}
+
+/// Record general call result (success rate, timing, input tokens est using char/4 approx, format).
+/// Called from wrapper for all tools.
+pub(crate) fn record_call_result(
+    tool: &str,
+    success: bool,
+    duration_ms: u64,
+    input_tokens: usize,
+    format: &str,
+) {
+    if !collect_enabled() {
+        return;
+    }
+    let mut stats = get_usage_stats();
+    *stats.tool_calls.entry(tool.to_string()).or_insert(0) += 1;
+    if success {
+        *stats.tool_successes.entry(tool.to_string()).or_insert(0) += 1;
+    } else {
+        *stats.tool_errors.entry(tool.to_string()).or_insert(0) += 1;
+    }
+    stats
+        .durations_ms
+        .entry(tool.to_string())
+        .or_default()
+        .push(duration_ms);
+    stats
+        .input_estimated_tokens
+        .entry(tool.to_string())
+        .or_default()
+        .push(input_tokens);
+    *stats.formats_used.entry(format.to_string()).or_insert(0) += 1;
+}
+
+/// Record detailed context stats for affected_context (nodes, omitted due to budget).
+pub(crate) fn record_context_details(tool: &str, nodes: usize, omitted: usize) {
+    if !collect_enabled() {
+        return;
+    }
+    let mut stats = get_usage_stats();
+    stats
+        .context_nodes
+        .entry(tool.to_string())
+        .or_default()
+        .push(nodes);
+    stats
+        .context_omitted
+        .entry(tool.to_string())
+        .or_default()
+        .push(omitted);
+}
+
+pub(crate) fn record_context_tokens(tool: &str, toks: usize) {
+    if !collect_enabled() {
+        return;
+    }
+    let mut stats = get_usage_stats();
+    stats
+        .context_estimated_tokens
+        .entry(tool.to_string())
+        .or_default()
+        .push(toks);
+}
+
+/// Returns a compact summary string for logging / resource exposure.
+/// Enhanced with success/error, avgs, sizes for MCP comparison.
+pub(crate) fn usage_summary_text() -> String {
+    let stats = get_usage_stats();
+    let mut lines = vec!["## MCP Usage Stats (session)".to_string()];
+    let total_calls: u64 = stats.tool_calls.values().sum();
+    lines.push(format!("Total tool calls: {}", total_calls));
+    let total_succ: u64 = stats.tool_successes.values().sum();
+    let total_err: u64 = stats.tool_errors.values().sum();
+    let err_rate = if total_calls > 0 {
+        (total_err as f64 / total_calls as f64) * 100.0
+    } else {
+        0.0
+    };
+    lines.push(format!(
+        "Successes: {} Errors: {} (error rate: {:.1}%)",
+        total_succ, total_err, err_rate
+    ));
+    for (tool, count) in &stats.tool_calls {
+        let succ = stats.tool_successes.get(tool).copied().unwrap_or(0);
+        let err = stats.tool_errors.get(tool).copied().unwrap_or(0);
+        let durs = stats.durations_ms.get(tool).cloned().unwrap_or_default();
+        let avg_dur = if !durs.is_empty() {
+            durs.iter().sum::<u64>() / durs.len() as u64
+        } else {
+            0
+        };
+        let inp_sum: usize = stats
+            .input_estimated_tokens
+            .get(tool)
+            .map(|v| v.iter().sum())
+            .unwrap_or(0);
+        let ctx_samples = stats
+            .context_estimated_tokens
+            .get(tool)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let ctx_sum: usize = stats
+            .context_estimated_tokens
+            .get(tool)
+            .map(|v| v.iter().sum())
+            .unwrap_or(0);
+        let nodes_sum: usize = stats
+            .context_nodes
+            .get(tool)
+            .map(|v| v.iter().sum())
+            .unwrap_or(0);
+        let omitted_sum: usize = stats
+            .context_omitted
+            .get(tool)
+            .map(|v| v.iter().sum())
+            .unwrap_or(0);
+        lines.push(format!(
+            "  {}: {} calls ({} ok, {} err), avg {}ms, input~{} toks, ctx-toks samples {} (sum {}), nodes sum {}, omitted sum {}",
+            tool, count, succ, err, avg_dur, inp_sum, ctx_samples, ctx_sum, nodes_sum, omitted_sum
+        ));
+    }
+    lines.push(format!("Ambiguous resolutions: {}", stats.ambiguous_resolutions));
+    lines.push(format!("Rebuilds triggered: {}", stats.rebuilds));
+    if !stats.formats_used.is_empty() {
+        lines.push("Formats used:".to_string());
+        for (f, c) in &stats.formats_used {
+            lines.push(format!("  {}: {}", f, c));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Full stats as JSON for queryable dump via resource (for collection/comparison).
+pub(crate) fn usage_stats_json() -> serde_json::Value {
+    serde_json::to_value(&*get_usage_stats()).unwrap_or(serde_json::json!({}))
+}
+
+/// Estimate using approx same as ctx-stats::estimate_tokens (chars.count() / 4).
+fn estimate_tokens_approx(s: &str) -> usize {
+    if s.is_empty() {
+        0
+    } else {
+        (s.chars().count() + 3) / 4
+    }
+}
+
 pub struct ToolCallOutcome {
     pub result: serde_json::Value,
     pub reload_service: bool,
@@ -87,7 +306,13 @@ pub fn handle_tool_call(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> Result<ToolCallOutcome, String> {
-    match tool_name {
+    let start = Instant::now();
+    let format = get_str_arg(args, "format").unwrap_or("text").to_owned();
+    let input_tokens = estimate_tokens_approx(
+        &serde_json::to_string(args).unwrap_or_default(),
+    );
+
+    let result = match tool_name {
         "get_affected_context" => handle_get_affected_context(service, args),
         "get_graph_context" => handle_get_graph_context(service, args),
         "get_project_context" => handle_get_project_context(service, args),
@@ -96,7 +321,19 @@ pub fn handle_tool_call(
         "get_callees" => handle_get_callees(service, args),
         "rebuild_index" => handle_rebuild_index(service, args),
         _ => Err(format!("Unknown tool: {}", tool_name)),
-    }
+    };
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let success = match &result {
+        Ok(o) => !o
+            .result
+            .get("isError")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    record_call_result(tool_name, success, duration_ms, input_tokens, &format);
+    result
 }
 
 fn handle_get_graph_context(
@@ -113,30 +350,68 @@ fn handle_get_graph_context(
     let depth = get_usize_arg(args, "depth").unwrap_or(2);
     let max_nodes = get_usize_arg(args, "max_nodes").unwrap_or(40);
     let max_files = get_usize_arg(args, "max_files").unwrap_or(20);
+    let config = find_and_load_config(service.repo_root()).unwrap_or_default();
+    // AI agent optimization: default to yaml (structured, token efficient) if set in global config
+    let format = get_str_arg(args, "format")
+        .unwrap_or_else(|| config.default_format.as_deref().unwrap_or("text"));
 
     let resolution = service
         .resolve_symbol(query)
         .map_err(|e| format!("Failed to resolve symbol: {}", e))?;
 
-    let text = handle_symbol_resolution(query, resolution, |obj| {
-        let options = GraphContextOptions {
-            mode,
-            max_depth: depth,
-            max_nodes,
-            include_root: true,
-        };
-        let result = service
-            .build_context_for_symbol(obj.id, options)
-            .map_err(|e| format!("Failed to build context: {}", e))?;
-        Ok(render_context_to_markdown(
-            &result,
-            service.repo_root(),
-            mode,
-            depth,
-            max_nodes,
-            max_files,
-        ))
-    })?;
+    let root_path = service.repo_root();
+    let text = match resolution {
+        SymbolResolution::Ambiguous(ref candidates) => {
+            if format == "json" {
+                format_ambiguous_symbols_json(query, candidates, root_path)
+            } else if format == "yaml" {
+                format_ambiguous_symbols_yaml(query, candidates, root_path)
+            } else {
+                Ok(super::render::format_ambiguous_symbols(query, candidates))
+            }
+        }
+        SymbolResolution::NotFound => Ok(format_symbol_not_found(query)),
+        SymbolResolution::Unique(obj) => {
+            let options = GraphContextOptions {
+                mode,
+                max_depth: depth,
+                max_nodes,
+                include_root: true,
+            };
+            let result = service
+                .build_context_for_symbol(obj.id, options)
+                .map_err(|e| format!("Failed to build context: {}", e))?;
+
+            if format == "json" {
+                render_context_to_json(
+                    &result,
+                    root_path,
+                    mode,
+                    depth,
+                    max_nodes,
+                    max_files,
+                )
+            } else if format == "yaml" {
+                render_context_to_yaml(
+                    &result,
+                    root_path,
+                    mode,
+                    depth,
+                    max_nodes,
+                    max_files,
+                )
+            } else {
+                Ok(render_context_to_markdown(
+                    &result,
+                    root_path,
+                    mode,
+                    depth,
+                    max_nodes,
+                    max_files,
+                ))
+            }
+        }
+    }?;
 
     let is_error = text.starts_with("Error:");
     Ok(ToolCallOutcome::text(text, is_error))
@@ -156,16 +431,25 @@ fn handle_get_affected_context(
     let depth_limit = depth_or_auto(args)?;
     let max_nodes = get_usize_arg(args, "max_nodes").unwrap_or(200);
     let max_files = get_usize_arg(args, "max_files").unwrap_or(50);
-    let token_budget = get_usize_arg(args, "token_budget").unwrap_or(12_000);
+    let config = find_and_load_config(service.repo_root()).unwrap_or_default();
+    let token_budget = get_usize_arg(args, "token_budget")
+        .or(config.default_token_budget)
+        .unwrap_or(12_000);
     let model_context_window = get_usize_arg(args, "model_context_window").unwrap_or(128_000);
 
-    let ranking = match get_str_arg(args, "ranking").unwrap_or("hybrid") {
+    let ranking_str = get_str_arg(args, "ranking")
+        .or(config.default_ranking.as_deref())
+        .unwrap_or("hybrid");
+    let ranking = match ranking_str {
         "graph" => RankingMode::Graph,
         "lexical" => RankingMode::Lexical,
         _ => RankingMode::Hybrid,
     };
 
-    let packing = match get_str_arg(args, "packing").unwrap_or("sandwich") {
+    let packing_str = get_str_arg(args, "packing")
+        .or(config.default_packing.as_deref())
+        .unwrap_or("sandwich");
+    let packing = match packing_str {
         "frontloaded" => ContextPackingMode::Frontloaded,
         "balanced" => ContextPackingMode::Balanced,
         _ => ContextPackingMode::Sandwich,
@@ -175,12 +459,15 @@ fn handle_get_affected_context(
     let include_unresolved = get_bool_arg(args, "include_unresolved", false);
     let no_snippets = get_bool_arg(args, "no_snippets", false);
     let context_lines = get_usize_arg(args, "context_lines").unwrap_or(3);
-    let format = get_str_arg(args, "format").unwrap_or("text");
+    // default from settings for AI agents (yaml for structured output)
+    let format = get_str_arg(args, "format")
+        .or(config.default_format.as_deref())
+        .unwrap_or("text");
     let edge_kinds = parse_edge_kinds(&get_string_array(args, "edge_kind"));
 
-    if format != "text" && format != "json" {
+    if !matches!(format, "text" | "json" | "yaml") {
         return Ok(ToolCallOutcome::err(
-            "format must be 'text' or 'json'",
+            "format must be 'text', 'json' or 'yaml'",
         ));
     }
 
@@ -188,9 +475,17 @@ fn handle_get_affected_context(
         .resolve_symbol(query)
         .map_err(|e| format!("Failed to resolve symbol: {}", e))?;
 
+    let root_path = service.repo_root();
     match resolution {
         SymbolResolution::Ambiguous(candidates) => {
-            let text = super::render::format_ambiguous_symbols(query, &candidates);
+            record_ambiguous();
+            let text = if format == "json" {
+                format_ambiguous_symbols_json(query, &candidates, root_path)
+            } else if format == "yaml" {
+                format_ambiguous_symbols_yaml(query, &candidates, root_path)
+            } else {
+                Ok(super::render::format_ambiguous_symbols(query, &candidates))
+            }?;
             Ok(ToolCallOutcome::ok(text))
         }
         SymbolResolution::NotFound => {
@@ -227,9 +522,15 @@ fn handle_get_affected_context(
             )
             .map_err(|e| format!("Failed to retrieve context: {}", e))?;
 
+            // Record using existing pack.estimated_tokens (output) + sizes for comparison
+            record_context_tokens("get_affected_context", pack.estimated_tokens);
+            record_context_details("get_affected_context", pack.nodes.len(), pack.omitted.len());
+
             let text = if format == "json" {
-                serde_json::to_string_pretty(&pack)
-                    .map_err(|e| format!("Failed to serialize context: {}", e))?
+                render_affected_context_json(&pack, root_path)?
+            } else if format == "yaml" {
+                // Use dto for compact, high-density YAML (signatures, concise nodes)
+                render_affected_context_yaml(&pack, root_path)?
             } else {
                 render_affected_context_text(&pack)
             };
@@ -247,7 +548,10 @@ fn handle_get_project_context(
     service: &GraphContextService,
     args: &serde_json::Value,
 ) -> Result<ToolCallOutcome, String> {
-    let format_str = get_str_arg(args, "format").unwrap_or("markdown");
+    let config = find_and_load_config(service.repo_root()).unwrap_or_default();
+    let format_str = get_str_arg(args, "format")
+        .or(config.default_format.as_deref())
+        .unwrap_or("markdown");
     let format = match format_str {
         "xml" => Format::Xml,
         "plain" | "text" => Format::Plain,
@@ -263,7 +567,6 @@ fn handle_get_project_context(
         _ => Mode::Smart,
     };
 
-    let config = find_and_load_config(service.repo_root()).unwrap_or_default();
     let max_depth = get_usize_arg(args, "max_depth").or(config.max_depth);
     let max_file_size = get_usize_arg(args, "max_file_size")
         .map(|v| v as u64)
@@ -366,7 +669,10 @@ fn handle_rebuild_index(
     service: &GraphContextService,
     args: &serde_json::Value,
 ) -> Result<ToolCallOutcome, String> {
-    let use_lsp = get_bool_arg(args, "use_lsp", true);
+    record_rebuild();
+    let config = find_and_load_config(service.repo_root()).unwrap_or_default();
+    let default_use_lsp = config.use_lsp.unwrap_or(true);
+    let use_lsp = get_bool_arg(args, "use_lsp", default_use_lsp);
     let options = BuildIndexOptions {
         use_lsp,
         max_depth: None,
@@ -432,6 +738,11 @@ fn graph_context_schema() -> serde_json::Value {
             "max_files": {
                 "type": "integer",
                 "description": "Maximum file snippets to include. Default: 20. Use 0 for unlimited."
+            },
+            "format": {
+                "type": "string",
+                "enum": ["text", "json", "yaml"],
+                "description": "Output format. Default: text (markdown)."
             }
         },
         "required": ["query"]
@@ -485,8 +796,8 @@ fn affected_context_schema() -> serde_json::Value {
             "context_lines": { "type": "integer", "description": "Surrounding context lines for snippets. Default: 3." },
             "format": {
                 "type": "string",
-                "enum": ["text", "json"],
-                "description": "Output format. Default: text."
+                "enum": ["text", "json", "yaml"],
+                "description": "Output format. Default: text. 'yaml' recommended for token-efficient agent use."
             },
             "no_snippets": { "type": "boolean", "description": "Omit code snippets. Default: false." }
         },

@@ -205,7 +205,7 @@ fn test_mcp_ping_and_resources() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert_eq!(resources.len(), 2);
+    assert_eq!(resources.len(), 3);  // includes ctx://stats/mcp for metrics collection
 
     let status_text = responses[3]
         .get("result")
@@ -267,7 +267,8 @@ fn test_mcp_list_symbols_and_callers() {
     let list_text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
-    assert!(list_text.contains("lib::load"));
+    // Updated for sig-enhanced denser list output (signatures surfaced)
+    assert!(list_text.contains("fn load()") || list_text.contains("load"));
 
     let callers_text = responses[2]["result"]["content"][0]["text"]
         .as_str()

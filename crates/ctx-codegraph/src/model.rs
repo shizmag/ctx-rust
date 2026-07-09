@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FileId(pub i64);
@@ -361,6 +361,45 @@ pub struct LanguageObject {
     pub range: SourceRange,
     pub signature: Option<String>,
     pub language: Option<String>,
+}
+
+/// Light signature extraction for function/method symbols.
+/// Reads the source at the symbol's start range and captures a compact decl line.
+pub fn extract_signature(file: &Path, range: &TextRange, kind: SymbolKind) -> Option<String> {
+    if !matches!(kind, SymbolKind::Function | SymbolKind::Method) {
+        return None;
+    }
+    let content = std::fs::read_to_string(file).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+    let start_idx = range.start_line.saturating_sub(1);
+    if start_idx >= lines.len() {
+        return None;
+    }
+    // Capture up to 3 lines or until we hit body opener
+    let mut sig_lines = Vec::new();
+    for i in start_idx..(start_idx + 3).min(lines.len()) {
+        let l = lines[i];
+        sig_lines.push(l);
+        if l.contains('{') || l.trim_end().ends_with(';') || l.trim_end().ends_with("->") {
+            break;
+        }
+    }
+    let joined = sig_lines.join(" ").trim().to_string();
+    // Trim to before body if present
+    let end = joined.find(" {").or_else(|| joined.find('{')).unwrap_or(joined.len());
+    let mut sig = joined[..end].trim().to_string();
+    // For methods, keep receiver etc. Normalize pub if present.
+    if sig.is_empty() {
+        return None;
+    }
+    // Ensure starts with fn or pub fn
+    if !sig.starts_with("fn ") && !sig.contains(" fn ") {
+        // try to find fn decl
+        if let Some(pos) = sig.find("fn ") {
+            sig = sig[pos..].to_string();
+        }
+    }
+    Some(sig)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

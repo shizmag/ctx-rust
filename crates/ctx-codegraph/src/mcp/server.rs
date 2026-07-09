@@ -71,6 +71,10 @@ pub fn run_mcp_server_with_io<R: BufRead, W: Write>(
         write_response(&mut writer, &response)?;
     }
 
+    // Log usage summary to stderr on shutdown for collection (metrics for MCP vs other tools)
+    eprintln!("\n{}", tools::usage_summary_text());
+    eprintln!("MCP Server shutting down.");
+
     Ok(())
 }
 

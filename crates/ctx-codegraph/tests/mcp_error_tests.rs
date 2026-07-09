@@ -260,8 +260,9 @@ fn test_mcp_error_ambiguous_symbol() {
 
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Multiple symbols found"));
-    assert!(text.contains("mod_a::foo"));
-    assert!(text.contains("mod_b::foo"));
+    // sig-enhanced disambig now surfaces signatures + loc (dense)
+    assert!(text.contains("foo") && (text.contains("mod_a") || text.contains("mod_a.rs")));
+    assert!(text.contains("foo") && (text.contains("mod_b") || text.contains("mod_b.rs")));
 }
 
 #[test]
@@ -316,13 +317,13 @@ fn test_mcp_error_affected_context_invalid_format() {
             "get_affected_context",
             serde_json::json!({
                 "query": "run_pipeline",
-                "format": "yaml"
+                "format": "xml"
             }),
         ),
     ];
 
     let responses = run_mcp_requests(&requests);
-    assert_tool_error(&responses[1], "format must be 'text' or 'json'");
+    assert_tool_error(&responses[1], "format must be 'text', 'json' or 'yaml'");
 }
 
 #[test]

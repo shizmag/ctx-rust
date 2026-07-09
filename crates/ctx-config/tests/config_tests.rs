@@ -171,3 +171,89 @@ fn load_config_exclude_trims_extra_whitespace() {
         ]
     );
 }
+
+#[test]
+fn load_config_agent_settings_and_defaults() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".ctxconfig");
+    fs::write(
+        &config_path,
+        r#"
+# AI agent focused settings
+default_format = yaml
+mcp_target = cursor
+use_lsp = false
+stats_enabled = true
+default_packing = sandwich
+default_ranking = hybrid
+default_token_budget = 8000
+"#,
+    )
+    .unwrap();
+
+    let config = load_config(&config_path).unwrap();
+
+    assert_eq!(config.default_format.as_deref(), Some("yaml"));
+    assert_eq!(config.mcp_target.as_deref(), Some("cursor"));
+    assert_eq!(config.use_lsp, Some(false));
+    assert_eq!(config.stats_enabled, Some(true));
+    assert_eq!(config.default_packing.as_deref(), Some("sandwich"));
+    assert_eq!(config.default_ranking.as_deref(), Some("hybrid"));
+    assert_eq!(config.default_token_budget, Some(8000));
+}
+
+#[test]
+fn load_config_settings_use_aliases_and_ignore_invalid() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".ctxconfig");
+    fs::write(
+        &config_path,
+        "format = json\nlsp = true\ncollect_stats = 1\npacking = frontloaded\ntoken_budget = notnum\n",
+    )
+    .unwrap();
+
+    let config = load_config(&config_path).unwrap();
+
+    assert_eq!(config.default_format.as_deref(), Some("json"));
+    assert_eq!(config.use_lsp, Some(true));
+    // invalid bool for stats treated as not set (parser only accepts true/false)
+    assert_eq!(config.stats_enabled, None);
+    assert_eq!(config.default_packing.as_deref(), Some("frontloaded"));
+    assert_eq!(config.default_token_budget, None);
+}
+
+#[test]
+fn load_config_settings_defaults_to_none_when_absent() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".ctxconfig");
+    fs::write(&config_path, "mode = llm\n").unwrap();
+
+    let config = load_config(&config_path).unwrap();
+
+    assert_eq!(config.mode, Some(Mode::Llm));
+    assert!(config.default_format.is_none());
+    assert!(config.use_lsp.is_none());
+    assert!(config.stats_enabled.is_none());
+    assert!(config.default_token_budget.is_none());
+}
+
+#[test]
+fn load_config_agent_settings_with_more_aliases() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".ctxconfig");
+    fs::write(
+        &config_path,
+        "agent_format = yaml\ninstall_target = vscode\nlsp = false\nstats = false\npacking = balanced\nranking = graph\ntoken_budget = 5000\n",
+    )
+    .unwrap();
+
+    let config = load_config(&config_path).unwrap();
+
+    assert_eq!(config.default_format.as_deref(), Some("yaml"));
+    assert_eq!(config.mcp_target.as_deref(), Some("vscode"));
+    assert_eq!(config.use_lsp, Some(false));
+    assert_eq!(config.stats_enabled, Some(false));
+    assert_eq!(config.default_packing.as_deref(), Some("balanced"));
+    assert_eq!(config.default_ranking.as_deref(), Some("graph"));
+    assert_eq!(config.default_token_budget, Some(5000));
+}

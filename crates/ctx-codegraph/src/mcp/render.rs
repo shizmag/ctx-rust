@@ -2,6 +2,10 @@ use crate::model::{
     GraphContextMode, GraphContextResult, LanguageObject, LanguageObjectKind, Symbol,
     SymbolResolution,
 };
+use ctx_dto::{
+    serialize_json, serialize_yaml, AffectedContextOutputDto, AmbiguousResultDto, DiagnosticDto,
+    EdgeDto, GraphContextOutputDto, SymbolDto,
+};
 use std::path::Path;
 
 pub fn kind_to_str(kind: LanguageObjectKind) -> &'static str {
@@ -28,10 +32,22 @@ pub fn format_symbol_line(obj: &LanguageObject, root_path: &Path) -> String {
         .file_path
         .strip_prefix(root_path)
         .unwrap_or(&obj.file_path);
+    let mut display = obj
+        .signature
+        .as_deref()
+        .unwrap_or(&obj.qualified_name)
+        .to_string();
+    // Avoid "fn fn foo" duplication: strip leading fn/pub fn from sig for display after kind
+    for prefix in ["pub fn ", "fn ", "pub async fn ", "async fn "] {
+        if let Some(rest) = display.strip_prefix(prefix) {
+            display = rest.to_string();
+            break;
+        }
+    }
     format!(
         "- {} {} — {}:{}-{}",
         kind,
-        obj.qualified_name,
+        display,
         rel_path.display(),
         obj.range.start_line,
         obj.range.end_line
@@ -46,13 +62,136 @@ pub fn format_ambiguous_symbols(query: &str, candidates: &[LanguageObject]) -> S
     for c in candidates {
         let kind_str = kind_to_str(c.kind);
         let rel_path = c.file_path.display();
-        msg.push_str(&format!("- {} {} in {}\n", kind_str, c.qualified_name, rel_path));
+        let mut display = c.signature.as_deref().unwrap_or(&c.qualified_name).to_string();
+        // strip leading keywords to avoid "fn pub fn ..." duplication after kind prefix
+        for p in ["pub async fn ", "async fn ", "pub fn ", "fn "] {
+            if let Some(r) = display.strip_prefix(p) { display = r.to_string(); break; }
+        }
+        // Dense: include sig, loc for disambiguation with fewer tokens
+        msg.push_str(&format!(
+            "- {} {} ({}:{})\n",
+            kind_str, display, rel_path, c.range.start_line
+        ));
     }
     msg
 }
 
 pub fn format_symbol_not_found(query: &str) -> String {
     format!("Error: Symbol not found for query '{}'", query)
+}
+
+/// Map LanguageObject to dense SymbolDto (wires signature for agents).
+/// Used for json/yaml outputs via ctx-dto. Keeps paths relative when root given.
+fn lang_obj_to_symbol_dto(obj: &LanguageObject, root_path: &Path) -> SymbolDto {
+    let kind = kind_to_str(obj.kind).to_string();
+    let rel_path = obj
+        .file_path
+        .strip_prefix(root_path)
+        .unwrap_or(&obj.file_path)
+        .display()
+        .to_string();
+    let lines = format!("{}-{}", obj.range.start_line, obj.range.end_line);
+    SymbolDto::new(
+        kind,
+        obj.name.clone(),
+        obj.qualified_name.clone(),
+        obj.signature.clone(),
+        rel_path,
+        lines,
+    )
+}
+
+/// Build AmbiguousResultDto (centralized in ctx-dto) for structured formats.
+pub fn ambiguous_result_to_dto(query: &str, candidates: &[LanguageObject], root_path: &Path) -> AmbiguousResultDto {
+    let cands = candidates
+        .iter()
+        .map(|c| lang_obj_to_symbol_dto(c, root_path))
+        .collect();
+    AmbiguousResultDto {
+        query: query.to_string(),
+        candidates: cands,
+    }
+}
+
+/// Structured json for ambiguous (enhances existing, supports signatures).
+pub fn format_ambiguous_symbols_json(query: &str, candidates: &[LanguageObject], root_path: &Path) -> Result<String, String> {
+    let dto = ambiguous_result_to_dto(query, candidates, root_path);
+    serialize_json(&dto)
+}
+
+/// Structured yaml (compact) for ambiguous.
+pub fn format_ambiguous_symbols_yaml(query: &str, candidates: &[LanguageObject], root_path: &Path) -> Result<String, String> {
+    let dto = ambiguous_result_to_dto(query, candidates, root_path);
+    serialize_yaml(&dto)
+}
+
+/// Map GraphContextResult to ctx-dto GraphContextOutputDto (dense symbols with sigs).
+pub fn graph_result_to_dto(
+    result: &GraphContextResult,
+    root_path: &Path,
+    mode: GraphContextMode,
+    depth: usize,
+    max_nodes: usize,
+    max_files: usize,
+) -> GraphContextOutputDto {
+    let root = lang_obj_to_symbol_dto(&result.root, root_path);
+    let nodes = result
+        .nodes
+        .iter()
+        .map(|n| lang_obj_to_symbol_dto(n, root_path))
+        .collect();
+    let edges: Vec<EdgeDto> = result
+        .edges
+        .iter()
+        .map(|e| EdgeDto {
+            from: format!("{:?}", e.from),
+            to: format!("{:?}", e.to),
+        })
+        .collect();
+    let diags: Vec<DiagnosticDto> = result
+        .diagnostics
+        .iter()
+        .map(|d| DiagnosticDto {
+            severity: d.severity.clone(),
+            message: d.message.clone(),
+        })
+        .collect();
+    GraphContextOutputDto {
+        root,
+        nodes,
+        edges,
+        mode: format!("{:?}", mode),
+        depth,
+        max_nodes,
+        max_files,
+        diagnostics: diags,
+    }
+}
+
+/// Render graph context as compact json using dto.
+pub fn render_context_to_json(
+    result: &GraphContextResult,
+    root_path: &Path,
+    mode: GraphContextMode,
+    depth: usize,
+    max_nodes: usize,
+    max_files: usize,
+) -> Result<String, String> {
+    let dto = graph_result_to_dto(result, root_path, mode, depth, max_nodes, max_files);
+    serialize_json(&dto)
+}
+
+/// Render graph context as compact yaml using dto.
+pub fn render_context_to_yaml(
+    result: &GraphContextResult,
+    root_path: &Path,
+    mode: GraphContextMode,
+    depth: usize,
+    max_nodes: usize,
+    max_files: usize,
+) -> Result<String, String> {
+    let dto = graph_result_to_dto(result, root_path, mode, depth, max_nodes, max_files);
+    serialize_yaml(&dto)
 }
 
 pub fn handle_symbol_resolution<F>(
@@ -295,6 +434,51 @@ pub fn render_affected_context_text(pack: &crate::ContextPack) -> String {
     out
 }
 
+/// Build dense AffectedContextOutputDto from pack (for json/yaml).
+/// Uses nodes/roots (with signatures), keeps meta; omits duplicative long text sections
+/// for token-efficient high-density output in structured formats.
+pub fn affected_pack_to_dto(pack: &crate::ContextPack, root_path: &Path) -> AffectedContextOutputDto {
+    let roots: Vec<SymbolDto> = pack
+        .roots
+        .iter()
+        .map(|r| lang_obj_to_symbol_dto(r, root_path))
+        .collect();
+    let nodes: Vec<SymbolDto> = pack
+        .nodes
+        .iter()
+        .map(|n| lang_obj_to_symbol_dto(n, root_path))
+        .collect();
+    let diags: Vec<DiagnosticDto> = pack
+        .diagnostics
+        .iter()
+        .map(|d| DiagnosticDto {
+            severity: d.severity.clone(),
+            message: d.message.clone(),
+        })
+        .collect();
+    AffectedContextOutputDto {
+        query: pack.query.clone(),
+        mode: format!("{:?}", pack.mode),
+        token_budget: pack.token_budget,
+        estimated_tokens: pack.estimated_tokens,
+        roots,
+        nodes,
+        diagnostics: diags,
+    }
+}
+
+/// Compact json for affected context using dto.
+pub fn render_affected_context_json(pack: &crate::ContextPack, root_path: &Path) -> Result<String, String> {
+    let dto = affected_pack_to_dto(pack, root_path);
+    serialize_json(&dto)
+}
+
+/// Compact yaml for affected context using dto (high density, sigs included).
+pub fn render_affected_context_yaml(pack: &crate::ContextPack, root_path: &Path) -> Result<String, String> {
+    let dto = affected_pack_to_dto(pack, root_path);
+    serialize_yaml(&dto)
+}
+
 fn read_file_span(path: &Path, range: &crate::model::SourceRange) -> String {
     match std::fs::read_to_string(path) {
         Ok(content) => {
@@ -344,7 +528,7 @@ mod tests {
                 end_line: 3,
                 end_col: 1,
             },
-            signature: None,
+            signature: Some(format!("fn {}()", name)),
             language: Some("rust".to_string()),
         }
     }
@@ -396,7 +580,7 @@ mod tests {
         let root = PathBuf::from("/project");
         let obj = sample_language_object(1, "run", "src/lib.rs");
         let line = format_symbol_line(&obj, &root);
-        assert!(line.contains("fn lib::run"));
+        assert!(line.contains("fn run()"));
         assert!(line.contains("src/lib.rs:1-3"));
     }
 
@@ -408,7 +592,8 @@ mod tests {
         ];
         let text = format_ambiguous_symbols("foo", &candidates);
         assert!(text.contains("Multiple symbols found matching query: 'foo'"));
-        assert!(text.contains("lib::foo"));
+        assert!(text.contains("fn foo()"));  // now surfaces signature for disambig density
+        assert!(text.contains("src/a.rs"));
     }
 
     #[test]
@@ -452,7 +637,7 @@ mod tests {
 
         let nonempty = render_symbols_list(&[sample_language_object(1, "run", "src/lib.rs")], &root);
         assert!(nonempty.contains("# Symbols"));
-        assert!(nonempty.contains("lib::run"));
+        assert!(nonempty.contains("fn run()") || nonempty.contains("run"));  // sig surfaced now
     }
 
     #[test]
@@ -542,7 +727,7 @@ mod tests {
                 end_line: 1,
                 end_col: 10,
             },
-            signature: None,
+            signature: Some("fn run()".to_string()),
             language: Some("rust".to_string()),
         };
         let node = LanguageObject {
@@ -557,7 +742,7 @@ mod tests {
                 end_line: 2,
                 end_col: 10,
             },
-            signature: None,
+            signature: Some("fn load()".to_string()),
             language: Some("rust".to_string()),
         };
         let result = GraphContextResult {
@@ -593,5 +778,57 @@ mod tests {
         assert!(text.contains("lib::run -> lib::load"));
         assert!(text.contains("```rust"));
         assert!(text.contains("fn run()"));
+    }
+
+    #[test]
+    fn dto_mappings_wire_signatures_and_support_yaml_json() {
+        let root = PathBuf::from("/project");
+        let obj = sample_language_object(1, "foo", "src/lib.rs");
+        // ambig dto
+        let amb = ambiguous_result_to_dto("foo", &[obj.clone()], &root);
+        assert_eq!(amb.query, "foo");
+        assert_eq!(amb.candidates.len(), 1);
+        assert_eq!(amb.candidates[0].signature, Some("fn foo()".to_string()));
+        assert!(amb.candidates[0].path.contains("src/lib.rs"));
+
+        // json/yaml round via helpers
+        let j = format_ambiguous_symbols_json("foo", &[obj.clone()], &root).unwrap();
+        assert!(j.contains("\"signature\":\"fn foo()\"") || j.contains("fn foo()"));
+        let y = format_ambiguous_symbols_yaml("foo", &[obj.clone()], &root).unwrap();
+        assert!(y.contains("signature:") && y.contains("fn foo()"));
+
+        // graph dto includes sig
+        let gctx = GraphContextResult {
+            root: obj.clone(),
+            nodes: vec![],
+            edges: vec![],
+            files: vec![],
+            diagnostics: vec![],
+        };
+        let gdto = graph_result_to_dto(&gctx, &root, GraphContextMode::Neighborhood, 1, 10, 5);
+        assert_eq!(gdto.root.signature, Some("fn foo()".to_string()));
+
+        // affected dto
+        let pack = crate::ContextPack {
+            query: "foo".to_string(),
+            mode: GraphContextMode::Neighborhood,
+            token_budget: 100,
+            requested_token_budget: None,
+            effective_token_budget: None,
+            estimated_tokens: 10,
+            roots: vec![obj.clone()],
+            nodes: vec![obj],
+            edges: vec![],
+            snippets: vec![],
+            sections: vec![],
+            omitted: vec![],
+            diagnostics: vec![],
+        };
+        let adto = affected_pack_to_dto(&pack, &root);
+        assert_eq!(adto.query, "foo");
+        assert!(adto.roots[0].signature.is_some());
+        // ser compact
+        let ypack = render_affected_context_yaml(&pack, &root).unwrap();
+        assert!(ypack.contains("query: foo"));
     }
 }

@@ -102,18 +102,42 @@ fn test_cli_config_priority() {
     // 1. CLI использует .ctxconfig (mode = docs), если аргументы не переданы
     fs::write(
         temp_path.join(".ctxconfig"),
-        "mode = docs\nexclude = excluded.txt\n",
+        "mode = docs\nexclude = excluded.txt\nformat = plain\n",
     )
     .unwrap();
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
-    let output_config_only = cmd.arg(temp_path).output().expect("failed to run ctx");
+    let output_config_only = cmd
+        .args([temp_path.to_str().unwrap(), "-C", "--no-stats"])
+        .output()
+        .expect("failed to run ctx");
 
     assert!(output_config_only.status.success());
     let stdout_config_only = String::from_utf8(output_config_only.stdout).unwrap();
     // Under docs mode, doc.txt should be visible, but main.rs should be hidden
     assert!(stdout_config_only.contains("doc.txt"));
     assert!(!stdout_config_only.contains("main.rs"));
+    // format=plain from config should produce plain render markers (not markdown #)
+    assert!(stdout_config_only.contains("Project: "));
+    assert!(!stdout_config_only.contains("# Project:"));
+
+    // CLI fallback also works for parser alias agent_format (tied to default_format)
+    fs::write(
+        temp_path.join(".ctxconfig"),
+        "mode = docs\nagent_format = plain\n",
+    )
+    .unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_alias = cmd
+        .args([temp_path.to_str().unwrap(), "-C", "--no-stats"])
+        .output()
+        .expect("failed to run ctx");
+
+    assert!(output_alias.status.success());
+    let stdout_alias = String::from_utf8(output_alias.stdout).unwrap();
+    assert!(stdout_alias.contains("Project: "));
+    assert!(!stdout_alias.contains("# Project:"));
 
     // 2. CLI arguments переопределяют .ctxconfig (docs -> code)
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();

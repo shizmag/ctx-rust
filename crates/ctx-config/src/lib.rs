@@ -8,6 +8,15 @@ pub struct Config {
     pub max_depth: Option<usize>,
     pub max_file_size: Option<u64>,
     pub exclude: Vec<String>,
+    // Global settings connected to app config, for AI agent optimization (MCP defaults etc).
+    // These drive defaults for output formats (e.g. yaml for agents), LSP, stats, etc.
+    pub default_format: Option<String>,
+    pub mcp_target: Option<String>,
+    pub use_lsp: Option<bool>,
+    pub stats_enabled: Option<bool>,
+    pub default_packing: Option<String>,
+    pub default_ranking: Option<String>,
+    pub default_token_budget: Option<usize>,
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
@@ -62,6 +71,43 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     .filter(|s| !s.is_empty())
                     .collect();
                 config.exclude.extend(items);
+            }
+            // Settings for AI/agent optimization, MCP behavior, install targets.
+            // Support common aliases for convenience in .ctxconfig
+            "default_format" | "format" | "agent_format" => {
+                if !value.is_empty() {
+                    config.default_format = Some(value.to_string());
+                }
+            }
+            "mcp_target" | "install_target" | "target" => {
+                if !value.is_empty() {
+                    config.mcp_target = Some(value.to_string());
+                }
+            }
+            "use_lsp" | "lsp" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    config.use_lsp = Some(b);
+                }
+            }
+            "stats_enabled" | "collect_stats" | "stats" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    config.stats_enabled = Some(b);
+                }
+            }
+            "default_packing" | "packing" => {
+                if !value.is_empty() {
+                    config.default_packing = Some(value.to_string());
+                }
+            }
+            "default_ranking" | "ranking" => {
+                if !value.is_empty() {
+                    config.default_ranking = Some(value.to_string());
+                }
+            }
+            "default_token_budget" | "token_budget" => {
+                if let Ok(b) = value.parse::<usize>() {
+                    config.default_token_budget = Some(b);
+                }
             }
             _ => {}
         }

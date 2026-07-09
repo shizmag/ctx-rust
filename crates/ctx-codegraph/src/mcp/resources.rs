@@ -6,8 +6,11 @@ use ctx_core::scan;
 use ctx_models::{Mode, ScanOptions};
 use std::fmt::Write as _;
 
+use super::tools::{usage_stats_json, usage_summary_text};  // enhanced for full queryable dump + summary (enable collection/comparisons vs other MCPs)
+
 pub const INDEX_STATUS_URI: &str = "ctx://index/status";
 pub const PROJECT_TREE_URI: &str = "ctx://project/tree";
+pub const MCP_STATS_URI: &str = "ctx://stats/mcp";  // queryable stats resource for dumping metrics data
 
 pub fn list_resources() -> serde_json::Value {
     serde_json::json!({
@@ -23,6 +26,12 @@ pub fn list_resources() -> serde_json::Value {
                 "name": "Project Tree",
                 "description": "Brief project tree summary",
                 "mimeType": "text/markdown"
+            },
+            {
+                "uri": MCP_STATS_URI,
+                "name": "MCP Usage Stats",
+                "description": "Comprehensive session metrics for ctx MCP comparisons (call counts, tokens, timings, errors, context sizes, formats etc.)",
+                "mimeType": "application/json"
             }
         ]
     })
@@ -32,6 +41,7 @@ pub fn read_resource(service: &GraphContextService, uri: &str) -> Result<String,
     match uri {
         INDEX_STATUS_URI => read_index_status(service),
         PROJECT_TREE_URI => read_project_tree(service),
+        MCP_STATS_URI => read_mcp_stats(),
         _ => Err(format!("Unknown resource: {}", uri)),
     }
 }
@@ -93,6 +103,9 @@ fn read_index_status(service: &GraphContextService) -> Result<String, String> {
         .unwrap();
     }
 
+    // Enhanced: surface MCP usage metrics via existing resource for collectability/comparisons
+    writeln!(out, "\n{}", usage_summary_text()).unwrap();
+
     Ok(out)
 }
 
@@ -140,4 +153,12 @@ fn read_project_tree(service: &GraphContextService) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+/// Read full MCP stats as JSON text (queryable dump for metrics collection and ctx vs other MCP comparison).
+fn read_mcp_stats() -> Result<String, String> {
+    let json = usage_stats_json();
+    let pretty = serde_json::to_string_pretty(&json)
+        .unwrap_or_else(|_| json.to_string());
+    Ok(format!("# MCP Usage Stats (JSON dump)\n\n```json\n{}\n```", pretty))
 }
