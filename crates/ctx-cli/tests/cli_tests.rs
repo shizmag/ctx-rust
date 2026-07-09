@@ -164,3 +164,31 @@ fn test_cli_config_priority() {
     assert!(stdout_invalid.contains("main.rs"));
     assert!(stdout_invalid.contains("doc.txt"));
 }
+
+#[test]
+fn test_cli_setting_subcommand_help_and_invocation() {
+    // help works (non-interactive)
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd.args(["setting", "--help"]).output().expect("failed");
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.contains("interactive TUI to view/edit"));
+
+    // invocation on temp dir returns error (TUI requires tty) but does not panic and reports via error path
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_run = cmd
+        .args([temp_dir.path().to_str().unwrap(), "setting"])
+        .output()
+        .expect("failed to run");
+    // exits non-zero, stderr mentions error or TUI
+    assert!(!output_run.status.success());
+    let stderr = String::from_utf8(output_run.stderr).unwrap_or_default();
+    let stdout = String::from_utf8(output_run.stdout).unwrap_or_default();
+    assert!(
+        stderr.to_lowercase().contains("error")
+            || stderr.to_lowercase().contains("raw")
+            || stdout.to_lowercase().contains("error")
+            || !stderr.is_empty()
+    );
+}

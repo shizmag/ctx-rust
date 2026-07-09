@@ -1,4 +1,4 @@
-use ctx_config::{find_and_load_config, find_config, load_config, Config};
+use ctx_config::{find_and_load_config, find_config, load_config, save_config, Config};
 use ctx_models::Mode;
 use std::fs;
 
@@ -256,4 +256,40 @@ fn load_config_agent_settings_with_more_aliases() {
     assert_eq!(config.default_packing.as_deref(), Some("balanced"));
     assert_eq!(config.default_ranking.as_deref(), Some("graph"));
     assert_eq!(config.default_token_budget, Some(5000));
+}
+
+#[test]
+fn save_config_roundtrip_and_creates_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".ctxconfig");
+
+    let cfg = Config {
+        mode: Some(Mode::Code),
+        max_depth: Some(4),
+        max_file_size: Some(12345),
+        exclude: vec!["target".to_string(), "node_modules".to_string()],
+        default_format: Some("yaml".to_string()),
+        mcp_target: Some("cursor".to_string()),
+        use_lsp: Some(true),
+        stats_enabled: Some(false),
+        default_packing: Some("sandwich".to_string()),
+        default_ranking: Some("hybrid".to_string()),
+        default_token_budget: Some(12000),
+    };
+
+    save_config(&config_path, &cfg).unwrap();
+
+    let loaded = load_config(&config_path).unwrap();
+    assert_eq!(loaded, cfg);
+
+    // also test partial
+    let mut partial = Config::default();
+    partial.mode = Some(Mode::Llm);
+    partial.exclude = vec!["*.log".into()];
+    let p2 = temp_dir.path().join(".ctxconfig2");
+    save_config(&p2, &partial).unwrap();
+    let loaded2 = load_config(&p2).unwrap();
+    assert_eq!(loaded2.mode, Some(Mode::Llm));
+    assert_eq!(loaded2.exclude, vec!["*.log".to_string()]);
+    assert!(loaded2.max_depth.is_none());
 }

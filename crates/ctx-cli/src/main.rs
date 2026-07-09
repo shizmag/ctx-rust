@@ -115,11 +115,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         match cmd {
             Command::Graph(g) => return handle_graph_command(g),
             Command::Mcp => {
-                if let Err(e) = ctx_codegraph::mcp::run_mcp_server() {
+                if let Err(e) = ctx_mcp::run_mcp_server() {
                     eprintln!("MCP Server Error: {}", e);
                     std::process::exit(1);
                 }
                 return Ok(());
+            }
+            Command::Setting(s) => {
+                return ctx_tui::run_settings_editor(s.path).map_err(Into::into);
             }
         }
     }
@@ -143,7 +146,18 @@ where
         .or(config.mode)
         .unwrap_or(Mode::Smart);
 
-    let format = args.format.map(Format::from).unwrap_or(Format::Markdown);
+    let format = args
+        .format
+        .map(Format::from)
+        .or_else(|| {
+            config.default_format.as_ref().and_then(|f| match f.to_lowercase().as_str() {
+                "markdown" | "md" => Some(Format::Markdown),
+                "xml" => Some(Format::Xml),
+                "plain" | "text" | "txt" => Some(Format::Plain),
+                _ => None, // e.g. yaml is for agent context tools, not project render here
+            })
+        })
+        .unwrap_or(Format::Markdown);
 
     let max_depth = args.max_depth.or(config.max_depth);
 
@@ -248,6 +262,16 @@ enum Command {
     Graph(GraphCommand),
     /// Start the Model Context Protocol (MCP) server over stdio
     Mcp,
+    /// Open interactive TUI to view/edit project settings in .ctxconfig
+    #[command(visible_alias = "config")]
+    Setting(SettingCommand),
+}
+
+#[derive(clap::Args, Debug)]
+struct SettingCommand {
+    /// Target project directory (loads .ctxconfig via upward search; writes to nearest or here)
+    #[arg(default_value = ".")]
+    path: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
@@ -686,6 +710,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             depth,
             max_nodes,
         } => {
+            // Call get_ (unified to smart check via get_index_state + cond rebuild) so
+            // --with-lsp flag is respected for this query, messages emitted only on actual work.
             let _conn =
                 get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
             let service = ctx_codegraph::GraphContextService::load_or_build(&graph_args.path)?;
@@ -857,102 +883,118 @@ fn get_connection_or_rebuild(
         include_tests: true,
         change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
-    let (_index, report) = ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
-    if verbose {
-        println!("--- Codegraph Build Report ---");
-        println!(
-            "Full Rebuild: {}",
-            if report.full_rebuild { "yes" } else { "no" }
-        );
-        if let Some(reason) = report.full_rebuild_reason {
-            println!("Full Rebuild Reason: {:?}", reason);
-        }
-        println!(
-            "Files: {} added, {} modified, {} deleted, {} unchanged",
-            report.added_files, report.modified_files, report.deleted_files, report.unchanged_files
-        );
-        println!(
-            "Parsed Files: {}, Reused Files: {}",
-            report.parsed_files, report.reused_files
-        );
-        println!(
-            "Symbols Written: {}, Call Sites Written: {}, Edges Written: {}",
-            report.symbols_written, report.call_sites_written, report.edges_written
-        );
-        println!(
-            "Edge Resolution Confidence: LspExact={}, Syntax={}, Heuristic={}, Unresolved={}",
-            report.lsp_edges_exact,
-            report.syntax_edges,
-            report.heuristic_edges,
-            report.unresolved_edges
-        );
-        println!("-----------------------------");
+
+    // Unified "ensure fresh" logic: use smart state check for fast path.
+    // Only call rebuild (to obtain report for messages) if not Ready.
+    // For queries, no output at all when Ready (no work).
+    let state = ctx_codegraph::get_index_state(&workspace_root, &options)
+        .unwrap_or_else(|_| {
+            // On unexpected state err, fall back to rebuild path (will handle)
+            ctx_codegraph::model::IndexState::NeedsFullRebuild(
+                ctx_codegraph::model::RebuildReason::MissingDatabase,
+            )
+        });
+
+    let conn = if matches!(state, ctx_codegraph::model::IndexState::Ready) {
+        ctx_codegraph::open_db(&workspace_root)?
     } else {
-        if report.full_rebuild {
-            if let Some(reason) = report.full_rebuild_reason {
-                match reason {
-                    ctx_codegraph::model::RebuildReason::MissingDatabase => {
-                        println!("Index not found. Built codegraph index.");
-                    }
-                    ctx_codegraph::model::RebuildReason::CorruptDatabase => {
-                        println!("Database corrupted. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
-                        println!("Schema version changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
-                        println!("Indexer version changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::BackendSetChanged => {
-                        println!("Backend set changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
-                        println!("Backend version changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
-                        println!("Parser version changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
-                        println!("Parser configuration changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
-                        println!("Resolver version changed. Rebuilt codegraph index cleanly.");
-                    }
-                    ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
-                        println!(
-                            "Resolver configuration changed. Rebuilt codegraph index cleanly."
-                        );
-                    }
-                    ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
-                        println!(
-                            "Discovery configuration changed. Rebuilt codegraph index cleanly."
-                        );
-                    }
-                    ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
-                        println!(
-                            "Change detection strategy changed. Rebuilt codegraph index cleanly."
-                        );
-                    }
-                    ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
-                        println!(
-                            "Previous index run was incomplete. Rebuilt codegraph index cleanly."
-                        );
-                    }
-                    ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
-                        println!("Previous index run failed. Rebuilt codegraph index cleanly.");
-                    }
-                }
-            } else {
-                println!("Rebuilt codegraph index.");
-            }
-        } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+        let (_index, report) = ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
+        if verbose {
+            println!("--- Codegraph Build Report ---");
             println!(
-                "Incremental update: {} added, {} modified, {} deleted files.",
-                report.added_files, report.modified_files, report.deleted_files
+                "Full Rebuild: {}",
+                if report.full_rebuild { "yes" } else { "no" }
             );
+            if let Some(reason) = report.full_rebuild_reason {
+                println!("Full Rebuild Reason: {:?}", reason);
+            }
+            println!(
+                "Files: {} added, {} modified, {} deleted, {} unchanged",
+                report.added_files, report.modified_files, report.deleted_files, report.unchanged_files
+            );
+            println!(
+                "Parsed Files: {}, Reused Files: {}",
+                report.parsed_files, report.reused_files
+            );
+            println!(
+                "Symbols Written: {}, Call Sites Written: {}, Edges Written: {}",
+                report.symbols_written, report.call_sites_written, report.edges_written
+            );
+            println!(
+                "Edge Resolution Confidence: LspExact={}, Syntax={}, Heuristic={}, Unresolved={}",
+                report.lsp_edges_exact,
+                report.syntax_edges,
+                report.heuristic_edges,
+                report.unresolved_edges
+            );
+            println!("-----------------------------");
+        } else {
+            if report.full_rebuild {
+                if let Some(reason) = report.full_rebuild_reason {
+                    match reason {
+                        ctx_codegraph::model::RebuildReason::MissingDatabase => {
+                            println!("Index not found. Built codegraph index.");
+                        }
+                        ctx_codegraph::model::RebuildReason::CorruptDatabase => {
+                            println!("Database corrupted. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
+                            println!("Schema version changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
+                            println!("Indexer version changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::BackendSetChanged => {
+                            println!("Backend set changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
+                            println!("Backend version changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
+                            println!("Parser version changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
+                            println!("Parser configuration changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
+                            println!("Resolver version changed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
+                            println!(
+                                "Resolver configuration changed. Rebuilt codegraph index cleanly."
+                            );
+                        }
+                        ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
+                            println!(
+                                "Discovery configuration changed. Rebuilt codegraph index cleanly."
+                            );
+                        }
+                        ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
+                            println!(
+                                "Change detection strategy changed. Rebuilt codegraph index cleanly."
+                            );
+                        }
+                        ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
+                            println!(
+                                "Previous index run was incomplete. Rebuilt codegraph index cleanly."
+                            );
+                        }
+                        ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
+                            println!("Previous index run failed. Rebuilt codegraph index cleanly.");
+                        }
+                    }
+                } else {
+                    println!("Rebuilt codegraph index.");
+                }
+            } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+                println!(
+                    "Incremental update: {} added, {} modified, {} deleted files.",
+                    report.added_files, report.modified_files, report.deleted_files
+                );
+            }
         }
-    }
-    let conn = ctx_codegraph::open_db(&workspace_root)?;
+        ctx_codegraph::open_db(&workspace_root)?
+    };
     Ok(conn)
 }
 

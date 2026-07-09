@@ -408,7 +408,7 @@ fn test_integration_mini_project() {
             use_lsp: false,
             max_depth: None,
             include_tests: true,
-            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -540,7 +540,7 @@ fn test_integration_with_rust_analyzer() {
             use_lsp: true,
             max_depth: None,
             include_tests: true,
-            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -922,7 +922,7 @@ fn test_index_lifecycle_validation() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
     let is_valid = validate_index_db(root, &options).unwrap();
     assert!(is_valid);
@@ -954,7 +954,7 @@ fn test_index_lifecycle_validation() {
         use_lsp: true,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
     let is_valid_diff_opts = validate_index_db(root, &different_options).unwrap();
     assert!(!is_valid_diff_opts);
@@ -970,6 +970,51 @@ fn test_index_lifecycle_validation() {
     }
     let is_valid_diff_schema = validate_index_db(root, &options).unwrap();
     assert!(!is_valid_diff_schema);
+}
+
+/// Focused test for the unified ensure_index behavior (short circuit Ready,
+/// incremental trigger, usable conn, no-op on fresh).
+#[test]
+fn test_ensure_index_unified_behavior() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let git_dir = root.join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
+
+    let file_path = root.join("lib.rs");
+    fs::write(&file_path, "fn foo() {}").unwrap();
+
+    let options = BuildIndexOptions {
+        use_lsp: false,
+        max_depth: None,
+        include_tests: true,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+    };
+
+    // 1. Missing -> ensure builds
+    let conn1 = ensure_index(root, options.clone()).unwrap();
+    let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
+    assert!(db_path.exists());
+    // conn is usable
+    let syms = ctx_codegraph::storage::find_symbols(&conn1, "foo").unwrap();
+    assert!(!syms.is_empty());
+
+    // 2. Ready -> ensure short-circuits (no rebuild side effects)
+    let state1 = get_index_state(root, &options).unwrap();
+    assert!(matches!(state1, IndexState::Ready));
+    let _conn2 = ensure_index(root, options.clone()).unwrap();
+    let state2 = get_index_state(root, &options).unwrap();
+    assert!(matches!(state2, IndexState::Ready));
+
+    // 3. Change -> next ensure triggers update to Ready
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    fs::write(&file_path, "fn foo() { let _ = 42; }").unwrap();
+    let state_dirty = get_index_state(root, &options).unwrap();
+    assert!(matches!(state_dirty, IndexState::NeedsIncrementalUpdate(_)));
+    let _conn3 = ensure_index(root, options.clone()).unwrap();
+    let state_clean = get_index_state(root, &options).unwrap();
+    assert!(matches!(state_clean, IndexState::Ready));
 }
 
 #[test]
@@ -1011,7 +1056,7 @@ fn test_edge_resolution_quality_variants() {
             use_lsp: false,
             max_depth: None,
             include_tests: true,
-            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
         },
     )
     .unwrap();
@@ -1075,7 +1120,7 @@ fn test_incremental_diff_report() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     // 1. Initial build: all files added
@@ -1149,7 +1194,7 @@ fn test_db_correctness_after_incremental_update() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index, _) = rebuild_index_db(root, options.clone()).unwrap();
@@ -1331,7 +1376,7 @@ while True:
         use_lsp: true,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
@@ -1374,7 +1419,7 @@ fn test_parse_failure_preserves_old_graph() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     // 1. Initial build: success
@@ -1420,7 +1465,7 @@ fn test_content_hash_detection() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::ContentHash,
+        change_detection: ctx_codegraph::model::FileChangeDetection::ContentHash,
     };
 
     // 1. Initial build
@@ -1482,7 +1527,7 @@ fn test_rebuild_triggers_on_config_changes() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     // Build the initial index
@@ -1490,7 +1535,7 @@ fn test_rebuild_triggers_on_config_changes() {
 
     // 1. Change detection strategy changes
     let options_diff_strat = BuildIndexOptions {
-        change_detection: crate::model::FileChangeDetection::ContentHash,
+        change_detection: ctx_codegraph::model::FileChangeDetection::ContentHash,
         ..options.clone()
     };
     let state1 = get_index_state(root, &options_diff_strat).unwrap();
@@ -1545,7 +1590,7 @@ fn test_affected_set_callee_pulls_callers() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     // Build the initial index
@@ -1593,7 +1638,7 @@ fn test_other_languages_preserved() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     // 1. Build initial Rust index
@@ -1682,12 +1727,16 @@ while True:
             sys.stdout.write(f"Content-Length: {len(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'capabilities': {}}}))}\r\n\r\n{json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'capabilities': {}}})}")
             sys.stdout.flush()
         elif method == "textDocument/definition":
+            # Use an error code that does *not* match the warmup retry condition
+            # in the resolver (which looks for "-32603"). This ensures we take
+            # the fast path (no long retry loop) while still exercising the
+            # "LSP responded with error => fallback" behavior.
             err_response = {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "error": {
-                    "code": -32603,
-                    "message": "Internal error in rust-analyzer"
+                    "code": -32000,
+                    "message": "Simulated LSP failure for fallback test"
                 }
             }
             msg = json.dumps(err_response)
@@ -1726,7 +1775,7 @@ while True:
         use_lsp: true,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
@@ -1779,7 +1828,7 @@ fn test_db_transaction_rollback_on_failure() {
     storage::save_index(&mut conn, &mut index).unwrap();
 
     let run_failed_transaction =
-        |conn: &mut rusqlite::Connection| -> Result<(), crate::error::CodeGraphError> {
+        |conn: &mut rusqlite::Connection| -> Result<(), ctx_codegraph::error::CodeGraphError> {
             let tx = conn.transaction()?;
             tx.execute("INSERT INTO symbols (file_id, name, qualified_name, kind, language, start_line, start_col, end_line, end_col) VALUES (1, 'foo', 'foo', 'function', 'rust', 1, 1, 1, 1)", [])?;
             tx.execute("INSERT INTO files (path, rel_path, language, backend_id, mtime_ms, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", 
@@ -1826,7 +1875,7 @@ fn test_empty_and_whitespace_only_files() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index, report) = rebuild_index_db(root, options).unwrap();
@@ -1859,7 +1908,7 @@ fn test_multiple_simultaneous_changes() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     rebuild_index_db(root, options.clone()).unwrap();
@@ -1903,7 +1952,7 @@ fn test_parse_failure_recovery() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
     };
 
     let (index1, _) = rebuild_index_db(root, options.clone()).unwrap();

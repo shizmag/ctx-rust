@@ -144,3 +144,59 @@ pub fn find_and_load_config(start_dir: &Path) -> Result<Config, std::io::Error> 
         Ok(Config::default())
     }
 }
+
+/// Save the config back to a .ctxconfig file at the given path.
+/// Produces the simple key=value format understood by load_config.
+pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::Error> {
+    let mut lines: Vec<String> = vec![
+        "# .ctxconfig - saved by `ctx setting`".to_string(),
+        "# Edit manually or via interactive TUI".to_string(),
+    ];
+
+    if let Some(m) = &config.mode {
+        lines.push(format!("mode = {}", mode_to_str(m)));
+    }
+    if let Some(d) = config.max_depth {
+        lines.push(format!("max_depth = {}", d));
+    }
+    if let Some(s) = config.max_file_size {
+        lines.push(format!("max_file_size = {}", s));
+    }
+    if !config.exclude.is_empty() {
+        lines.push(format!("exclude = {}", config.exclude.join(", ")));
+    }
+    if let Some(f) = &config.default_format {
+        lines.push(format!("default_format = {}", f));
+    }
+    if let Some(t) = &config.mcp_target {
+        lines.push(format!("mcp_target = {}", t));
+    }
+    if let Some(b) = config.use_lsp {
+        lines.push(format!("use_lsp = {}", b));
+    }
+    if let Some(b) = config.stats_enabled {
+        lines.push(format!("stats_enabled = {}", b));
+    }
+    if let Some(p) = &config.default_packing {
+        lines.push(format!("default_packing = {}", p));
+    }
+    if let Some(r) = &config.default_ranking {
+        lines.push(format!("default_ranking = {}", r));
+    }
+    if let Some(b) = config.default_token_budget {
+        lines.push(format!("default_token_budget = {}", b));
+    }
+
+    let content = lines.join("\n") + "\n";
+    fs::write(config_path, content)
+}
+
+fn mode_to_str(m: &Mode) -> &'static str {
+    match m {
+        Mode::Smart => "smart",
+        Mode::All => "all",
+        Mode::Code => "code",
+        Mode::Docs => "docs",
+        Mode::Llm => "llm",
+    }
+}
