@@ -484,3 +484,63 @@ fn test_cli_graph_affect_failures() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("Invalid depth"));
 }
+
+/// Regression test for unified index lifecycle: after initial build, query
+/// subcommands on Ready index produce no "update"/"built" side-effect messages.
+#[test]
+fn test_cli_graph_queries_no_output_on_fresh_index() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    // First, ensure index via explicit build (non-verbose)
+    let mut build_cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let build_out = build_cmd
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("build failed");
+    assert!(build_out.status.success());
+
+    // Now run a query subcommand; should succeed with symbol data, no build msgs
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "symbols",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("symbols query failed");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("run_pipeline") || stdout.contains("a"));
+    // No incidental build/update notifications when Ready
+    assert!(
+        !stdout.contains("Incremental update") &&
+        !stdout.contains("Built codegraph") &&
+        !stdout.contains("Index not found"),
+        "unexpected build noise on fresh index: {}", stdout
+    );
+
+    // Also test calls path
+    let mut cmd2 = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let out2 = cmd2
+        .args([
+            "graph",
+            "calls",
+            "run_pipeline",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("calls failed");
+    assert!(out2.status.success());
+    let s2 = String::from_utf8(out2.stdout).unwrap();
+    assert!(!s2.contains("Incremental update"));
+}

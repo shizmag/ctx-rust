@@ -1,15 +1,17 @@
-pub mod backend;
 pub mod context;
-pub mod discovery;
-pub mod error;
-pub mod index;
-pub mod languages;
-pub mod model;
-pub mod resolver;
-pub mod service;
 pub mod slice;
-pub mod storage;
-pub mod mcp;
+
+// Reexports from extracted ctx-codegraph-storage crate (to preserve public API and
+// intra-crate `crate::xxx` references in remaining modules like context/).
+pub use ctx_codegraph_storage::backend;
+pub use ctx_codegraph_storage::discovery;
+pub use ctx_codegraph_storage::error;
+pub use ctx_codegraph_storage::index;
+pub use ctx_codegraph_storage::languages;
+pub use ctx_codegraph_storage::model;
+pub use ctx_codegraph_storage::resolver;
+pub use ctx_codegraph_storage::service;
+pub use ctx_codegraph_storage::storage;
 
 pub use context::{
     ApproxTokenEstimator, ContextBudget, ContextCandidate, ContextPack, ContextPackingMode,
@@ -29,9 +31,9 @@ pub use model::*;
 pub use service::GraphContextService;
 pub use slice::{SliceOptions, forward_slice, reverse_slice};
 pub use storage::{
-    check_db_compatibility, compute_index_diff, find_symbols, find_workspace_root, get_index_state,
-    load_callees, load_callers, load_edges_for_symbol, load_edges_from, load_edges_to,
-    load_file_span, load_index, load_occurrence, load_symbol, load_symbols_by_ids,
+    check_db_compatibility, compute_index_diff, ensure_index, find_symbols, find_workspace_root,
+    get_index_state, load_callees, load_callers, load_edges_for_symbol, load_edges_from,
+    load_edges_to, load_file_span, load_index, load_occurrence, load_symbol, load_symbols_by_ids,
     load_symbols_for_file, open_codegraph_db, open_db, rebuild_index_db, resolve_symbol,
     validate_index_db,
 };

@@ -12,7 +12,7 @@ use crate::error::CodeGraphError;
 use crate::model::{
     EdgeDirection, EdgeKind, GraphContextDiagnostic, GraphContextEdge, GraphContextMode,
     LanguageObject, LanguageObjectKind, ResolutionConfidence, ResolvedEdgeTarget, SourceRange,
-    SymbolId,
+    SymbolId, extract_signature,
 };
 use crate::storage::{load_edges_for_symbol, load_edges_from, load_edges_to, load_symbol};
 use std::collections::HashSet;
@@ -213,10 +213,10 @@ pub fn retrieve_graph_context_with_options(
                             id: target_id,
                             name: target_sym.name.clone(),
                             qualified_name: target_sym.qualified_name.clone(),
-                            kind: LanguageObjectKind::from(target_sym.kind),
+                            kind: LanguageObjectKind::from(target_sym.kind.clone()),
                             file_path: target_sym.file.clone(),
                             range: SourceRange::from(target_sym.range.clone()),
-                            signature: None,
+                            signature: extract_signature(&target_sym.file, &target_sym.range, target_sym.kind.clone()),
                             language: Some(target_sym.language.as_str().to_string()),
                         };
 

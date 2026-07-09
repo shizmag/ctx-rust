@@ -1,5 +1,5 @@
 use ctx_codegraph::index::BuildIndexOptions;
-use ctx_codegraph::mcp::run_mcp_server_with_io;
+use ctx_mcp::run_mcp_server_with_io;
 use ctx_codegraph::storage::rebuild_index_db;
 use std::fs;
 use std::io::Cursor;
