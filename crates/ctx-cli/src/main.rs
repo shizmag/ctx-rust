@@ -124,6 +124,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Command::Setting(s) => {
                 return ctx_tui::run_settings_editor(s.path).map_err(Into::into);
             }
+            Command::Stats(s) => {
+                return handle_stats_command(s);
+            }
         }
     }
     run_with_args(args, ctx_tui::run_interactive)
@@ -150,12 +153,15 @@ where
         .format
         .map(Format::from)
         .or_else(|| {
-            config.default_format.as_ref().and_then(|f| match f.to_lowercase().as_str() {
-                "markdown" | "md" => Some(Format::Markdown),
-                "xml" => Some(Format::Xml),
-                "plain" | "text" | "txt" => Some(Format::Plain),
-                _ => None, // e.g. yaml is for agent context tools, not project render here
-            })
+            config
+                .default_format
+                .as_ref()
+                .and_then(|f| match f.to_lowercase().as_str() {
+                    "markdown" | "md" => Some(Format::Markdown),
+                    "xml" => Some(Format::Xml),
+                    "plain" | "text" | "txt" => Some(Format::Plain),
+                    _ => None, // e.g. yaml is for agent context tools, not project render here
+                })
         })
         .unwrap_or(Format::Markdown);
 
@@ -265,11 +271,20 @@ enum Command {
     /// Open interactive TUI to view/edit project settings in .ctxconfig
     #[command(visible_alias = "config")]
     Setting(SettingCommand),
+    /// Show project-level usage stats (files, tokens, lines), codegraph index info if present, and MCP notes
+    Stats(StatsCommand),
 }
 
 #[derive(clap::Args, Debug)]
 struct SettingCommand {
     /// Target project directory (loads .ctxconfig via upward search; writes to nearest or here)
+    #[arg(default_value = ".")]
+    path: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct StatsCommand {
+    /// Target project directory for stats (uses .ctxconfig if present)
     #[arg(default_value = ".")]
     path: PathBuf,
 }
@@ -448,7 +463,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 println!("\x1b[35m\x1b[1m--- Codegraph Build Report ---\x1b[0m");
                 println!(
                     "Full Rebuild: {}",
-                    if report.full_rebuild { "\x1b[33myes\x1b[0m" } else { "\x1b[32mno\x1b[0m" }
+                    if report.full_rebuild {
+                        "\x1b[33myes\x1b[0m"
+                    } else {
+                        "\x1b[32mno\x1b[0m"
+                    }
                 );
                 if let Some(reason) = report.full_rebuild_reason {
                     println!("Full Rebuild Reason: {:?}", reason);
@@ -481,20 +500,48 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 if report.full_rebuild {
                     let suffix = if let Some(reason) = report.full_rebuild_reason {
                         match reason {
-                            ctx_codegraph::model::RebuildReason::MissingDatabase => " (Index not found)",
-                            ctx_codegraph::model::RebuildReason::CorruptDatabase => " (Database corrupted)",
-                            ctx_codegraph::model::RebuildReason::SchemaVersionChanged => " (Schema version changed)",
-                            ctx_codegraph::model::RebuildReason::IndexerVersionChanged => " (Indexer version changed)",
-                            ctx_codegraph::model::RebuildReason::BackendSetChanged => " (Backend set changed)",
-                            ctx_codegraph::model::RebuildReason::BackendVersionChanged => " (Backend version changed)",
-                            ctx_codegraph::model::RebuildReason::ParserVersionChanged => " (Parser version changed)",
-                            ctx_codegraph::model::RebuildReason::ParserConfigChanged => " (Parser configuration changed)",
-                            ctx_codegraph::model::RebuildReason::ResolverVersionChanged => " (Resolver version changed)",
-                            ctx_codegraph::model::RebuildReason::ResolverConfigChanged => " (Resolver configuration changed)",
-                            ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => " (Discovery configuration changed)",
-                            ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => " (Change detection strategy changed)",
-                            ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => " (Previous run was incomplete)",
-                            ctx_codegraph::model::RebuildReason::PreviousRunFailed => " (Previous run failed)",
+                            ctx_codegraph::model::RebuildReason::MissingDatabase => {
+                                " (Index not found)"
+                            }
+                            ctx_codegraph::model::RebuildReason::CorruptDatabase => {
+                                " (Database corrupted)"
+                            }
+                            ctx_codegraph::model::RebuildReason::SchemaVersionChanged => {
+                                " (Schema version changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::IndexerVersionChanged => {
+                                " (Indexer version changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::BackendSetChanged => {
+                                " (Backend set changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::BackendVersionChanged => {
+                                " (Backend version changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ParserVersionChanged => {
+                                " (Parser version changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
+                                " (Parser configuration changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
+                                " (Resolver version changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ResolverConfigChanged => {
+                                " (Resolver configuration changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::DiscoveryConfigChanged => {
+                                " (Discovery configuration changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ChangeDetectionStrategyChanged => {
+                                " (Change detection strategy changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::PreviousRunIncomplete => {
+                                " (Previous run was incomplete)"
+                            }
+                            ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
+                                " (Previous run failed)"
+                            }
                         }
                     } else {
                         ""
@@ -523,10 +570,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         GraphSubcommand::Symbols { mut query } => {
             let mut target_path = graph_args.path.clone();
             if let Some(ref q) = query
-                && std::path::Path::new(q).is_dir() {
-                    target_path = std::path::PathBuf::from(q);
-                    query = None;
-                }
+                && std::path::Path::new(q).is_dir()
+            {
+                target_path = std::path::PathBuf::from(q);
+                query = None;
+            }
 
             let conn =
                 get_connection_or_rebuild(&target_path, use_rust_analyzer, graph_args.verbose)?;
@@ -653,15 +701,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 println!("  (none)");
             } else {
                 for (edge, caller) in callers {
-                    let range =
-                        edge.range
-                            .clone()
-                            .unwrap_or(ctx_codegraph::model::TextRange {
-                                start_line: 0,
-                                start_col: 0,
-                                end_line: 0,
-                                end_col: 0,
-                            });
+                    let range = edge
+                        .range
+                        .clone()
+                        .unwrap_or(ctx_codegraph::model::TextRange {
+                            start_line: 0,
+                            start_col: 0,
+                            end_line: 0,
+                            end_col: 0,
+                        });
                     println!(
                         "  - {} via `{}` at L{}:{} ({})",
                         caller.qualified_name,
@@ -887,13 +935,12 @@ fn get_connection_or_rebuild(
     // Unified "ensure fresh" logic: use smart state check for fast path.
     // Only call rebuild (to obtain report for messages) if not Ready.
     // For queries, no output at all when Ready (no work).
-    let state = ctx_codegraph::get_index_state(&workspace_root, &options)
-        .unwrap_or_else(|_| {
-            // On unexpected state err, fall back to rebuild path (will handle)
-            ctx_codegraph::model::IndexState::NeedsFullRebuild(
-                ctx_codegraph::model::RebuildReason::MissingDatabase,
-            )
-        });
+    let state = ctx_codegraph::get_index_state(&workspace_root, &options).unwrap_or_else(|_| {
+        // On unexpected state err, fall back to rebuild path (will handle)
+        ctx_codegraph::model::IndexState::NeedsFullRebuild(
+            ctx_codegraph::model::RebuildReason::MissingDatabase,
+        )
+    });
 
     let conn = if matches!(state, ctx_codegraph::model::IndexState::Ready) {
         ctx_codegraph::open_db(&workspace_root)?
@@ -910,7 +957,10 @@ fn get_connection_or_rebuild(
             }
             println!(
                 "Files: {} added, {} modified, {} deleted, {} unchanged",
-                report.added_files, report.modified_files, report.deleted_files, report.unchanged_files
+                report.added_files,
+                report.modified_files,
+                report.deleted_files,
+                report.unchanged_files
             );
             println!(
                 "Parsed Files: {}, Reused Files: {}",
@@ -954,7 +1004,9 @@ fn get_connection_or_rebuild(
                             println!("Parser version changed. Rebuilt codegraph index cleanly.");
                         }
                         ctx_codegraph::model::RebuildReason::ParserConfigChanged => {
-                            println!("Parser configuration changed. Rebuilt codegraph index cleanly.");
+                            println!(
+                                "Parser configuration changed. Rebuilt codegraph index cleanly."
+                            );
                         }
                         ctx_codegraph::model::RebuildReason::ResolverVersionChanged => {
                             println!("Resolver version changed. Rebuilt codegraph index cleanly.");
@@ -986,7 +1038,10 @@ fn get_connection_or_rebuild(
                 } else {
                     println!("Rebuilt codegraph index.");
                 }
-            } else if report.added_files > 0 || report.modified_files > 0 || report.deleted_files > 0 {
+            } else if report.added_files > 0
+                || report.modified_files > 0
+                || report.deleted_files > 0
+            {
                 println!(
                     "Incremental update: {} added, {} modified, {} deleted files.",
                     report.added_files, report.modified_files, report.deleted_files
@@ -1049,30 +1104,24 @@ fn print_slice_tree_helper(
     let mut seen_targets = HashSet::new();
     for edge in &index.edges {
         if edge.from_symbol_id == Some(curr_id)
-            && let Some(to_id) = edge.to_symbol_id {
-                if !seen_targets.insert(to_id) {
-                    continue;
-                }
-                if !visited.contains(&to_id) {
-                    visited.insert(to_id);
-                    print_slice_tree_helper(
-                        index,
-                        to_id,
-                        depth + 1,
-                        max_depth,
-                        visited,
-                        printed_count,
+            && let Some(to_id) = edge.to_symbol_id
+        {
+            if !seen_targets.insert(to_id) {
+                continue;
+            }
+            if !visited.contains(&to_id) {
+                visited.insert(to_id);
+                print_slice_tree_helper(index, to_id, depth + 1, max_depth, visited, printed_count);
+                visited.remove(&to_id);
+            } else {
+                if let Some(target_sym) = index.symbols.iter().find(|s| s.id == Some(to_id)) {
+                    println!(
+                        "{}  └─ {} (already visited)",
+                        indent, target_sym.qualified_name
                     );
-                    visited.remove(&to_id);
-                } else {
-                    if let Some(target_sym) = index.symbols.iter().find(|s| s.id == Some(to_id)) {
-                        println!(
-                            "{}  └─ {} (already visited)",
-                            indent, target_sym.qualified_name
-                        );
-                    }
                 }
             }
+        }
     }
 }
 
@@ -1283,4 +1332,35 @@ fn render_graph_context(
     }
 
     Ok(out)
+}
+
+fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let path = &stats.path;
+    println!("📊 ctx stats for {}", path.display());
+    let config = ctx_config::find_and_load_config(path).unwrap_or_default();
+    let mode = config.mode.unwrap_or(Mode::Smart);
+    let scan_options = ctx_models::ScanOptions {
+        max_depth: config.max_depth,
+        max_file_size: config.max_file_size.unwrap_or(512 * 1024),
+        mode,
+        exclude: config.exclude,
+    };
+    let scan_result = ctx_core::scan(path, scan_options)?;
+    println!(
+        "Project (mode: {:?}): files={}, dirs={}, lines={}, tokens={}",
+        mode,
+        scan_result.summary.files,
+        scan_result.summary.dirs,
+        scan_result.summary.lines,
+        scan_result.summary.tokens
+    );
+    // Index note
+    let db = path.join(".ctx-codegraph/codegraph.sqlite");
+    if db.exists() {
+        println!("Codegraph index present");
+    } else {
+        println!("Codegraph index: none (run `ctx graph build`)");
+    }
+    println!("MCP usage: see ctx://stats/mcp when running MCP server (stats_enabled in config).");
+    Ok(())
 }

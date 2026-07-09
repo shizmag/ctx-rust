@@ -1,13 +1,12 @@
 use super::protocol::{
-    depth_or_auto, get_bool_arg, get_str_arg, get_string_array, get_usize_arg,
-    parse_edge_kinds, parse_graph_context_mode, text_tool_result,
+    depth_or_auto, get_bool_arg, get_str_arg, get_string_array, get_usize_arg, parse_edge_kinds,
+    parse_graph_context_mode, text_tool_result,
 };
 use super::render::{
     format_ambiguous_symbols_json, format_ambiguous_symbols_yaml, format_symbol_not_found,
     handle_symbol_resolution, render_affected_context_json, render_affected_context_text,
-    render_affected_context_yaml, render_caller_edges, render_call_edges,
-    render_context_to_json, render_context_to_markdown, render_context_to_yaml,
-    render_symbols_list,
+    render_affected_context_yaml, render_call_edges, render_caller_edges, render_context_to_json,
+    render_context_to_markdown, render_context_to_yaml, render_symbols_list,
 };
 use ctx_codegraph::index::BuildIndexOptions;
 use ctx_codegraph::model::{FileChangeDetection, GraphContextOptions, SymbolResolution};
@@ -212,7 +211,10 @@ pub(crate) fn usage_summary_text() -> String {
             tool, count, succ, err, avg_dur, inp_sum, ctx_samples, ctx_sum, nodes_sum, omitted_sum
         ));
     }
-    lines.push(format!("Ambiguous resolutions: {}", stats.ambiguous_resolutions));
+    lines.push(format!(
+        "Ambiguous resolutions: {}",
+        stats.ambiguous_resolutions
+    ));
     lines.push(format!("Rebuilds triggered: {}", stats.rebuilds));
     if !stats.formats_used.is_empty() {
         lines.push("Formats used:".to_string());
@@ -264,7 +266,7 @@ pub fn list_tools() -> serde_json::Value {
         "tools": [
             {
                 "name": "get_affected_context",
-                "description": "Primary LLM-oriented tool. Rank and pack related code context within a token budget (same as `ctx graph affect`).",
+                "description": "Primary LLM-oriented tool. Rank and pack related code context within a token budget (same as `ctx graph affect`). Call this tool on your own initiative whenever the conversation involves code structure, symbols, dependencies, callers, impact analysis, or gathering precise context from the current workspace. Agents should prefer using these tools proactively to provide accurate answers rather than guessing or asking the user.",
                 "inputSchema": affected_context_schema()
             },
             {
@@ -308,9 +310,7 @@ pub fn handle_tool_call(
 ) -> Result<ToolCallOutcome, String> {
     let start = Instant::now();
     let format = get_str_arg(args, "format").unwrap_or("text").to_owned();
-    let input_tokens = estimate_tokens_approx(
-        &serde_json::to_string(args).unwrap_or_default(),
-    );
+    let input_tokens = estimate_tokens_approx(&serde_json::to_string(args).unwrap_or_default());
 
     let result = match tool_name {
         "get_affected_context" => handle_get_affected_context(service, args),
@@ -383,31 +383,12 @@ fn handle_get_graph_context(
                 .map_err(|e| format!("Failed to build context: {}", e))?;
 
             if format == "json" {
-                render_context_to_json(
-                    &result,
-                    root_path,
-                    mode,
-                    depth,
-                    max_nodes,
-                    max_files,
-                )
+                render_context_to_json(&result, root_path, mode, depth, max_nodes, max_files)
             } else if format == "yaml" {
-                render_context_to_yaml(
-                    &result,
-                    root_path,
-                    mode,
-                    depth,
-                    max_nodes,
-                    max_files,
-                )
+                render_context_to_yaml(&result, root_path, mode, depth, max_nodes, max_files)
             } else {
                 Ok(render_context_to_markdown(
-                    &result,
-                    root_path,
-                    mode,
-                    depth,
-                    max_nodes,
-                    max_files,
+                    &result, root_path, mode, depth, max_nodes, max_files,
                 ))
             }
         }
@@ -488,9 +469,7 @@ fn handle_get_affected_context(
             }?;
             Ok(ToolCallOutcome::ok(text))
         }
-        SymbolResolution::NotFound => {
-            Ok(ToolCallOutcome::err(format_symbol_not_found(query)))
-        }
+        SymbolResolution::NotFound => Ok(ToolCallOutcome::err(format_symbol_not_found(query))),
         SymbolResolution::Unique(obj) => {
             let conn = service.lock_conn();
             let budget = ContextBudget {
@@ -514,13 +493,9 @@ fn handle_get_affected_context(
                 explain_ranking: false,
             };
 
-            let pack = retrieve_graph_context_with_options(
-                &conn,
-                &obj.qualified_name,
-                &budget,
-                &options,
-            )
-            .map_err(|e| format!("Failed to retrieve context: {}", e))?;
+            let pack =
+                retrieve_graph_context_with_options(&conn, &obj.qualified_name, &budget, &options)
+                    .map_err(|e| format!("Failed to retrieve context: {}", e))?;
 
             // Record using existing pack.estimated_tokens (output) + sizes for comparison
             record_context_tokens("get_affected_context", pack.estimated_tokens);
@@ -632,9 +607,14 @@ fn handle_get_callers(
 
     let text = handle_symbol_resolution(query, resolution, |obj| {
         let conn = service.lock_conn();
-        let edges = load_callers(&conn, obj.id)
-            .map_err(|e| format!("Failed to load callers: {}", e))?;
-        Ok(render_caller_edges("Callers", &obj, &edges, service.repo_root()))
+        let edges =
+            load_callers(&conn, obj.id).map_err(|e| format!("Failed to load callers: {}", e))?;
+        Ok(render_caller_edges(
+            "Callers",
+            &obj,
+            &edges,
+            service.repo_root(),
+        ))
     })?;
 
     let is_error = text.starts_with("Error:");
@@ -656,9 +636,14 @@ fn handle_get_callees(
 
     let text = handle_symbol_resolution(query, resolution, |obj| {
         let conn = service.lock_conn();
-        let edges = load_callees(&conn, obj.id)
-            .map_err(|e| format!("Failed to load callees: {}", e))?;
-        Ok(render_call_edges("Callees", &obj, &edges, service.repo_root()))
+        let edges =
+            load_callees(&conn, obj.id).map_err(|e| format!("Failed to load callees: {}", e))?;
+        Ok(render_call_edges(
+            "Callees",
+            &obj,
+            &edges,
+            service.repo_root(),
+        ))
     })?;
 
     let is_error = text.starts_with("Error:");
@@ -866,4 +851,3 @@ fn rebuild_index_schema() -> serde_json::Value {
         }
     })
 }
-

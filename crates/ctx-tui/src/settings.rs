@@ -17,7 +17,7 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 
-use ctx_config::{find_and_load_config, find_config, save_config, Config};
+use ctx_config::{Config, find_and_load_config, find_config, save_config};
 use ctx_models::Mode;
 
 const GREEN: Color = Color::Rgb(158, 206, 106);
@@ -150,13 +150,7 @@ impl SettingsState {
         match idx {
             0 => {
                 let cur = self.config.mode.unwrap_or(Mode::Smart);
-                let modes = [
-                    Mode::Smart,
-                    Mode::All,
-                    Mode::Code,
-                    Mode::Docs,
-                    Mode::Llm,
-                ];
+                let modes = [Mode::Smart, Mode::All, Mode::Code, Mode::Docs, Mode::Llm];
                 let mut i = modes.iter().position(|&m| m == cur).unwrap_or(0);
                 if forward {
                     i = (i + 1) % modes.len();
@@ -217,13 +211,17 @@ impl SettingsState {
         if self.is_enum_field(idx) {
             // cycle instead of text edit for enums
             self.cycle_enum(idx, true);
-            self.message = Some("cycled (use ←→ or e to cycle)".into());
+            self.message = Some("cycled (use h/l or e to cycle)".into());
             return;
         }
         self.input_mode = true;
         self.input_target = Some(idx);
         self.input_buffer = match idx {
-            1 => self.config.max_depth.map(|v| v.to_string()).unwrap_or_default(),
+            1 => self
+                .config
+                .max_depth
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
             2 => self
                 .config
                 .max_file_size
@@ -348,16 +346,22 @@ fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Min(8),     // body
-            Constraint::Length(3),  // footer
+            Constraint::Length(3), // header
+            Constraint::Min(8),    // body
+            Constraint::Length(3), // footer
         ])
         .split(f.size());
 
     // header
     let header = Paragraph::new(Line::from(vec![
-        Span::styled("✨ ctx settings", Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
-        Span::styled("  —  interactive .ctxconfig editor", Style::default().fg(GRAY)),
+        Span::styled(
+            "✨ ctx settings",
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  —  interactive .ctxconfig editor",
+            Style::default().fg(GRAY),
+        ),
     ]))
     .block(
         Block::default()
@@ -409,28 +413,24 @@ fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
                 .border_style(Style::default().fg(GRAY))
                 .title(Span::styled("Settings (↑↓ nav)", Style::default().fg(GRAY))),
         )
-        .highlight_style(
-            Style::default()
-                .bg(HIGHLIGHT_BG)
-                .fg(TEXT),
-        );
+        .highlight_style(Style::default().bg(HIGHLIGHT_BG).fg(TEXT));
 
     // we render as plain list (manual highlight via prefix) to keep very small, no ListState needed
     f.render_widget(list, chunks[1]);
 
     // footer help + message
-    let help = "↑↓:nav  Space:toggle bool  ←→/e:cycle enum  e/Enter:edit  a/r:±exclude  s:save  q:quit";
+    let help =
+        "↑↓:nav  Space:toggle bool  h/l/e:cycle enum  e/Enter:edit  a/r:±exclude  s:save  q:quit";
     let mut footer_lines = vec![Span::styled(help, Style::default().fg(GRAY))];
     if let Some(ref msg) = state.message {
         footer_lines.push(Span::raw("  "));
         footer_lines.push(Span::styled(msg, Style::default().fg(GREEN)));
     }
-    let footer = Paragraph::new(Line::from(footer_lines))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ORANGE)),
-        );
+    let footer = Paragraph::new(Line::from(footer_lines)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ORANGE)),
+    );
     f.render_widget(footer, chunks[2]);
 }
 
@@ -512,12 +512,12 @@ pub fn run_settings_editor(dir: PathBuf) -> Result<(), crate::error::TuiError> {
                         }
                         state.message = None;
                     }
-                    KeyCode::Left | KeyCode::Char('h') => {
+                    KeyCode::Char('h') => {
                         if state.is_enum_field(state.selected) {
                             state.cycle_enum(state.selected, false);
                         }
                     }
-                    KeyCode::Right | KeyCode::Char('l') => {
+                    KeyCode::Char('l') => {
                         if state.is_enum_field(state.selected) {
                             state.cycle_enum(state.selected, true);
                         }
