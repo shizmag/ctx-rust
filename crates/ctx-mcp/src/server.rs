@@ -8,6 +8,7 @@ use super::tools;
 use ctx_codegraph::error::CodeGraphError;
 use ctx_codegraph::service::GraphContextService;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 pub fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     run_mcp_server_with_io(io::stdin().lock(), io::stdout())
@@ -19,6 +20,7 @@ pub fn run_mcp_server_with_io<R: BufRead, W: Write>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut line = String::new();
     let mut service_opt: Option<GraphContextService> = None;
+    let mut workspace_root: Option<PathBuf> = None;
     let mut initialized = false;
 
     eprintln!("MCP Server started. Waiting for messages...");
@@ -66,6 +68,7 @@ pub fn run_mcp_server_with_io<R: BufRead, W: Write>(
             request_id,
             &mut service_opt,
             &mut initialized,
+            &mut workspace_root,
         );
 
         write_response(&mut writer, &response)?;
@@ -73,6 +76,10 @@ pub fn run_mcp_server_with_io<R: BufRead, W: Write>(
 
     // Log usage summary to stderr on shutdown for collection (metrics for MCP vs other tools)
     eprintln!("\n{}", tools::usage_summary_text());
+    // Persist for `ctx stats` to be able to show last MCP usage (even after server exits)
+    if let Some(ws) = &workspace_root {
+        tools::persist_mcp_stats(ws);
+    }
     eprintln!("MCP Server shutting down.");
 
     Ok(())
@@ -89,9 +96,10 @@ fn dispatch_request(
     request_id: serde_json::Value,
     service_opt: &mut Option<GraphContextService>,
     initialized: &mut bool,
+    workspace_root: &mut Option<PathBuf>,
 ) -> JsonRpcResponse {
     match request.method.as_str() {
-        "initialize" => handle_initialize(request, request_id, service_opt, initialized),
+        "initialize" => handle_initialize(request, request_id, service_opt, initialized, workspace_root),
         "ping" => JsonRpcResponse::success(request_id, serde_json::json!({})),
         "tools/list" => {
             if !*initialized {
@@ -99,7 +107,7 @@ fn dispatch_request(
             }
             JsonRpcResponse::success(request_id, tools::list_tools())
         }
-        "tools/call" => handle_tools_call(request, request_id, service_opt, initialized),
+        "tools/call" => handle_tools_call(request, request_id, service_opt, initialized, workspace_root),
         "resources/list" => {
             if !*initialized {
                 return not_initialized(request_id);
@@ -122,12 +130,16 @@ fn handle_initialize(
     request_id: serde_json::Value,
     service_opt: &mut Option<GraphContextService>,
     initialized: &mut bool,
+    workspace_root: &mut Option<PathBuf>,
 ) -> JsonRpcResponse {
     let params = request.params.as_ref().cloned().unwrap_or(serde_json::Value::Null);
     let ws_path = get_workspace_path(&params);
+    // Always compute effective workspace root (finds .git / .ctxconfig etc) for file tools.
+    let effective_root = ctx_codegraph::storage::find_workspace_root(&ws_path);
+    *workspace_root = Some(effective_root.clone());
     eprintln!(
         "Initializing MCP Server for workspace: {}",
-        ws_path.display()
+        effective_root.display()
     );
 
     match GraphContextService::load_only(&ws_path) {
@@ -152,8 +164,26 @@ fn handle_initialize(
             )
         }
         Err(CodeGraphError::IndexNotFound(msg)) => {
-            eprintln!("Index not found — run `ctx graph build --with-lsp`");
-            JsonRpcResponse::error(request_id, INTERNAL_ERROR, msg)
+            // Allow init without index so read_file / search_code work immediately (even for dev on ctx itself).
+            // Graph tools will return clear errors until rebuild_index succeeds.
+            eprintln!("Index not found ({}). File tools (read_file, search_code) and project context available; graph tools and list_symbols require rebuild_index.", msg);
+            *initialized = true;
+            // service_opt remains None -> handle_tool_call will receive None + root
+            JsonRpcResponse::success(
+                request_id,
+                serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                        "prompts": {}
+                    },
+                    "serverInfo": {
+                        "name": "ctx-codegraph-mcp",
+                        "version": "0.1.0"
+                    }
+                }),
+            )
         }
         Err(e) => JsonRpcResponse::error(
             request_id,
@@ -168,6 +198,7 @@ fn handle_tools_call(
     request_id: serde_json::Value,
     service_opt: &mut Option<GraphContextService>,
     initialized: &bool,
+    workspace_root: &Option<PathBuf>,
 ) -> JsonRpcResponse {
     if !*initialized {
         return not_initialized(request_id);
@@ -183,27 +214,28 @@ fn handle_tools_call(
         .cloned()
         .unwrap_or(serde_json::Value::Object(Default::default()));
 
-    let service = match service_opt.as_ref() {
-        Some(s) => s,
-        None => return not_initialized(request_id),
-    };
+    // Compute root for file tools (read/search/project) which must work with no index.
+    // Prefer live service root (may be workspace), else the one captured at init.
+    let root_for_call: PathBuf = service_opt
+        .as_ref()
+        .map(|s| s.repo_root().to_path_buf())
+        .or_else(|| workspace_root.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    match tools::handle_tool_call(service, tool_name, &args) {
+    let svc_ref: Option<&GraphContextService> = service_opt.as_ref();
+
+    match tools::handle_tool_call(svc_ref, &root_for_call, tool_name, &args) {
         Ok(outcome) => {
-            if outcome.reload_service
-                && let Some(current) = service_opt.as_ref()
-            {
-                match GraphContextService::load_only(current.repo_root()) {
+            if outcome.reload_service {
+                // After successful rebuild, try to upgrade to full service (enables graph tools for remainder of session).
+                match GraphContextService::load_only(&root_for_call) {
                     Ok(reloaded) => {
                         eprintln!("Index reloaded after rebuild.");
                         *service_opt = Some(reloaded);
                     }
                     Err(e) => {
-                        return JsonRpcResponse::error(
-                            request_id,
-                            INTERNAL_ERROR,
-                            format!("Index rebuilt but failed to reload: {}", e),
-                        );
+                        // Non-fatal: file tools continue to work; graph ones will need another rebuild or external build.
+                        eprintln!("Index rebuilt but load_only failed (file tools still usable): {}", e);
                     }
                 }
             }
