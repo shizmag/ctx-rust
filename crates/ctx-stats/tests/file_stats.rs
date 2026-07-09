@@ -59,3 +59,70 @@ fn skips_line_count_for_non_utf8_file() {
     assert!(!stats.is_text);
     assert_eq!(stats.skipped_reason, Some(StatsSkipReason::NonUtf8));
 }
+
+#[test]
+fn directory_path_returns_not_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let stats = collect_file_stats(dir.path(), 1024, None).unwrap();
+
+    assert_eq!(stats.lines, 0);
+    assert_eq!(stats.tokens, 0);
+    assert!(!stats.is_text);
+    assert_eq!(stats.skipped_reason, Some(StatsSkipReason::NotAFile));
+}
+
+#[test]
+fn counts_rust_tests_in_source_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_test_file.rs");
+
+    fs::write(
+        &path,
+        r#"
+#[test]
+fn first_test() {}
+
+#[test]
+fn second_test() {}
+"#,
+    )
+    .unwrap();
+
+    let stats = collect_file_stats(&path, 1024, None).unwrap();
+
+    assert_eq!(stats.tests, 2);
+    assert_eq!(stats.skipped_reason, None);
+}
+
+#[test]
+fn file_exactly_at_max_file_size_is_not_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_boundary_file.txt");
+    let content = "12345";
+
+    fs::write(&path, content).unwrap();
+    let max_file_size = content.len() as u64;
+
+    let stats = collect_file_stats(&path, max_file_size, None).unwrap();
+
+    assert_eq!(stats.bytes, max_file_size);
+    assert_eq!(stats.lines, 1);
+    assert!(stats.is_text);
+    assert_eq!(stats.skipped_reason, None);
+}
+
+#[test]
+fn file_one_byte_over_max_file_size_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ctx_stats_over_boundary_file.txt");
+    let content = "123456";
+
+    fs::write(&path, content).unwrap();
+    let max_file_size = (content.len() - 1) as u64;
+
+    let stats = collect_file_stats(&path, max_file_size, None).unwrap();
+
+    assert_eq!(stats.lines, 0);
+    assert_eq!(stats.skipped_reason, Some(StatsSkipReason::TooLarge));
+}
