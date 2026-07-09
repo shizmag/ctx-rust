@@ -289,3 +289,77 @@ impl ContextRanker for HybridRanker {
         scored
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{EdgeDirection, LanguageObject, LanguageObjectKind, SourceRange, SymbolId};
+    use std::path::PathBuf;
+
+    #[test]
+    fn hybrid_ranker_combined_formula_via_empty_query_string() {
+        let path = PathBuf::from("/proj/lib/foo.rs");
+        let roots = vec![LanguageObject {
+            id: SymbolId(0),
+            name: "root".to_string(),
+            qualified_name: "root".to_string(),
+            kind: LanguageObjectKind::Function,
+            file_path: PathBuf::from("/proj/src/root.rs"),
+            range: SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
+            signature: None,
+            language: Some("rust".to_string()),
+        }];
+        let query = ContextQuery {
+            query_string: "foo".to_string(),
+            roots,
+            include_tests: true,
+        };
+
+        let candidates = vec![ContextCandidate {
+            node: LanguageObject {
+                id: SymbolId(1),
+                name: "foo".to_string(),
+                qualified_name: "foo".to_string(),
+                kind: LanguageObjectKind::Function,
+                file_path: path.clone(),
+                range: SourceRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 5,
+                    end_col: 1,
+                },
+                signature: None,
+                language: Some("rust".to_string()),
+            },
+            distance: 1,
+            direction: EdgeDirection::Outbound,
+            via_edge: None,
+            file_path: path,
+            range: SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
+            graph_score: 0.0,
+            lexical_score: 0.0,
+            combined_score: 0.0,
+            estimated_tokens: 0,
+            reason: "test".to_string(),
+        }];
+
+        let hybrid = HybridRanker {
+            graph_weight: 0.6,
+            lexical_weight: 0.4,
+        };
+        let scored = hybrid.rank(&query, candidates);
+        let expected = hybrid.graph_weight * scored[0].graph_score
+            + hybrid.lexical_weight * scored[0].lexical_score;
+        assert!((scored[0].combined_score - expected).abs() < 0.01);
+    }
+}

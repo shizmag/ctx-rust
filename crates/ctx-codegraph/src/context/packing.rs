@@ -318,3 +318,186 @@ pub(crate) fn build_context_sections(
         total_estimated_tokens,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{GraphContextMode, LanguageObjectKind, SymbolId};
+    use std::path::PathBuf;
+
+    fn make_candidate(
+        id: i64,
+        name: &str,
+        file_path: PathBuf,
+        score: f32,
+    ) -> (ContextCandidate, ContextSnippet) {
+        let cand = ContextCandidate {
+            node: LanguageObject {
+                id: SymbolId(id),
+                name: name.to_string(),
+                qualified_name: format!("mod::{name}"),
+                kind: LanguageObjectKind::Function,
+                file_path: file_path.clone(),
+                range: SourceRange {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 5,
+                    end_col: 1,
+                },
+                signature: None,
+                language: Some("rust".to_string()),
+            },
+            distance: 1,
+            direction: crate::model::EdgeDirection::Outbound,
+            via_edge: None,
+            file_path: file_path.clone(),
+            range: SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
+            graph_score: score,
+            lexical_score: score,
+            combined_score: score,
+            estimated_tokens: 10,
+            reason: "test".to_string(),
+        };
+        let snippet = ContextSnippet {
+            file_path,
+            range: cand.range,
+            symbol_id: Some(cand.node.id),
+            text: format!("// snippet for {name}\n"),
+            estimated_tokens: 10,
+            relevance: score,
+            reason: "test".to_string(),
+        };
+        (cand, snippet)
+    }
+
+    fn make_roots() -> Vec<LanguageObject> {
+        vec![LanguageObject {
+            id: SymbolId(0),
+            name: "root".to_string(),
+            qualified_name: "mod::root".to_string(),
+            kind: LanguageObjectKind::Function,
+            file_path: PathBuf::from("/proj/src/root.rs"),
+            range: SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
+            signature: None,
+            language: Some("rust".to_string()),
+        }]
+    }
+
+    #[test]
+    fn build_context_sections_frontloaded_orders_by_score() {
+        let budget = ContextBudget {
+            token_budget: 1000,
+            model_context_window: None,
+            reserve_output_tokens: 0,
+            reserve_instruction_tokens: 0,
+        };
+        let high = make_candidate(1, "high", PathBuf::from("/proj/src/a.rs"), 9.0);
+        let low = make_candidate(2, "low", PathBuf::from("/proj/src/b.rs"), 1.0);
+        let included = vec![low.clone(), high.clone()];
+
+        let built = build_context_sections(
+            "test query",
+            GraphContextMode::Neighborhood,
+            &budget,
+            &make_roots(),
+            &included,
+            &[],
+            &[],
+            ContextPackingMode::Frontloaded,
+        );
+
+        let snippets_section = built
+            .sections
+            .iter()
+            .find(|s| s.kind == ContextSectionKind::Snippets)
+            .unwrap();
+        let high_pos = snippets_section.text.find("snippet for high").unwrap();
+        let low_pos = snippets_section.text.find("snippet for low").unwrap();
+        assert!(high_pos < low_pos);
+    }
+
+    #[test]
+    fn build_context_sections_balanced_orders_by_file_path() {
+        let budget = ContextBudget {
+            token_budget: 1000,
+            model_context_window: None,
+            reserve_output_tokens: 0,
+            reserve_instruction_tokens: 0,
+        };
+        let z = make_candidate(1, "z_fn", PathBuf::from("/proj/src/z.rs"), 5.0);
+        let a = make_candidate(2, "a_fn", PathBuf::from("/proj/src/a.rs"), 5.0);
+        let included = vec![z.clone(), a.clone()];
+
+        let built = build_context_sections(
+            "test query",
+            GraphContextMode::Neighborhood,
+            &budget,
+            &make_roots(),
+            &included,
+            &[],
+            &[],
+            ContextPackingMode::Balanced,
+        );
+
+        let snippets_section = built
+            .sections
+            .iter()
+            .find(|s| s.kind == ContextSectionKind::Snippets)
+            .unwrap();
+        let a_pos = snippets_section.text.find("snippet for a_fn").unwrap();
+        let z_pos = snippets_section.text.find("snippet for z_fn").unwrap();
+        assert!(a_pos < z_pos);
+    }
+
+    #[test]
+    fn build_context_sections_includes_omitted_diagnostics() {
+        let budget = ContextBudget {
+            token_budget: 100,
+            model_context_window: None,
+            reserve_output_tokens: 0,
+            reserve_instruction_tokens: 0,
+        };
+        let included = vec![make_candidate(
+            1,
+            "only",
+            PathBuf::from("/proj/src/only.rs"),
+            1.0,
+        )];
+        let omitted = vec![OmittedContext {
+            name: "dropped".to_string(),
+            qualified_name: "mod::dropped".to_string(),
+            file_path: PathBuf::from("/proj/src/dropped.rs"),
+            score: 0.5,
+            reason: "Truncated: token budget exceeded".to_string(),
+        }];
+
+        let built = build_context_sections(
+            "test query",
+            GraphContextMode::Neighborhood,
+            &budget,
+            &make_roots(),
+            &included,
+            &omitted,
+            &[],
+            ContextPackingMode::Sandwich,
+        );
+
+        let end_section = built
+            .sections
+            .iter()
+            .find(|s| s.kind == ContextSectionKind::OmittedSummary)
+            .unwrap();
+        assert!(end_section.text.contains("Context truncated: 1 candidates omitted"));
+        assert!(built.total_estimated_tokens > 0);
+    }
+}
