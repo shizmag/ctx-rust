@@ -67,7 +67,14 @@ pub fn build_dirs() -> NameRule {
 
 pub fn cache_dirs() -> NameRule {
     NameRule::new(
-        ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"],
+        [
+            ".cache",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".tox",
+        ],
         Some(NodeKind::Directory),
         HiddenReason::Cache,
     )
@@ -88,4 +95,50 @@ pub fn lockfiles() -> NameRule {
 
 pub fn temporary_files() -> NameRule {
     NameRule::new([".DS_Store"], Some(NodeKind::File), HiddenReason::Temporary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FilterContext, FilterEntry, RuleDecision};
+    use ctx_models::{Mode, NodeKind, ScanOptions};
+
+    fn context() -> FilterContext<'static> {
+        static OPTIONS: ScanOptions = ScanOptions {
+            max_depth: None,
+            max_file_size: 512 * 1024,
+            mode: Mode::Smart,
+            exclude: Vec::new(),
+        };
+        FilterContext {
+            options: &OPTIONS,
+        }
+    }
+
+    #[test]
+    fn name_rule_matches_exact_directory_name() {
+        let rule = cache_dirs();
+        let entry = FilterEntry::new("__pycache__".into(), NodeKind::Directory, 0, None);
+
+        assert_eq!(
+            rule.check(&entry, &context()),
+            RuleDecision::Hide(HiddenReason::Cache)
+        );
+    }
+
+    #[test]
+    fn name_rule_skips_wrong_kind() {
+        let rule = dependency_dirs();
+        let entry = FilterEntry::new("node_modules".into(), NodeKind::File, 0, None);
+
+        assert_eq!(rule.check(&entry, &context()), RuleDecision::Pass);
+    }
+
+    #[test]
+    fn name_rule_is_case_sensitive() {
+        let rule = build_dirs();
+        let entry = FilterEntry::new("TARGET".into(), NodeKind::Directory, 0, None);
+
+        assert_eq!(rule.check(&entry, &context()), RuleDecision::Pass);
+    }
 }
