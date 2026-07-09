@@ -13,9 +13,10 @@ pub mod mcp;
 
 pub use context::{
     ApproxTokenEstimator, ContextBudget, ContextCandidate, ContextPack, ContextPackingMode,
-    ContextQuery, ContextRanker, ContextSection, ContextSectionKind, ContextSnippet, DepthLimit,
-    GraphRanker, HybridRanker, LexicalRanker, OmittedContext, RankingMode, TokenEstimator,
-    extract_snippet, is_subsequence, resolve_roots, retrieve_graph_context, tokenize,
+    ContextQuery, ContextRanker, ContextRetrievalOptions, ContextSection, ContextSectionKind,
+    ContextSnippet, DepthLimit, GraphRanker, HybridRanker, LexicalRanker, OmittedContext,
+    RankingMode, TokenEstimator, extract_snippet, is_subsequence, resolve_roots,
+    retrieve_graph_context, retrieve_graph_context_with_options, tokenize,
 };
 
 pub use backend::{
