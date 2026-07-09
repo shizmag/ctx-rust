@@ -13,6 +13,10 @@ tree-sitter-python = "0.23"
 walkdir = "2"
 sha2 = "0.10"
 serde_json = "1"
+ctx-core = { path = "../ctx-core" }
+ctx-render = { path = "../ctx-render" }
+ctx-config = { path = "../ctx-config" }
+ctx-models = { path = "../ctx-models" }
 
 [dev-dependencies]
 tempfile = "3"

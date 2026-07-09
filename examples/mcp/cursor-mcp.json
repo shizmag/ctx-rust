@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ctx": {
+      "command": "/path/to/ctx",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}

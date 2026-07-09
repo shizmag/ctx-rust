@@ -17,4 +17,7 @@ pub enum CodeGraphError {
 
     #[error("ambiguous symbol: {0}")]
     AmbiguousSymbol(String),
+
+    #[error("index not found: {0}")]
+    IndexNotFound(String),
 }

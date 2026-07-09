@@ -36,8 +36,9 @@ Build a local SQLite semantic index of your Rust and Python codebases.
 
 ## Model Context Protocol (MCP) Server
 
-- **Full MCP Immersion**: Seamless integration with LLM clients (e.g., Claude desktop, Cursor, Gemini, or Claude Code) using the standard stdio protocol.
-- **Interactive Context Retrieval**: Provide LLMs with tools to resolve code dependencies, lookup symbol definitions, and extract functional neighborhoods dynamically.
+- **stdio MCP server**: Integrates with Cursor, Claude Desktop, and other MCP clients.
+- **Full tool catalog**: `get_affected_context`, graph traversal, project context, symbol search, and index rebuild.
+- **Resources & prompts**: Index status, project tree summary, and guided symbol exploration.
 
 ## Multiple Output Formats
 
@@ -316,7 +317,17 @@ Options:
 
 # Model Context Protocol (MCP) Server
 
-`ctx` embeds a fully featured **Model Context Protocol (MCP)** server over standard input/output (stdio), allowing LLM agents (like Claude desktop, Cursor, Gemini, or Claude Code) to interact with your codebase context dynamically.
+`ctx` embeds a **Model Context Protocol (MCP)** server over standard input/output (stdio), allowing LLM agents (Cursor, Claude Desktop, Gemini, Claude Code, etc.) to interact with your codebase context dynamically.
+
+## Prerequisites
+
+Build the codegraph index **before** first use:
+
+```bash
+ctx graph build --with-lsp
+```
+
+The MCP server opens an existing index on `initialize` but does **not** auto-build. If the index is missing, initialization fails with a message pointing to the command above. Agents can also call the `rebuild_index` tool when a rebuild is needed.
 
 ## Run MCP Server
 
@@ -324,21 +335,126 @@ Options:
 ctx mcp
 ```
 
-This starts a JSON-RPC 2.0 stdio server. When initialized by an MCP client, the server:
-1. Automatically loads or rebuilds/updates the local SQLite codegraph index for the initialized workspace path.
-2. Registers context retrieval tools to the LLM agent.
+This starts a JSON-RPC 2.0 stdio server (protocol version `2024-11-05`). Progress and status messages are logged to **stderr** (e.g. `Index loaded`, `Index not found — run ctx graph build --with-lsp`).
 
-## Exposed Tools
+## Client Configuration
+
+Example configs are in `examples/mcp/`. Replace `/path/to/ctx` with the absolute path to your `ctx` binary, or ensure `ctx` is on `PATH` and use `"command": "ctx"`.
+
+### Cursor
+
+Copy or merge into `.cursor/mcp.json` (see `examples/mcp/cursor-mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ctx": {
+      "command": "/path/to/ctx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to Claude Desktop MCP config (see `examples/mcp/claude-desktop-config.json`):
+
+```json
+{
+  "mcpServers": {
+    "ctx": {
+      "command": "/path/to/ctx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_affected_context` | **Primary LLM tool.** Budget-aware ranked context (same as `ctx graph affect`). |
+| `get_graph_context` | Graph neighborhood with code snippets. |
+| `get_project_context` | Full project context (same as `ctx -C`). |
+| `list_symbols` | List or search indexed symbols. |
+| `get_callers` | Direct callers of a symbol. |
+| `get_callees` | Direct callees of a symbol. |
+| `rebuild_index` | Rebuild the codegraph index. |
+
+### `get_affected_context`
+
+- `query` (required): Symbol name or qualified path.
+- `mode` (optional): `neighborhood`, `callers`, `callees`, `dependencies`, `dependents`, `forward`, `reverse`, `forward-slice`, `reverse-slice`, `impact`. Default: `neighborhood`.
+- `depth` (optional): Integer or `"auto"`. Default: `auto`.
+- `max_nodes`, `max_files` (optional): Graph limits. Defaults: `200`, `50`.
+- `token_budget` (optional): Default `12000`.
+- `model_context_window` (optional): Default `128000`.
+- `packing` (optional): `sandwich`, `frontloaded`, `balanced`. Default: `sandwich`.
+- `ranking` (optional): `hybrid`, `graph`, `lexical`. Default: `hybrid`.
+- `include_tests`, `include_unresolved`, `no_snippets` (optional booleans).
+- `edge_kind` (optional array): e.g. `Call`, `Import`.
+- `context_lines` (optional): Snippet padding. Default: `3`.
+- `format` (optional): `text` or `json`. Default: `text`.
 
 ### `get_graph_context`
-Allows the agent to query the codebase's call graph and symbol definitions.
-- **Arguments**:
-  - `query` (string, required): The symbol name or qualified path to resolve.
-  - `mode` (string, optional): Traversal mode (`neighborhood`, `callers`, `callees`, `dependencies`, `dependents`, `impact`). Default is `neighborhood`.
-  - `depth` (integer, optional): BFS traversal depth. Default is `2`.
-- **Behavior**:
-  - Automatically handles ambiguity (if multiple symbols match, it prompts the agent with list of candidates).
-  - Fetches matching code snippets and renders a clean Markdown output containing file paths, line numbers, call graph diagrams, and the code blocks.
+
+- `query` (required): Symbol name or qualified path.
+- `mode` (optional): Same modes as above. Default: `neighborhood`.
+- `depth` (optional): BFS depth. Default: `2`.
+- `max_nodes` (optional): Default `40`.
+- `max_files` (optional): Default `20` (`0` = unlimited).
+
+### `get_project_context`
+
+- `format` (optional): `markdown`, `xml`, `plain`. Default: `markdown`.
+- `mode` (optional): `smart`, `code`, `docs`, `llm`, `all`. Default: `smart`.
+- `max_depth`, `max_file_size` (optional).
+- `include_stats` (optional): Default `true`.
+
+### `list_symbols`
+
+- `query` (optional): Filter symbols; omit to list.
+- `limit` (optional): Default `50`.
+
+### `get_callers` / `get_callees`
+
+- `query` (required): Symbol name or qualified path.
+
+### `rebuild_index`
+
+- `use_lsp` (optional): Use LSP resolution. Default: `true`.
+
+When symbol resolution is ambiguous, tools return structured text listing candidate symbols so the agent can refine `query` and retry.
+
+## Resources
+
+| URI | Description |
+|-----|-------------|
+| `ctx://index/status` | Index build status and metadata (files, symbols, edges). |
+| `ctx://project/tree` | Brief project tree summary. |
+
+## Prompts
+
+| Prompt | Arguments | Description |
+|--------|-----------|-------------|
+| `explore-symbol` | `symbol` (required) | Guided workflow for exploring a symbol with ctx tools. |
+
+## Protocol Methods
+
+- `initialize`, `notifications/initialized`
+- `ping`
+- `tools/list`, `tools/call`
+- `resources/list`, `resources/read`
+- `prompts/list`, `prompts/get`
+
+## Operational Notes
+
+- **Pre-build required**: Run `ctx graph build --with-lsp` before connecting an MCP client.
+- **No mid-session workspace switch**: The workspace is fixed at `initialize`; re-connect to change projects.
+- **stderr logging**: Status messages go to stderr; JSON-RPC responses go to stdout.
+- **Disambiguation**: Ambiguous symbols return candidate lists instead of errors — this is the intended MCP-interactive pattern.
 
 ---
 
@@ -396,7 +512,7 @@ ctx --interactive
 
 ### Incremental Updates
 The CodeGraph index is backed by a local SQLite database (`.ctx-codegraph/codegraph.sqlite`).
-`ctx` checks file modification times (`mtime`) and file sizes (`size`) to identify modified, added, or deleted files. Upon loading the service (either via CLI or MCP), `ctx` updates the index **incrementally** in milliseconds, avoiding expensive rebuilds.
+`ctx` checks file modification times (`mtime`) and file sizes (`size`) to identify modified, added, or deleted files. The CLI updates the index **incrementally** in milliseconds when loading graph commands. The MCP server opens the existing index without auto-building; use `ctx graph build` or the `rebuild_index` MCP tool to refresh.
 
 ### Dual Resolution Strategies
 - **Tree-Sitter Parsing**: High-speed local AST parsing of symbols, functions, and import/calls for Rust and Python.

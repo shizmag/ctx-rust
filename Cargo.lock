@@ -327,6 +327,10 @@ dependencies = [
 name = "ctx-codegraph"
 version = "0.1.0"
 dependencies = [
+ "ctx-config",
+ "ctx-core",
+ "ctx-models",
+ "ctx-render",
  "rusqlite",
  "serde",
  "serde_json",

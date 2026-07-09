@@ -28,6 +28,27 @@ impl GraphContextService {
         &self.repo_root
     }
 
+    /// Open an existing codegraph index without building or updating it.
+    pub fn load_only(repo_root: &Path) -> Result<Self, CodeGraphError> {
+        let workspace_root = crate::storage::find_workspace_root(repo_root);
+        let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+        if !db_path.exists() {
+            return Err(CodeGraphError::IndexNotFound(format!(
+                "Index not found at {}. Run `ctx graph build --with-lsp` first.",
+                db_path.display()
+            )));
+        }
+        let conn = crate::storage::open_db(&workspace_root)?;
+        Ok(Self {
+            repo_root: workspace_root,
+            conn: Mutex::new(conn),
+        })
+    }
+
+    pub fn lock_conn(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        self.conn.lock().unwrap()
+    }
+
     pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
         let workspace_root = crate::storage::find_workspace_root(repo_root);
         let default_options = crate::index::BuildIndexOptions {
