@@ -1,6 +1,9 @@
 pub mod parser;
 pub mod resolver;
 
+#[cfg(test)]
+mod parser_tests;
+
 pub use parser::{RustParser, parse_rust_file};
 pub use resolver::RustResolver;
 

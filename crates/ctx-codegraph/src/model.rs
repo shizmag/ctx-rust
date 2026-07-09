@@ -577,3 +577,208 @@ pub enum UpdatePlan {
     EdgeOnlyRebuild(AffectedSet),
     FullRebuild(RebuildReason),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn symbol_kind_as_str_roundtrip() {
+        let variants = [
+            SymbolKind::Function,
+            SymbolKind::Method,
+            SymbolKind::Impl,
+            SymbolKind::Struct,
+            SymbolKind::Class,
+            SymbolKind::Enum,
+            SymbolKind::Trait,
+            SymbolKind::Module,
+            SymbolKind::Test,
+        ];
+        for kind in variants {
+            let s = kind.as_str();
+            assert_eq!(SymbolKind::from_str(s), Some(kind));
+        }
+        assert_eq!(SymbolKind::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn occurrence_kind_as_str_roundtrip() {
+        let variants = [
+            OccurrenceKind::Call,
+            OccurrenceKind::Reference,
+            OccurrenceKind::Import,
+            OccurrenceKind::Export,
+            OccurrenceKind::TypeUse,
+            OccurrenceKind::DefinitionUse,
+            OccurrenceKind::VariableRead,
+            OccurrenceKind::VariableWrite,
+            OccurrenceKind::MacroInvocation,
+            OccurrenceKind::Unknown,
+        ];
+        for kind in variants {
+            let s = kind.as_str();
+            assert_eq!(OccurrenceKind::from_str(s), Some(kind));
+        }
+        assert_eq!(OccurrenceKind::from_str("bogus"), None);
+    }
+
+    #[test]
+    fn edge_kind_as_str_roundtrip() {
+        let variants = [
+            EdgeKind::Call,
+            EdgeKind::Reference,
+            EdgeKind::Import,
+            EdgeKind::Export,
+            EdgeKind::TypeUse,
+            EdgeKind::Inherits,
+            EdgeKind::Implements,
+            EdgeKind::DataFlow,
+            EdgeKind::Contains,
+            EdgeKind::Unknown,
+        ];
+        for kind in variants {
+            let s = kind.as_str();
+            assert_eq!(EdgeKind::from_str(s), Some(kind));
+        }
+        assert_eq!(EdgeKind::from_str("nope"), None);
+    }
+
+    #[test]
+    fn resolution_confidence_as_str_roundtrip_and_aliases() {
+        let canonical = [
+            (ResolutionConfidence::Syntax, "Syntax"),
+            (ResolutionConfidence::Heuristic, "Heuristic"),
+            (ResolutionConfidence::LspExact, "LspExact"),
+            (ResolutionConfidence::Unresolved, "Unresolved"),
+        ];
+        for (kind, expected) in canonical {
+            assert_eq!(kind.as_str(), expected);
+            assert_eq!(ResolutionConfidence::from_str(expected), Some(kind));
+        }
+
+        assert_eq!(
+            ResolutionConfidence::from_str("Local"),
+            Some(ResolutionConfidence::Syntax)
+        );
+        assert_eq!(
+            ResolutionConfidence::from_str("NameOnly"),
+            Some(ResolutionConfidence::Heuristic)
+        );
+        assert_eq!(
+            ResolutionConfidence::from_str("Ambiguous"),
+            Some(ResolutionConfidence::Heuristic)
+        );
+        assert_eq!(
+            ResolutionConfidence::from_str("Exact"),
+            Some(ResolutionConfidence::LspExact)
+        );
+        assert_eq!(ResolutionConfidence::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn resolution_confidence_display() {
+        assert_eq!(format!("{}", ResolutionConfidence::Syntax), "Syntax");
+        assert_eq!(format!("{}", ResolutionConfidence::LspExact), "LspExact");
+    }
+
+    #[test]
+    fn file_parse_status_as_str_roundtrip() {
+        assert_eq!(FileParseStatus::Success.as_str(), "Success");
+        assert_eq!(FileParseStatus::Failed.as_str(), "Failed");
+        assert_eq!(
+            FileParseStatus::from_str("Success"),
+            Some(FileParseStatus::Success)
+        );
+        assert_eq!(
+            FileParseStatus::from_str("Failed"),
+            Some(FileParseStatus::Failed)
+        );
+        assert_eq!(FileParseStatus::from_str("Pending"), None);
+    }
+
+    #[test]
+    fn language_id_new_lowercase_and_display() {
+        let id = LanguageId::new("RuSt");
+        assert_eq!(id.as_str(), "rust");
+        assert_eq!(id.to_string(), "rust");
+        assert_eq!(format!("{id}"), "rust");
+
+        let rust = LanguageId::rust();
+        assert_eq!(rust.as_str(), "rust");
+    }
+
+    #[test]
+    fn language_constructor_and_type_alias() {
+        let lang: Language = Language("Python".to_string());
+        assert_eq!(lang.as_str(), "Python");
+    }
+
+    #[test]
+    fn text_range_to_source_range() {
+        let text = TextRange {
+            start_line: 2,
+            start_col: 5,
+            end_line: 10,
+            end_col: 20,
+        };
+        let source: SourceRange = text.clone().into();
+        assert_eq!(source.start_line, 2);
+        assert_eq!(source.start_col, 5);
+        assert_eq!(source.end_line, 10);
+        assert_eq!(source.end_col, 20);
+        assert_eq!(source, SourceRange::from(text));
+    }
+
+    #[test]
+    fn symbol_kind_to_language_object_kind() {
+        let mappings = [
+            (SymbolKind::Function, LanguageObjectKind::Function),
+            (SymbolKind::Method, LanguageObjectKind::Method),
+            (SymbolKind::Struct, LanguageObjectKind::Struct),
+            (SymbolKind::Class, LanguageObjectKind::Class),
+            (SymbolKind::Enum, LanguageObjectKind::Enum),
+            (SymbolKind::Trait, LanguageObjectKind::Trait),
+            (SymbolKind::Impl, LanguageObjectKind::Impl),
+            (SymbolKind::Module, LanguageObjectKind::Module),
+            (SymbolKind::Test, LanguageObjectKind::Function),
+        ];
+        for (symbol_kind, object_kind) in mappings {
+            assert_eq!(LanguageObjectKind::from(symbol_kind), object_kind);
+        }
+    }
+
+    #[test]
+    fn rebuild_reason_as_str_all_variants() {
+        let reasons = [
+            RebuildReason::MissingDatabase,
+            RebuildReason::CorruptDatabase,
+            RebuildReason::SchemaVersionChanged,
+            RebuildReason::IndexerVersionChanged,
+            RebuildReason::BackendSetChanged,
+            RebuildReason::BackendVersionChanged,
+            RebuildReason::ParserVersionChanged,
+            RebuildReason::ParserConfigChanged,
+            RebuildReason::ResolverVersionChanged,
+            RebuildReason::ResolverConfigChanged,
+            RebuildReason::DiscoveryConfigChanged,
+            RebuildReason::ChangeDetectionStrategyChanged,
+            RebuildReason::PreviousRunIncomplete,
+            RebuildReason::PreviousRunFailed,
+        ];
+        for reason in reasons {
+            let s = reason.as_str();
+            assert!(!s.is_empty());
+            assert_eq!(s.chars().next().unwrap().is_uppercase(), true);
+        }
+        assert_eq!(RebuildReason::MissingDatabase.as_str(), "MissingDatabase");
+        assert_eq!(
+            RebuildReason::ChangeDetectionStrategyChanged.as_str(),
+            "ChangeDetectionStrategyChanged"
+        );
+        assert_eq!(
+            RebuildReason::PreviousRunFailed.as_str(),
+            "PreviousRunFailed"
+        );
+    }
+}
