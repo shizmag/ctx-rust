@@ -1363,6 +1363,12 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
     let path = &stats.path;
     println!("📊 ctx stats for {}", path.display());
     let config = ctx_config::find_and_load_config(path).unwrap_or_default();
+
+    // Note if collection disabled (affects what MCP will persist).
+    if let Some(false) = config.stats_enabled {
+        println!("(stats_enabled=false in .ctxconfig; MCP usage collection disabled)");
+    }
+
     let mode = config.mode.unwrap_or(Mode::Smart);
     let scan_options = ctx_models::ScanOptions {
         max_depth: config.max_depth,
@@ -1379,14 +1385,87 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
         scan_result.summary.lines,
         scan_result.summary.tokens
     );
-    // Index note
-    let db = path.join(".ctx-codegraph/codegraph.sqlite");
-    if db.exists() {
-        println!("Codegraph index present");
+
+    // Detailed codegraph index: open directly (similar to resources read_index_status) without loading full service.
+    let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
+    let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+    if db_path.exists() {
+        println!("Codegraph index present at {}", db_path.display());
+
+        let options = ctx_codegraph::index::BuildIndexOptions {
+            use_lsp: false,
+            max_depth: None,
+            include_tests: true,
+            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+        };
+        let state = ctx_codegraph::storage::get_index_state(&workspace_root, &options)
+            .unwrap_or(ctx_codegraph::model::IndexState::Missing);
+        println!("- State: {:?}", state);
+
+        match ctx_codegraph::open_db(&workspace_root) {
+            Ok(conn) => {
+                let file_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let symbol_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let edge_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+                    .unwrap_or(0);
+                println!("- Files indexed: {}", file_count);
+                println!("- Symbols: {}", symbol_count);
+                println!("- Edges: {}", edge_count);
+
+                let meta_value = |key: &str| -> Option<String> {
+                    conn.query_row("SELECT value FROM metadata WHERE key = ?", [key], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .ok()
+                };
+                if let Some(v) = meta_value("schema_version") {
+                    println!("- Schema version: {}", v);
+                }
+                if let Some(v) = meta_value("resolver_id") {
+                    println!("- Resolver: {}", v);
+                }
+                if let Some(v) = meta_value("change_detection_strategy") {
+                    println!("- Change detection: {}", v);
+                }
+                if let Some(v) = meta_value("indexer_version") {
+                    println!("- Indexer version: {}", v);
+                }
+                if let Some(v) = meta_value("lsp_enrichment") {
+                    println!("- LSP enrichment: {}", v);
+                }
+                if let Ok(meta) = std::fs::metadata(&db_path) {
+                    if let Ok(mtime) = meta.modified() {
+                        println!("- DB mtime (last build approx): {:?}", mtime);
+                    }
+                }
+            }
+            Err(e) => println!("- (could not open DB: {})", e),
+        }
     } else {
         println!("Codegraph index: none (run `ctx graph build`)");
     }
-    println!("MCP usage: see ctx://stats/mcp when running MCP server (stats_enabled in config).");
+
+    // MCP last known: read persisted JSON from mcp_last_stats key (written by MCP shutdown).
+    if let Some(json_str) = ctx_codegraph::storage::read_metadata(&workspace_root, "mcp_last_stats") {
+        println!("Last MCP session stats (persisted from mcp_last_stats):");
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            if let Ok(p) = serde_json::to_string_pretty(&val) {
+                println!("{}", p);
+            } else {
+                println!("{}", json_str);
+            }
+        } else {
+            println!("{}", json_str);
+        }
+    } else {
+        println!("MCP usage: no prior persisted stats (run `ctx mcp serve` to collect; also ctx://stats/mcp live)");
+    }
+
     Ok(())
 }
 

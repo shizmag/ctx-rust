@@ -203,7 +203,7 @@ pub fn validate_index_invariants(conn: &rusqlite::Connection) -> Result<(), Code
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::workspace::open_db;
+    use crate::storage::workspace::{open_db, read_metadata, write_metadata};
 
     #[test]
     fn test_initializes_schema() {
@@ -227,5 +227,28 @@ mod tests {
         assert!(tables.contains(&"symbols".to_string()));
         assert!(tables.contains(&"occurrences".to_string()));
         assert!(tables.contains(&"edges".to_string()));
+    }
+
+    #[test]
+    fn test_read_write_metadata_helpers() {
+        // Regression test for helpers used by `ctx stats` (index details) and MCP persist of mcp_last_stats.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join(".ctx-codegraph/codegraph.sqlite");
+        assert!(!db_path.exists());
+
+        // absent -> no create, none
+        assert!(read_metadata(dir.path(), "k").is_none());
+        assert!(write_metadata(dir.path(), "k", "v").is_err());
+        assert!(!db_path.exists());
+
+        let conn = open_db(dir.path()).unwrap();
+        init_schema(&conn).unwrap();
+        assert!(db_path.exists());
+
+        write_metadata(dir.path(), "mcp_last_stats", "{\"calls\":5}").unwrap();
+        assert_eq!(read_metadata(dir.path(), "mcp_last_stats").as_deref(), Some("{\"calls\":5}"));
+        write_metadata(dir.path(), "schema_version", "test").unwrap();
+        assert_eq!(read_metadata(dir.path(), "schema_version").as_deref(), Some("test"));
+        assert!(read_metadata(dir.path(), "missing").is_none());
     }
 }

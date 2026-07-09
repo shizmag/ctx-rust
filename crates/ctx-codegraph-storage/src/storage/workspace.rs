@@ -55,3 +55,43 @@ pub fn open_codegraph_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphE
 pub fn open_db(root: &Path) -> Result<rusqlite::Connection, CodeGraphError> {
     open_codegraph_db(root)
 }
+
+/// Write a key/value pair into the codegraph DB's metadata table.
+/// Does not create the DB file (or dir) if the index does not exist yet.
+/// This is used by MCP to persist last usage stats, and by CLI stats to read them.
+/// Returns Err if no DB file present.
+pub fn write_metadata(root: &Path, key: &str, value: &str) -> Result<(), CodeGraphError> {
+    let workspace_root = find_workspace_root(root);
+    let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+    if !db_path.exists() {
+        return Err(CodeGraphError::IndexNotFound(format!(
+            "no index at {}",
+            db_path.display()
+        )));
+    }
+    let conn = rusqlite::Connection::open(&db_path)?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// Read metadata value for key, if DB file exists and key set.
+/// Returns None with no side effects (no DB creation).
+pub fn read_metadata(root: &Path, key: &str) -> Option<String> {
+    let workspace_root = find_workspace_root(root);
+    let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    conn.query_row("SELECT value FROM metadata WHERE key = ?", [key], |row| {
+        row.get::<_, String>(0)
+    })
+    .ok()
+}

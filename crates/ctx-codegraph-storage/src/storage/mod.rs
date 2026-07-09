@@ -23,4 +23,4 @@ pub use rebuild::{
     run_incremental_update_with_registry,
 };
 pub use schema::{init_schema, validate_index_invariants};
-pub use workspace::{find_workspace_root, open_codegraph_db, open_db};
+pub use workspace::{find_workspace_root, open_codegraph_db, open_db, read_metadata, write_metadata};
