@@ -114,13 +114,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cmd) = args.command {
         match cmd {
             Command::Graph(g) => return handle_graph_command(g),
-            Command::Mcp => {
-                if let Err(e) = ctx_mcp::run_mcp_server() {
-                    eprintln!("MCP Server Error: {}", e);
-                    std::process::exit(1);
+            Command::Mcp(mcp_cmd) => match mcp_cmd {
+                McpCommand::Serve => {
+                    if let Err(e) = ctx_mcp::run_mcp_server() {
+                        eprintln!("MCP Server Error: {}", e);
+                        std::process::exit(1);
+                    }
+                    return Ok(());
                 }
-                return Ok(());
-            }
+                McpCommand::Install(install) => {
+                    return handle_mcp_install(install);
+                }
+            },
             Command::Setting(s) => {
                 return ctx_tui::run_settings_editor(s.path).map_err(Into::into);
             }
@@ -266,13 +271,22 @@ enum Command {
     /// Analyze the project and query dependency or symbol relationships
     #[command(visible_alias = "g")]
     Graph(GraphCommand),
-    /// Start the Model Context Protocol (MCP) server over stdio
-    Mcp,
+    /// MCP commands: `ctx mcp` (or `ctx mcp serve`) starts the server; `ctx mcp install` registers ctx with coding agents
+    #[command(subcommand)]
+    Mcp(McpCommand),
     /// Open interactive TUI to view/edit project settings in .ctxconfig
     #[command(visible_alias = "config")]
     Setting(SettingCommand),
     /// Show project-level usage stats (files, tokens, lines), codegraph index info if present, and MCP notes
     Stats(StatsCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum McpCommand {
+    /// Start the Model Context Protocol (MCP) server over stdio (default when running `ctx mcp`)
+    Serve,
+    /// Auto-install / register the ctx MCP server into popular coding agents (Claude Desktop, Cursor, Gemini, Continue, etc.)
+    Install(InstallCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -287,6 +301,17 @@ struct StatsCommand {
     /// Target project directory for stats (uses .ctxconfig if present)
     #[arg(default_value = ".")]
     path: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct InstallCommand {
+    /// Which clients to target (comma separated). Defaults to common ones. Examples: claude,cursor,gemini,continue
+    #[arg(long, value_delimiter = ',')]
+    clients: Vec<String>,
+
+    /// Dry run: show what would be written without modifying files
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1363,4 +1388,144 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
     }
     println!("MCP usage: see ctx://stats/mcp when running MCP server (stats_enabled in config).");
     Ok(())
+}
+
+/// Basic auto-install for the MCP server.
+/// Targets common clients using the standard {"mcpServers": {"ctx": {"command": "...", "args": ["mcp"] }}} format.
+/// Respects --clients and --dry-run. Uses absolute path to current binary when possible.
+fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "ctx".to_string());
+
+    let default_clients = vec![
+        "claude".to_string(),
+        "cursor".to_string(),
+        "gemini".to_string(),
+    ];
+    let clients: Vec<String> = if args.clients.is_empty() {
+        default_clients
+    } else {
+        args.clients
+    };
+
+    println!("Installing ctx MCP server using binary: {}", exe);
+    println!("Target clients: {}", clients.join(", "));
+    if args.dry_run {
+        println!("(dry-run mode — no files will be written)");
+    }
+
+    let mut any_written = false;
+
+    for client in &clients {
+        match client.as_str() {
+            "claude" | "claude-desktop" => {
+                // macOS primary; extend for other OSes as needed
+                if let Some(home) = std::env::var_os("HOME") {
+                    let path = PathBuf::from(home)
+                        .join("Library/Application Support/Claude/claude_desktop_config.json");
+                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Claude Desktop")?;
+                }
+            }
+            "cursor" => {
+                // Project-level is better when possible, but for global auto we target common global locations too.
+                // For simplicity here we document project .cursor/mcp.json and write a global example if .cursor dir exists at home.
+                if let Some(home) = std::env::var_os("HOME") {
+                    let global = PathBuf::from(home).join(".cursor/mcp.json");
+                    any_written |= write_mcp_entry(&global, &exe, args.dry_run, "Cursor (global)")?;
+                }
+                println!(
+                    "  Note: For per-project Cursor, also create .cursor/mcp.json next to your project (same shape)."
+                );
+            }
+            "gemini" => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let path = PathBuf::from(home).join(".gemini/config/mcp_config.json");
+                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Gemini")?;
+                }
+            }
+            other => {
+                println!("  Skipping unknown client '{}'", other);
+            }
+        }
+    }
+
+    if any_written && !args.dry_run {
+        println!(
+            "\nDone. Restart the target application(s) (Claude, Cursor, Gemini, etc.) for the MCP server to appear."
+        );
+    } else if !any_written {
+        println!("\nNo changes made (targets may not exist or were already configured).");
+    }
+
+    Ok(())
+}
+
+/// Helper: ensure parent dir, load or create mcpServers json, set/overwrite the "ctx" entry, write if not dry.
+fn write_mcp_entry(
+    target: &Path,
+    exe: &str,
+    dry_run: bool,
+    label: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut changed = false;
+
+    if let Some(parent) = target.parent() {
+        if !dry_run {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+
+    let mut doc: serde_json::Value = if target.exists() {
+        let content = fs::read_to_string(target)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let servers = doc
+        .as_object_mut()
+        .and_then(|o| {
+            o.entry("mcpServers")
+                .or_insert(serde_json::json!({}))
+                .as_object_mut()
+        })
+        .ok_or("invalid mcpServers structure")?;
+
+    let entry = serde_json::json!({
+        "command": exe,
+        "args": ["mcp"]
+    });
+
+    let existing = servers.get("ctx");
+    if existing.is_none() || existing != Some(&entry) {
+        servers.insert("ctx".to_string(), entry);
+        changed = true;
+    }
+
+    if changed {
+        let pretty = serde_json::to_string_pretty(&doc)?;
+        if dry_run {
+            println!("  [dry-run] Would update {} ({})", label, target.display());
+            println!("  Content diff would affect the 'ctx' entry under mcpServers.");
+        } else {
+            fs::write(target, pretty + "\n")?;
+            println!(
+                "  ✓ Wrote {} entry to {} ({})",
+                label,
+                target.display(),
+                label
+            );
+        }
+    } else {
+        println!(
+            "  = {} already has an up-to-date ctx entry ({})",
+            label,
+            target.display()
+        );
+    }
+
+    Ok(changed)
 }

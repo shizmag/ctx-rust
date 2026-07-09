@@ -192,3 +192,25 @@ fn test_cli_setting_subcommand_help_and_invocation() {
             || !stderr.is_empty()
     );
 }
+
+#[test]
+fn test_cli_mcp_install_help_and_dry_run() {
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["mcp", "install", "--help"])
+        .output()
+        .expect("failed");
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.contains("Auto-install") || out.contains("register the ctx MCP"));
+
+    // dry-run should succeed without writing anything
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["mcp", "install", "--dry-run"])
+        .output()
+        .expect("failed");
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.contains("dry-run") || out.contains("Would update"));
+}
