@@ -13,6 +13,11 @@ pub fn serialize_yaml<T: Serialize>(value: &T) -> Result<String, String> {
     serde_yaml::to_string(value).map_err(|e| e.to_string())
 }
 
+/// Helper to produce serde_json::Value directly from DTOs (for structuredContent in MCP).
+pub fn to_value<T: Serialize>(value: &T) -> Result<serde_json::Value, String> {
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SymbolDto {
     pub kind: String,

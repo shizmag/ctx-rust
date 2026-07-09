@@ -65,6 +65,20 @@ pub fn text_tool_result(text: impl Into<String>, is_error: bool) -> serde_json::
     })
 }
 
+/// Returns tool result with optional structuredContent (parsed object) for json/yaml formats.
+/// Keeps text content for compatibility per modern MCP tool result shape.
+pub fn make_tool_result(
+    text: impl Into<String>,
+    structured: Option<serde_json::Value>,
+    is_error: bool,
+) -> serde_json::Value {
+    let mut res = text_tool_result(text, is_error);
+    if let (Some(sc), Some(obj)) = (structured, res.as_object_mut()) {
+        obj.insert("structuredContent".to_string(), sc);
+    }
+    res
+}
+
 pub fn get_workspace_path(params: &serde_json::Value) -> PathBuf {
     if let Some(folders) = params.get("workspaceFolders").and_then(|f| f.as_array())
         && let Some(first) = folders.first()
@@ -308,6 +322,18 @@ mod tests {
         let err = text_tool_result("something failed", true);
         assert_eq!(err["isError"], true);
         assert_eq!(err["content"][0]["text"], "something failed");
+    }
+
+    #[test]
+    fn make_tool_result_includes_structured_content_when_present() {
+        let sc = serde_json::json!({"query": "foo", "nodes": []});
+        let res = make_tool_result("yaml or json text", Some(sc.clone()), false);
+        assert_eq!(res["isError"], false);
+        assert_eq!(res["content"][0]["text"], "yaml or json text");
+        assert_eq!(res["structuredContent"]["query"], "foo");
+        // without sc
+        let plain = make_tool_result("plain", None, false);
+        assert!(plain.get("structuredContent").is_none());
     }
 
     #[test]

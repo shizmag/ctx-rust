@@ -479,6 +479,25 @@ pub fn render_affected_context_yaml(pack: &ctx_codegraph::ContextPack, root_path
     serialize_yaml(&dto)
 }
 
+/// Return structured value for affected context (used for MCP structuredContent when format=json/yaml).
+pub fn affected_context_to_structured_value(pack: &ctx_codegraph::ContextPack, root_path: &Path) -> Result<serde_json::Value, String> {
+    let dto = affected_pack_to_dto(pack, root_path);
+    ctx_dto::to_value(&dto)
+}
+
+/// Return structured value for graph context (used for MCP structuredContent when format=json/yaml).
+pub fn graph_context_to_structured_value(
+    result: &ctx_codegraph::model::GraphContextResult,
+    root_path: &Path,
+    mode: ctx_codegraph::model::GraphContextMode,
+    depth: usize,
+    max_nodes: usize,
+    max_files: usize,
+) -> Result<serde_json::Value, String> {
+    let dto = graph_result_to_dto(result, root_path, mode, depth, max_nodes, max_files);
+    ctx_dto::to_value(&dto)
+}
+
 fn read_file_span(path: &Path, range: &ctx_codegraph::model::SourceRange) -> String {
     match std::fs::read_to_string(path) {
         Ok(content) => {
@@ -830,5 +849,11 @@ mod tests {
         // ser compact
         let ypack = render_affected_context_yaml(&pack, &root).unwrap();
         assert!(ypack.contains("query: foo"));
+
+        // new helpers for structuredContent
+        let sv = affected_context_to_structured_value(&pack, &root).unwrap();
+        assert_eq!(sv["query"], "foo");
+        let gv = graph_context_to_structured_value(&gctx, &root, GraphContextMode::Neighborhood, 1, 10, 5).unwrap();
+        assert!(gv.get("root").is_some());
     }
 }

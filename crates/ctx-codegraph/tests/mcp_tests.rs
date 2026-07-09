@@ -116,7 +116,7 @@ fn test_mcp_server_flow() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 9);
 
     let tool_names: Vec<&str> = tools
         .iter()
@@ -125,6 +125,8 @@ fn test_mcp_server_flow() {
     assert!(tool_names.contains(&"get_graph_context"));
     assert!(tool_names.contains(&"get_affected_context"));
     assert!(tool_names.contains(&"rebuild_index"));
+    assert!(tool_names.contains(&"read_file"));
+    assert!(tool_names.contains(&"search_code"));
 
     let call_resp = &responses[2];
     assert_eq!(call_resp.get("id").unwrap().as_i64().unwrap(), 3);
@@ -140,7 +142,7 @@ fn test_mcp_server_flow() {
 }
 
 #[test]
-fn test_mcp_initialize_requires_existing_index() {
+fn test_mcp_initialize_succeeds_without_index_file_tools_work() {
     let temp_dir = tempdir().unwrap();
     let root = temp_dir.path();
     fs::write(
@@ -148,6 +150,9 @@ fn test_mcp_initialize_requires_existing_index() {
         "[package]\nname = \"no_index\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
+    let src = root.join("src");
+    let _ = fs::create_dir(&src);
+    fs::write(src.join("lib.rs"), "pub fn example() { let x = 42; /* searchme */ }\n").unwrap();
 
     let root_uri = format!("file://{}", root.display());
     let init_request = serde_json::json!({
@@ -159,11 +164,33 @@ fn test_mcp_initialize_requires_existing_index() {
         }
     });
 
-    let responses = run_mcp_requests(&[init_request]);
+    // Send init + list + file tool calls in single server run (each run_mcp_requests starts fresh server).
+    let list_req = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let read_req = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": { "name": "read_file", "arguments": { "path": "src/lib.rs", "max_lines": 5 } }
+    });
+    let search_req = serde_json::json!({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": { "name": "search_code", "arguments": { "query": "searchme", "path_filter": "src" } }
+    });
+    let responses = run_mcp_requests(&[init_request, list_req, read_req, search_req]);
     let resp = &responses[0];
-    assert!(resp.get("error").is_some());
-    let message = resp["error"]["message"].as_str().unwrap();
-    assert!(message.contains("ctx graph build --with-lsp"));
+    // Init now succeeds without index to enable read_file/search_code (key for agent adoption).
+    assert!(resp.get("result").is_some(), "init must succeed for file tools");
+    assert!(resp.get("error").is_none());
+
+    // Verify new tools are listed and functional without index.
+    let tools = responses[1]["result"]["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"read_file"));
+    assert!(names.contains(&"search_code"));
+
+    let read_text = responses[2]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(read_text.contains("example()"));
+
+    let search_text = responses[3]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(search_text.contains("searchme"));
 }
 
 #[test]
@@ -248,7 +275,7 @@ fn test_mcp_list_symbols_and_callers() {
             "method": "tools/call",
             "params": {
                 "name": "list_symbols",
-                "arguments": { "query": "load", "limit": 10 }
+                "arguments": { "query": "load", "limit": 10, "kind": "fn" }
             }
         }),
         serde_json::json!({
