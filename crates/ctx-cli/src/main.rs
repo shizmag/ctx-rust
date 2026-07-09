@@ -1387,6 +1387,7 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
     );
 
     // Detailed codegraph index: open directly (similar to resources read_index_status) without loading full service.
+    // Reuses open_db + metadata queries + get_index_state for counts, schema, resolver, last build info.
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
     let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
     if db_path.exists() {
