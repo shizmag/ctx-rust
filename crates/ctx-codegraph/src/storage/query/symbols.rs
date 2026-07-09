@@ -387,11 +387,11 @@ mod tests {
     use crate::storage::schema::init_schema;
     use crate::storage::workspace::open_db;
     use crate::model::{
-        CodeIndex, FileParseStatus, FileSnapshot, Language, Symbol, SymbolKind, SymbolResolution,
-        TextRange,
+        CodeIndex, FileParseStatus, FileSnapshot, Language, Symbol, SymbolId, SymbolKind,
+        SymbolResolution, TextRange,
     };
     use crate::model::LanguageObjectKind;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn test_find_symbols_exact_and_partial() {
@@ -589,6 +589,231 @@ mod tests {
         // 3. отсутствующий query возвращает NotFound
         let res4 = resolve_symbol(&conn, "non_existent").unwrap();
         assert_eq!(res4, SymbolResolution::NotFound);
+    }
+
+    fn setup_symbols_index(dir: &tempfile::TempDir) -> (rusqlite::Connection, SymbolId, SymbolId) {
+        let file_path = dir.path().join("src/lib.rs");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+
+        let mut conn = open_db(dir.path()).unwrap();
+        init_schema(&conn).unwrap();
+
+        let mut index = CodeIndex {
+            root: dir.path().to_path_buf(),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/lib.rs"),
+                abs_path: file_path.clone(),
+                language: Language::rust(),
+                backend_id: "rust-backend".to_string(),
+                size_bytes: 200,
+                mtime_ms: 100,
+                mtime_ns: None,
+                content_hash: Some("hash1".to_string()),
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
+            }],
+            symbols: vec![
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "alpha".to_string(),
+                    qualified_name: "crate::alpha".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::rust(),
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 3,
+                        end_col: 1,
+                    },
+                    body_range: Some(TextRange {
+                        start_line: 2,
+                        start_col: 1,
+                        end_line: 2,
+                        end_col: 10,
+                    }),
+                },
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "beta".to_string(),
+                    qualified_name: "crate::beta".to_string(),
+                    kind: SymbolKind::Struct,
+                    language: Language::rust(),
+                    file: PathBuf::from("src/lib.rs"),
+                    range: TextRange {
+                        start_line: 4,
+                        start_col: 1,
+                        end_line: 6,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+            ],
+            occurrences: vec![],
+            call_sites: vec![],
+            edges: vec![],
+        };
+        save_index(&mut conn, &mut index).unwrap();
+
+        let alpha_id = index.symbols[0].id.unwrap();
+        let beta_id = index.symbols[1].id.unwrap();
+        (conn, alpha_id, beta_id)
+    }
+
+    #[test]
+    fn test_load_symbol_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, alpha_id, _) = setup_symbols_index(&dir);
+
+        let loaded = load_symbol(&conn, alpha_id).unwrap();
+        assert_eq!(loaded.id, Some(alpha_id));
+        assert_eq!(loaded.name, "alpha");
+        assert_eq!(loaded.qualified_name, "crate::alpha");
+        assert_eq!(loaded.kind, SymbolKind::Function);
+        assert_eq!(loaded.file, dir.path().join("src/lib.rs"));
+        let body = loaded.body_range.unwrap();
+        assert_eq!(body.start_line, 2);
+        assert_eq!(body.end_col, 10);
+    }
+
+    #[test]
+    fn test_load_symbol_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, _, _) = setup_symbols_index(&dir);
+
+        let err = load_symbol(&conn, SymbolId(99999)).unwrap_err();
+        assert!(matches!(err, CodeGraphError::SymbolNotFound(_)));
+    }
+
+    #[test]
+    fn test_load_symbols_by_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, alpha_id, beta_id) = setup_symbols_index(&dir);
+
+        let empty = load_symbols_by_ids(&conn, &[]).unwrap();
+        assert!(empty.is_empty());
+
+        let loaded = load_symbols_by_ids(&conn, &[alpha_id, beta_id]).unwrap();
+        assert_eq!(loaded.len(), 2);
+        let names: Vec<&str> = loaded.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+    }
+
+    #[test]
+    fn test_load_symbols_for_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, alpha_id, beta_id) = setup_symbols_index(&dir);
+        let file_path = dir.path().join("src/lib.rs");
+
+        let loaded = load_symbols_for_file(&conn, &file_path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.iter().any(|s| s.id == Some(alpha_id)));
+        assert!(loaded.iter().any(|s| s.id == Some(beta_id)));
+        assert!(loaded.iter().all(|s| s.file == file_path));
+    }
+
+    #[test]
+    fn test_load_symbols_for_missing_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, _, _) = setup_symbols_index(&dir);
+
+        let loaded = load_symbols_for_file(&conn, Path::new("/no/such/file.rs")).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_symbol_partial_unique() {
+        let dir = tempfile::tempdir().unwrap();
+        let (conn, _, _) = setup_symbols_index(&dir);
+
+        let unique_partial = resolve_symbol(&conn, "alp").unwrap();
+        if let SymbolResolution::Unique(ref obj) = unique_partial {
+            assert_eq!(obj.name, "alpha");
+        } else {
+            panic!("Expected Unique partial match, got {:?}", unique_partial);
+        }
+    }
+
+    #[test]
+    fn test_resolve_symbol_partial_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(dir.path()).unwrap();
+        init_schema(&conn).unwrap();
+
+        let mut index = CodeIndex {
+            root: dir.path().to_path_buf(),
+            files: vec![FileSnapshot {
+                file_id: None,
+                rel_path: PathBuf::from("src/other.rs"),
+                abs_path: dir.path().join("src/other.rs"),
+                language: Language::rust(),
+                backend_id: "rust-backend".to_string(),
+                size_bytes: 100,
+                mtime_ms: 100,
+                mtime_ns: None,
+                content_hash: None,
+                parser_id: "tree-sitter-rust".to_string(),
+                parser_version: "0.20.0".to_string(),
+                parser_config_hash: "".to_string(),
+                indexed_at_ms: None,
+                parse_status: FileParseStatus::Success,
+            }],
+            symbols: vec![
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "foo_handler".to_string(),
+                    qualified_name: "a::foo_handler".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::rust(),
+                    file: PathBuf::from("src/other.rs"),
+                    range: TextRange {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 2,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+                Symbol {
+                    id: None,
+                    file_id: None,
+                    name: "bar_handler".to_string(),
+                    qualified_name: "b::bar_handler".to_string(),
+                    kind: SymbolKind::Function,
+                    language: Language::rust(),
+                    file: PathBuf::from("src/other.rs"),
+                    range: TextRange {
+                        start_line: 3,
+                        start_col: 1,
+                        end_line: 4,
+                        end_col: 1,
+                    },
+                    body_range: None,
+                },
+            ],
+            occurrences: vec![],
+            call_sites: vec![],
+            edges: vec![],
+        };
+        save_index(&mut conn, &mut index).unwrap();
+
+        let ambiguous_partial = resolve_symbol(&conn, "handler").unwrap();
+        if let SymbolResolution::Ambiguous(ref objs) = ambiguous_partial {
+            assert_eq!(objs.len(), 2);
+        } else {
+            panic!(
+                "Expected Ambiguous partial match, got {:?}",
+                ambiguous_partial
+            );
+        }
     }
 
 }
