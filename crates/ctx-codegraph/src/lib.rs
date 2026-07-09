@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod context;
+pub mod discovery;
 pub mod error;
 pub mod index;
 pub mod languages;

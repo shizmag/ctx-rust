@@ -220,11 +220,7 @@ pub fn compute_index_diff_with_registry(
             let path = e.path();
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "target"
-                        || name == ".git"
-                        || name == ".codegraph"
-                        || name == ".ctx-codegraph"
-                    {
+                    if crate::discovery::should_skip_dir(name) {
                         return false;
                     }
                 }

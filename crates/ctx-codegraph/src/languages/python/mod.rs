@@ -56,11 +56,10 @@ impl LanguageBackend for PythonBackend {
     }
 
     fn workspace_markers(&self) -> &[WorkspaceMarker] {
-        static MARKERS: [WorkspaceMarker; 4] = [
+        static MARKERS: [WorkspaceMarker; 3] = [
             WorkspaceMarker::File("pyproject.toml"),
             WorkspaceMarker::File("requirements.txt"),
             WorkspaceMarker::File("setup.py"),
-            WorkspaceMarker::Directory(".git"),
         ];
         &MARKERS
     }

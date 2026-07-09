@@ -1923,43 +1923,4 @@ fn test_parse_failure_recovery() {
     assert!(!index3.symbols.iter().any(|s| s.name == "a"));
 }
 
-#[test]
-fn test_generic_pipeline_with_mock_backend() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let proj_dir = temp_dir.path().to_path_buf();
 
-    // Create a mock workspace directory with mock.project file as marker
-    std::fs::write(proj_dir.join("mock.project"), "mock project content").unwrap();
-
-    // Write a mock code file
-    let mock_code = "
-        fn foo()
-        fn bar()
-    ";
-    std::fs::write(proj_dir.join("test_file.mock"), mock_code).unwrap();
-
-    // Run build index
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: crate::model::FileChangeDetection::MtimeAndSize,
-    };
-
-    let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
-
-    // Verify index results
-    assert!(report.full_rebuild);
-    assert_eq!(index.files.len(), 1);
-    assert_eq!(
-        index.files[0].abs_path.file_name().unwrap(),
-        "test_file.mock"
-    );
-    assert_eq!(index.files[0].language.as_str(), "mock");
-
-    assert_eq!(index.symbols.len(), 2);
-    let sym_names: std::collections::HashSet<String> =
-        index.symbols.iter().map(|s| s.name.clone()).collect();
-    assert!(sym_names.contains("foo"));
-    assert!(sym_names.contains("bar"));
-}

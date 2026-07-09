@@ -4,7 +4,7 @@ use crate::backend::{
 };
 use crate::error::CodeGraphError;
 use crate::index::BuildIndexOptions;
-use crate::model::{LanguageId, Symbol, SymbolKind, TextRange};
+use crate::model::{Language, Symbol, SymbolKind, TextRange};
 use std::path::Path;
 
 pub struct MockBackend {
@@ -19,10 +19,10 @@ impl MockBackend {
 
 impl LanguageBackend for MockBackend {
     fn id(&self) -> BackendId {
-        BackendId::new("mock-backend")
+        BackendId("mock-backend".to_string())
     }
-    fn language(&self) -> LanguageId {
-        LanguageId::new("mock")
+    fn language(&self) -> Language {
+        Language("mock".to_string())
     }
     fn display_name(&self) -> &'static str {
         "Mock"
@@ -42,9 +42,9 @@ impl LanguageBackend for MockBackend {
     }
     fn metadata(&self, config: &BuildIndexOptions) -> BackendMetadata {
         BackendMetadata {
-            backend_id: self.id().as_str().to_string(),
-            language: self.language().as_str().to_string(),
-            parser_id: self.parser().parser_id().as_str().to_string(),
+            backend_id: self.id().0,
+            language: self.language().0,
+            parser_id: self.parser().parser_id().0,
             parser_version: self.parser().parser_version(),
             resolver_id: None,
             resolver_version: None,
@@ -60,7 +60,7 @@ pub struct MockParser;
 
 impl ParserBackend for MockParser {
     fn parser_id(&self) -> ParserId {
-        ParserId::new("mock-parser")
+        ParserId("mock-parser".to_string())
     }
     fn parser_version(&self) -> String {
         "1.0.0".to_string()
@@ -80,7 +80,7 @@ impl ParserBackend for MockParser {
                         name: name.clone(),
                         qualified_name: format!("mock::{}", name),
                         kind: SymbolKind::Function,
-                        language: LanguageId::new("mock"),
+                        language: Language("mock".to_string()),
                         file: input.path.to_path_buf(),
                         range: TextRange {
                             start_line: idx + 1,

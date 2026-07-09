@@ -9,8 +9,8 @@ pub enum CodeGraphError {
     #[error("tree-sitter parse error: {0}")]
     Parse(String),
 
-    #[error("rust-analyzer error: {0}")]
-    RustAnalyzer(String),
+    #[error("lsp error: {0}")]
+    Lsp(String),
 
     #[error("symbol not found: {0}")]
     SymbolNotFound(String),

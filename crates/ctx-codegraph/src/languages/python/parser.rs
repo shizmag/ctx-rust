@@ -140,7 +140,7 @@ impl<'a> ParserState<'a> {
                         file_id: None,
                         name: name.clone(),
                         qualified_name,
-                        kind: SymbolKind::Struct,
+                        kind: SymbolKind::Class,
                         language: Language("python".to_string()),
                         file: self.file_path.clone(),
                         range,

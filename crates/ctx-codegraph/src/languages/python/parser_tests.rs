@@ -39,7 +39,7 @@ def main():
     // Class RAGPipeline
     let class_sym = &symbols[0];
     assert_eq!(class_sym.name, "RAGPipeline");
-    assert_eq!(class_sym.kind, SymbolKind::Struct);
+    assert_eq!(class_sym.kind, SymbolKind::Class);
     assert!(class_sym.qualified_name.ends_with("::RAGPipeline"));
     assert_eq!(class_sym.range.start_line, 4);
     assert_eq!(class_sym.range.end_line, 16);
