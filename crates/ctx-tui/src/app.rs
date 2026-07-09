@@ -482,7 +482,113 @@ pub(crate) fn sum_all_bytes(node: &TreeNode) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ctx_codegraph::{BuildIndexOptions, IndexState, model::FileChangeDetection};
     use std::fs;
+    use std::time::Duration;
+
+    fn temp_tui_project_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ctx_tui_{}_{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn max_indexed_at_ms(root: &Path) -> Option<i64> {
+        let conn = ctx_codegraph::open_db(root).ok()?;
+        conn.query_row("SELECT MAX(indexed_at_ms) FROM files", [], |row| row.get(0))
+            .ok()
+    }
+
+    fn default_index_options() -> BuildIndexOptions {
+        BuildIndexOptions {
+            use_lsp: false,
+            max_depth: None,
+            include_tests: true,
+            change_detection: FileChangeDetection::MtimeAndSize,
+        }
+    }
+
+    /// `ctx -i` initializes `TuiApp`, which calls `GraphContextService::load_or_build`.
+    /// On a warm index with unchanged files, startup must not re-parse indexed files.
+    #[test]
+    fn test_tui_startup_skips_codegraph_rebuild_on_warm_cache() {
+        let temp_dir = temp_tui_project_dir("warm_cache");
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+        fs::write(temp_dir.join("lib.rs"), "fn cached_symbol() {}\n").unwrap();
+
+        let options = default_index_options();
+        let db_path = temp_dir.join(".ctx-codegraph/codegraph.sqlite");
+
+        assert!(!db_path.exists(), "test project should start without an index");
+
+        let app = TuiApp::new(temp_dir.clone()).unwrap();
+        assert!(
+            app.graph_service.is_some(),
+            "interactive startup should initialize graph service"
+        );
+        assert!(db_path.exists(), "first interactive startup should build the index");
+
+        let indexed_after_first = max_indexed_at_ms(&temp_dir)
+            .expect("indexed files should have timestamps after first startup");
+        assert!(
+            ctx_codegraph::validate_index_db(&temp_dir, &options).unwrap(),
+            "index should be valid after first startup"
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+
+        let app2 = TuiApp::new(temp_dir.clone()).unwrap();
+        assert!(app2.graph_service.is_some());
+
+        let indexed_after_second = max_indexed_at_ms(&temp_dir).expect("index timestamps should remain readable");
+        assert_eq!(
+            indexed_after_first, indexed_after_second,
+            "second ctx -i startup should not re-index unchanged files"
+        );
+        assert!(matches!(
+            ctx_codegraph::get_index_state(&temp_dir, &options).unwrap(),
+            IndexState::Ready
+        ));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_tui_startup_reuses_prebuilt_codegraph_index() {
+        let temp_dir = temp_tui_project_dir("prebuilt");
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+        fs::write(temp_dir.join("lib.rs"), "fn prebuilt_symbol() {}\n").unwrap();
+
+        let options = default_index_options();
+        ctx_codegraph::rebuild_index_db(&temp_dir, options.clone()).unwrap();
+
+        let indexed_before = max_indexed_at_ms(&temp_dir)
+            .expect("prebuilt index should contain indexed files");
+        assert!(ctx_codegraph::validate_index_db(&temp_dir, &options).unwrap());
+
+        std::thread::sleep(Duration::from_millis(10));
+
+        let app = TuiApp::new(temp_dir.clone()).unwrap();
+        assert!(app.graph_service.is_some());
+
+        let indexed_after = max_indexed_at_ms(&temp_dir).unwrap();
+        assert_eq!(
+            indexed_before, indexed_after,
+            "ctx -i should reuse a prebuilt index without reparsing files"
+        );
+        assert!(matches!(
+            ctx_codegraph::get_index_state(&temp_dir, &options).unwrap(),
+            IndexState::Ready
+        ));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_symbol_search_and_preview_logic() {
