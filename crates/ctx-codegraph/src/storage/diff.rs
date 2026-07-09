@@ -29,22 +29,19 @@ pub fn compute_index_diff_with_registry(
         .into_iter()
         .filter_entry(|e| {
             let path = e.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if crate::discovery::should_skip_dir(name) {
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && crate::discovery::should_skip_dir(name) {
                         return false;
                     }
-                }
-            }
             true
         });
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_file() {
-            if crate::index::should_index_path_with_registry(path, registry) {
+        if path.is_file()
+            && crate::index::should_index_path_with_registry(path, registry) {
                 disk_files.insert(path.to_path_buf());
             }
-        }
     }
 
     let mut db_files = std::collections::HashMap::new();
@@ -158,7 +155,7 @@ pub fn compute_index_diff_with_registry(
         }
     }
 
-    for (path, _) in &db_files {
+    for path in db_files.keys() {
         if !disk_files.contains(path) {
             deleted.push(path.clone());
         }
@@ -197,7 +194,7 @@ pub fn get_index_state_with_registry(
         }
     };
 
-    if let Err(_) = conn.execute("PRAGMA foreign_keys = ON;", []) {
+    if conn.execute("PRAGMA foreign_keys = ON;", []).is_err() {
         return Ok(IndexState::NeedsFullRebuild(RebuildReason::CorruptDatabase));
     }
 

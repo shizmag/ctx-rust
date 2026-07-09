@@ -12,7 +12,7 @@ impl TokenEstimator for ApproxTokenEstimator {
         if text.is_empty() {
             0
         } else {
-            (text.chars().count() + 3) / 4
+            text.chars().count().div_ceil(4)
         }
     }
 }
@@ -56,8 +56,8 @@ impl ContextRanker for GraphRanker {
             }
 
             // 3. Edge confidence weight
-            if let Some(ref edge) = c.via_edge {
-                if let Some(ref conf) = edge.confidence {
+            if let Some(ref edge) = c.via_edge
+                && let Some(ref conf) = edge.confidence {
                     match conf.as_str() {
                         "LspExact" | "Exact" => graph_score += 2.0,
                         "Syntax" | "Local" => graph_score += 1.2,
@@ -66,7 +66,6 @@ impl ContextRanker for GraphRanker {
                         _ => {}
                     }
                 }
-            }
             // 4. Test penalty
             let is_test = c.node.name.to_lowercase().contains("test")
                 || c.node.qualified_name.to_lowercase().contains("test")

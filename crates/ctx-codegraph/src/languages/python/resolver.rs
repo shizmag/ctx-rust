@@ -10,6 +10,12 @@ pub struct PythonResolver {
     client: Mutex<Option<(PathBuf, GenericLspClient)>>,
 }
 
+impl Default for PythonResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PythonResolver {
     pub fn new() -> Self {
         Self {
@@ -149,11 +155,10 @@ fn matches_definition(
         return false;
     }
 
-    if let Some(ref body) = sym.body_range {
-        if is_inside_range(body, target_line_1, target_col_1) {
+    if let Some(ref body) = sym.body_range
+        && is_inside_range(body, target_line_1, target_col_1) {
             return false;
         }
-    }
 
     true
 }
@@ -255,13 +260,12 @@ fn resolve_via_lsp(
     };
 
     for loc in locations {
-        if let Some((target_path, target_line, target_col)) = parse_location(&loc) {
-            if let Some(sym_idx) =
+        if let Some((target_path, target_line, target_col)) = parse_location(&loc)
+            && let Some(sym_idx) =
                 find_matching_symbol(symbols, &target_path, target_line, target_col)
             {
                 return Ok(Some(sym_idx));
             }
-        }
     }
 
     Ok(None)

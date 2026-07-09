@@ -25,24 +25,20 @@ fn reader_thread(mut reader: BufReader<std::process::ChildStdout>, tx: Sender<se
             if trimmed.is_empty() {
                 break;
             }
-            if trimmed.to_lowercase().starts_with("content-length:") {
-                if let Some(val_str) = trimmed.split(':').nth(1) {
-                    if let Ok(len) = val_str.trim().parse::<usize>() {
+            if trimmed.to_lowercase().starts_with("content-length:")
+                && let Some(val_str) = trimmed.split(':').nth(1)
+                    && let Ok(len) = val_str.trim().parse::<usize>() {
                         content_length = Some(len);
                     }
-                }
-            }
         }
 
         if let Some(len) = content_length {
             let mut buf = vec![0; len];
-            if reader.read_exact(&mut buf).is_ok() {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&buf) {
-                    if tx.send(val).is_err() {
+            if reader.read_exact(&mut buf).is_ok()
+                && let Ok(val) = serde_json::from_slice::<serde_json::Value>(&buf)
+                    && tx.send(val).is_err() {
                         return;
                     }
-                }
-            }
         }
     }
 }
@@ -149,8 +145,8 @@ impl GenericLspClient {
                 .unwrap_or(Duration::ZERO);
             match self.rx.recv_timeout(remaining) {
                 Ok(msg) => {
-                    if let Some(resp_id) = msg.get("id") {
-                        if resp_id.as_u64() == Some(id as u64) {
+                    if let Some(resp_id) = msg.get("id")
+                        && resp_id.as_u64() == Some(id as u64) {
                             if let Some(error) = msg.get("error") {
                                 return Err(format!("LSP error: {}", error));
                             }
@@ -159,7 +155,6 @@ impl GenericLspClient {
                                 .cloned()
                                 .unwrap_or(serde_json::Value::Null));
                         }
-                    }
                 }
                 Err(_) => {
                     return Err(format!("Timeout waiting for response to {}", method));

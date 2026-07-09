@@ -155,20 +155,16 @@ pub fn compute_affected_set_with_registry(
     for &file_id in &files {
         let mut stmt = conn.prepare("SELECT id FROM symbols WHERE file_id = ?1")?;
         let rows = stmt.query_map([file_id.0], |row| row.get::<_, i64>(0))?;
-        for row in rows {
-            if let Ok(id) = row {
-                symbols.insert(SymbolId(id));
-            }
+        for id in rows.flatten() {
+            symbols.insert(SymbolId(id));
         }
     }
 
     for &sym_id in &symbols {
         let mut stmt = conn.prepare("SELECT occurrence_id FROM edges WHERE to_symbol_id = ?1")?;
         let rows = stmt.query_map([sym_id.0], |row| row.get::<_, i64>(0))?;
-        for row in rows {
-            if let Ok(cs_id) = row {
-                occurrences.insert(OccurrenceId(cs_id));
-            }
+        for cs_id in rows.flatten() {
+            occurrences.insert(OccurrenceId(cs_id));
         }
     }
 
@@ -370,8 +366,8 @@ fn rebuild_affected_edges_in_tx_with_registry(
         let backend = registry.find_by_path(&cs.file);
         let resolver = backend.and_then(|b| b.resolver());
 
-        if options.use_lsp {
-            if let Some(res) = resolver {
+        if options.use_lsp
+            && let Some(res) = resolver {
                 let resolve_input = crate::backend::ResolveInput {
                     workspace_root,
                     occurrence: cs,
@@ -390,7 +386,6 @@ fn rebuild_affected_edges_in_tx_with_registry(
                     }
                 }
             }
-        }
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
@@ -788,11 +783,10 @@ pub fn run_incremental_update_with_registry(
                     });
 
                     for cs in &mut file_occurrences {
-                        if let Some(ref mut idx) = cs.enclosing_temp_index {
-                            if let Some(&new_idx) = index_map.get(idx) {
+                        if let Some(ref mut idx) = cs.enclosing_temp_index
+                            && let Some(&new_idx) = index_map.get(idx) {
                                 *idx = new_idx;
                             }
-                        }
                     }
                 }
 
@@ -824,10 +818,7 @@ pub fn run_incremental_update_with_registry(
                 }
 
                 for cs in &file_occurrences {
-                    let from_db_id = match cs.enclosing_temp_index {
-                        Some(idx) => Some(sym_ids[idx]),
-                        None => None,
-                    };
+                    let from_db_id = cs.enclosing_temp_index.map(|idx| sym_ids[idx]);
                     cs_stmt.execute(rusqlite::params![
                         file_id,
                         from_db_id,

@@ -21,6 +21,12 @@ pub struct PythonBackend {
     resolver: PythonResolver,
 }
 
+impl Default for PythonBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PythonBackend {
     pub fn new() -> Self {
         Self {

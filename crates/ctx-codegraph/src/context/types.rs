@@ -108,11 +108,7 @@ impl ContextBudget {
         let max_from_window = match self.model_context_window {
             Some(w) => {
                 let reserved = self.reserve_output_tokens + self.reserve_instruction_tokens;
-                if w > reserved {
-                    w - reserved
-                } else {
-                    0
-                }
+                w.saturating_sub(reserved)
             }
             None => usize::MAX,
         };

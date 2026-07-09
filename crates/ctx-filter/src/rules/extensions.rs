@@ -27,11 +27,10 @@ impl ExtensionRule {
 
 impl FilterRule for ExtensionRule {
     fn check(&self, entry: &FilterEntry, _context: &FilterContext<'_>) -> RuleDecision {
-        if let Some(kind) = self.kind {
-            if entry.kind != kind {
+        if let Some(kind) = self.kind
+            && entry.kind != kind {
                 return RuleDecision::Pass;
             }
-        }
 
         let Some(ext) = entry.extension() else {
             return RuleDecision::Pass;

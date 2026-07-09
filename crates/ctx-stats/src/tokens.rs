@@ -4,7 +4,7 @@ pub fn estimate_tokens(content: &str) -> usize {
     if content.is_empty() {
         0
     } else {
-        (content.chars().count() + 3) / 4
+        content.chars().count().div_ceil(4)
     }
 }
 

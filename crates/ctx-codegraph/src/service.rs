@@ -231,26 +231,26 @@ impl GraphContextService {
                 continue;
             }
 
-            let traverse_forward = match options.mode {
+            let traverse_forward = matches!(
+                options.mode,
                 GraphContextMode::Callees
-                | GraphContextMode::Dependencies
-                | GraphContextMode::ForwardSlice
-                | GraphContextMode::Neighborhood => true,
-                _ => false,
-            };
+                    | GraphContextMode::Dependencies
+                    | GraphContextMode::ForwardSlice
+                    | GraphContextMode::Neighborhood
+            );
 
-            let traverse_backward = match options.mode {
+            let traverse_backward = matches!(
+                options.mode,
                 GraphContextMode::Callers
-                | GraphContextMode::Dependents
-                | GraphContextMode::ReverseSlice
-                | GraphContextMode::Neighborhood => true,
-                _ => false,
-            };
+                    | GraphContextMode::Dependents
+                    | GraphContextMode::ReverseSlice
+                    | GraphContextMode::Neighborhood
+            );
 
             if traverse_forward {
                 for edge in &index.edges {
-                    if edge.from_symbol_id == Some(curr) {
-                        if let Some(to_id) = edge.to_symbol_id {
+                    if edge.from_symbol_id == Some(curr)
+                        && let Some(to_id) = edge.to_symbol_id {
                             let edge_key = (curr, to_id, edge.raw_text.clone());
                             if seen_edges.insert(edge_key) {
                                 edges.push(GraphContextEdge {
@@ -277,14 +277,13 @@ impl GraphContextService {
                                 }
                             }
                         }
-                    }
                 }
             }
 
             if traverse_backward {
                 for edge in &index.edges {
-                    if edge.to_symbol_id == Some(curr) {
-                        if let Some(from_id) = edge.from_symbol_id {
+                    if edge.to_symbol_id == Some(curr)
+                        && let Some(from_id) = edge.from_symbol_id {
                             let edge_key = (from_id, curr, edge.raw_text.clone());
                             if seen_edges.insert(edge_key) {
                                 edges.push(GraphContextEdge {
@@ -311,7 +310,6 @@ impl GraphContextService {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
@@ -321,17 +319,17 @@ impl GraphContextService {
 
         let root_span = ContextFileSpan {
             file_path: root.file_path.clone(),
-            range: root.range.clone(),
+            range: root.range,
         };
-        seen_spans.insert((root_span.file_path.clone(), root_span.range.clone()));
+        seen_spans.insert((root_span.file_path.clone(), root_span.range));
         files.push(root_span);
 
         for node in &nodes {
             let span = ContextFileSpan {
                 file_path: node.file_path.clone(),
-                range: node.range.clone(),
+                range: node.range,
             };
-            if seen_spans.insert((span.file_path.clone(), span.range.clone())) {
+            if seen_spans.insert((span.file_path.clone(), span.range)) {
                 files.push(span);
             }
         }

@@ -241,6 +241,7 @@ mod tests {
 }
 
 #[derive(clap::Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Analyze the project and query dependency or symbol relationships
     #[command(visible_alias = "g")]
@@ -497,12 +498,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         }
         GraphSubcommand::Symbols { mut query } => {
             let mut target_path = graph_args.path.clone();
-            if let Some(ref q) = query {
-                if std::path::Path::new(q).is_dir() {
+            if let Some(ref q) = query
+                && std::path::Path::new(q).is_dir() {
                     target_path = std::path::PathBuf::from(q);
                     query = None;
                 }
-            }
 
             let conn =
                 get_connection_or_rebuild(&target_path, use_rust_analyzer, graph_args.verbose)?;
@@ -632,7 +632,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                     let range =
                         edge.range
                             .clone()
-                            .unwrap_or_else(|| ctx_codegraph::model::TextRange {
+                            .unwrap_or(ctx_codegraph::model::TextRange {
                                 start_line: 0,
                                 start_col: 0,
                                 end_line: 0,
@@ -1006,8 +1006,8 @@ fn print_slice_tree_helper(
 
     let mut seen_targets = HashSet::new();
     for edge in &index.edges {
-        if edge.from_symbol_id == Some(curr_id) {
-            if let Some(to_id) = edge.to_symbol_id {
+        if edge.from_symbol_id == Some(curr_id)
+            && let Some(to_id) = edge.to_symbol_id {
                 if !seen_targets.insert(to_id) {
                     continue;
                 }
@@ -1031,7 +1031,6 @@ fn print_slice_tree_helper(
                     }
                 }
             }
-        }
     }
 }
 
@@ -1082,8 +1081,8 @@ fn get_file_span_content(
         return Ok("".to_string());
     }
     let mut result = String::new();
-    for i in (start_line - 1)..end {
-        result.push_str(lines[i]);
+    for line in &lines[(start_line - 1)..end] {
+        result.push_str(line);
         result.push('\n');
     }
     Ok(result)

@@ -17,15 +17,12 @@ fn collect_matching_files_impl<'a>(
     if node.kind == ctx_models::NodeKind::File {
         let name_matches = node.name.to_lowercase().contains(query_lower);
         let mut content_matches = false;
-        if !name_matches && node.stats.lines > 0 && node.stats.bytes <= 512 * 1024 {
-            if let ctx_models::FileContentResult::Text(content) =
+        if !name_matches && node.stats.lines > 0 && node.stats.bytes <= 512 * 1024
+            && let ctx_models::FileContentResult::Text(content) =
                 ctx_models::read_file_content(&node.path, 512 * 1024)
-            {
-                if content.to_lowercase().contains(query_lower) {
+                && content.to_lowercase().contains(query_lower) {
                     content_matches = true;
                 }
-            }
-        }
         if name_matches || content_matches {
             matches.push(node);
         }

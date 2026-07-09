@@ -252,7 +252,7 @@ pub fn save_index(
                     )
                 }
                 None => {
-                    let file_id = edge.from_file_id.or_else(|| None);
+                    let file_id = edge.from_file_id.or(None);
                     (file_id, edge.raw_text.clone(), edge.range.clone())
                 }
             };

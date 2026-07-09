@@ -55,13 +55,10 @@ pub fn count_tests(path: &Path, content: &str) -> usize {
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
     match extension {
         "rs" => count_rust_tests(content),
-        "py" => {
-            if is_python_test_file(path) {
+        "py"
+            if is_python_test_file(path) => {
                 count_python_tests(content)
-            } else {
-                0
             }
-        }
         _ => 0,
     }
 }
@@ -131,8 +128,7 @@ fn parse_lcov(path: &Path, root: &Path) -> Result<HashMap<PathBuf, FileCoverage>
         let line = line_result?;
         let trimmed = line.trim();
 
-        if trimmed.starts_with("SF:") {
-            let filename = &trimmed[3..];
+        if let Some(filename) = trimmed.strip_prefix("SF:") {
             let file_path = if Path::new(filename).is_absolute() {
                 PathBuf::from(filename)
             } else {
@@ -144,20 +140,18 @@ fn parse_lcov(path: &Path, root: &Path) -> Result<HashMap<PathBuf, FileCoverage>
                 current_file = Some(file_path);
             }
             line_hits.clear();
-        } else if trimmed.starts_with("DA:") {
+        } else if let Some(after_da) = trimmed.strip_prefix("DA:") {
             if current_file.is_some() {
-                let parts: Vec<&str> = trimmed[3..].split(',').collect();
-                if parts.len() >= 2 {
-                    if let Ok(line_num) = parts[0].parse::<usize>() {
-                        if let Ok(hits) = parts[1].parse::<usize>() {
+                let parts: Vec<&str> = after_da.split(',').collect();
+                if parts.len() >= 2
+                    && let Ok(line_num) = parts[0].parse::<usize>()
+                        && let Ok(hits) = parts[1].parse::<usize>() {
                             line_hits.insert(line_num, hits);
                         }
-                    }
-                }
             }
-        } else if trimmed == "end_of_record" {
-            if let Some(file_path) = current_file.take() {
-                if !line_hits.is_empty() {
+        } else if trimmed == "end_of_record"
+            && let Some(file_path) = current_file.take()
+                && !line_hits.is_empty() {
                     let coverable = line_hits.len();
                     let covered = line_hits.values().filter(|&&h| h > 0).count();
                     map.insert(
@@ -169,8 +163,6 @@ fn parse_lcov(path: &Path, root: &Path) -> Result<HashMap<PathBuf, FileCoverage>
                         },
                     );
                 }
-            }
-        }
     }
     Ok(map)
 }
@@ -205,21 +197,19 @@ fn parse_cobertura(
                 line_hits.clear();
             }
         } else if trimmed.contains("<line ") {
-            if current_file.is_some() {
-                if let (Some(num_str), Some(hits_str)) = (
+            if current_file.is_some()
+                && let (Some(num_str), Some(hits_str)) = (
                     extract_attribute(trimmed, "number"),
                     extract_attribute(trimmed, "hits"),
-                ) {
-                    if let (Ok(line_num), Ok(hits)) =
+                )
+                    && let (Ok(line_num), Ok(hits)) =
                         (num_str.parse::<usize>(), hits_str.parse::<usize>())
                     {
                         line_hits.insert(line_num, hits);
                     }
-                }
-            }
-        } else if trimmed.contains("</class>") {
-            if let Some(file_path) = current_file.take() {
-                if !line_hits.is_empty() {
+        } else if trimmed.contains("</class>")
+            && let Some(file_path) = current_file.take()
+                && !line_hits.is_empty() {
                     let coverable = line_hits.len();
                     let covered = line_hits.values().filter(|&&h| h > 0).count();
                     map.insert(
@@ -231,8 +221,6 @@ fn parse_cobertura(
                         },
                     );
                 }
-            }
-        }
     }
     Ok(map)
 }
@@ -252,11 +240,10 @@ fn count_rust_tests(content: &str) -> usize {
     let mut count = 0;
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            let rest = trimmed[1..].trim();
-            if rest.starts_with('[') {
-                let attr = rest[1..].trim();
-                let is_test_attr = if attr.starts_with("tokio::test") {
+        if let Some(rest) = trimmed.strip_prefix('#').map(|s| s.trim_start())
+            && let Some(attr) = rest.strip_prefix('[').map(|s| s.trim_start())
+        {
+            let is_test_attr = if attr.starts_with("tokio::test") {
                     let next = attr.as_bytes().get(11);
                     next.is_none()
                         || *next.unwrap() == b']'
@@ -298,7 +285,6 @@ fn count_rust_tests(content: &str) -> usize {
                 if is_test_attr {
                     count += 1;
                 }
-            }
         }
     }
     count

@@ -16,12 +16,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
         } else if c.is_uppercase() {
             let prev_is_lower = i > 0 && chars[i - 1].is_lowercase();
             let next_is_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
-            if prev_is_lower || next_is_lower {
-                if !current.is_empty() {
+            if (prev_is_lower || next_is_lower)
+                && !current.is_empty() {
                     tokens.push(current.to_lowercase());
                     current.clear();
                 }
-            }
             current.push(c);
         } else if c.is_whitespace() {
             if !current.is_empty() {
@@ -94,8 +93,8 @@ pub fn extract_snippet(
             let mut snippet = String::new();
             let start = range.start_line.saturating_sub(context_lines).max(1);
             let end_top = top_end.min(lines.len());
-            for i in (start - 1)..end_top {
-                snippet.push_str(lines[i]);
+            for line in &lines[(start - 1)..end_top] {
+                snippet.push_str(line);
                 snippet.push('\n');
             }
 
@@ -106,8 +105,8 @@ pub fn extract_snippet(
 
             let start_bot = bottom_start.max(end_top + 1);
             let end_bot = (br.end_line + context_lines).min(lines.len());
-            for i in (start_bot - 1)..end_bot {
-                snippet.push_str(lines[i]);
+            for line in &lines[(start_bot - 1)..end_bot] {
+                snippet.push_str(line);
                 snippet.push('\n');
             }
             return Ok(snippet);
@@ -126,8 +125,8 @@ pub fn extract_snippet(
     }
 
     let mut snippet = String::new();
-    for i in (start_line - 1)..end {
-        snippet.push_str(lines[i]);
+    for line in &lines[(start_line - 1)..end] {
+        snippet.push_str(line);
         snippet.push('\n');
     }
 

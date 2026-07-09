@@ -13,6 +13,7 @@ pub(crate) struct PackedSnippets {
     pub omitted: Vec<OmittedContext>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pack_snippets(
     conn: &rusqlite::Connection,
     roots: &[LanguageObject],
@@ -76,8 +77,8 @@ pub(crate) fn pack_snippets(
             continue;
         }
 
-        if !included_files.contains(&neighbor.file_path) {
-            if included_files.len() >= max_files {
+        if !included_files.contains(&neighbor.file_path)
+            && included_files.len() >= max_files {
                 omitted_candidates.push(OmittedContext {
                     name: neighbor.node.name.clone(),
                     qualified_name: neighbor.node.qualified_name.clone(),
@@ -87,7 +88,6 @@ pub(crate) fn pack_snippets(
                 });
                 continue;
             }
-        }
 
         let body_range = match load_symbol(conn, neighbor.node.id) {
             Ok(sym) => sym.body_range.map(SourceRange::from),
@@ -146,6 +146,7 @@ pub(crate) struct BuiltSections {
     pub total_estimated_tokens: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_context_sections(
     query_str: &str,
     mode: GraphContextMode,

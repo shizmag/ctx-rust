@@ -19,6 +19,12 @@ pub struct RustBackend {
     resolver: RustResolver,
 }
 
+impl Default for RustBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RustBackend {
     pub fn new() -> Self {
         Self {

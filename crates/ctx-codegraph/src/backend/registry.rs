@@ -7,6 +7,12 @@ pub struct BackendRegistry {
     backends: Vec<Box<dyn LanguageBackend>>,
 }
 
+impl Default for BackendRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BackendRegistry {
     pub fn new() -> Self {
         Self {

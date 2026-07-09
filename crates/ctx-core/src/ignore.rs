@@ -26,8 +26,8 @@ impl IgnoreStack {
                 home.join(".gitignore"),
             ];
             for path in &candidate_paths {
-                if path.exists() {
-                    if let Ok(content) = std::fs::read_to_string(path) {
+                if path.exists()
+                    && let Ok(content) = std::fs::read_to_string(path) {
                         let parsed = parse_gitignore(&content);
                         global_ignore = build_gitignore_from_rules(
                             &root_path,
@@ -38,20 +38,18 @@ impl IgnoreStack {
                             break;
                         }
                     }
-                }
             }
         }
 
         // 2. Build local exclude
         let git_exclude_path = root_path.join(".git/info/exclude");
         let mut local_exclude = None;
-        if git_exclude_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&git_exclude_path) {
+        if git_exclude_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&git_exclude_path) {
                 let parsed = parse_gitignore(&content);
                 local_exclude =
                     build_gitignore_from_rules(&root_path, &root_path, &parsed.normal_rules);
             }
-        }
 
         // 3. Build extra excludes from scan options
         let root_extra = build_gitignore_from_rules(&root_path, &root_path, exclude_patterns);
@@ -119,15 +117,14 @@ impl IgnoreStack {
             let mut git_ignore = None;
             let mut ctx_bypass = None;
 
-            if gitignore_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
+            if gitignore_path.exists()
+                && let Ok(content) = std::fs::read_to_string(&gitignore_path) {
                     let parsed = parse_gitignore(&content);
                     git_ignore =
                         build_gitignore_from_rules(&self.root_path, &dir, &parsed.normal_rules);
                     ctx_bypass =
                         build_gitignore_from_rules(&self.root_path, &dir, &parsed.ctx_rules);
                 }
-            }
 
             self.matchers.push(GitignoreMatcher {
                 dir_path: dir,
@@ -141,31 +138,27 @@ impl IgnoreStack {
         self.update_for_path(path);
 
         for matcher in self.matchers.iter().rev() {
-            if let Some(ref bypass) = matcher.ctx_bypass {
-                if bypass.matched(path, is_dir).is_ignore() {
+            if let Some(ref bypass) = matcher.ctx_bypass
+                && bypass.matched(path, is_dir).is_ignore() {
                     return false;
                 }
-            }
-            if let Some(ref gi) = matcher.git_ignore {
-                if gi.matched(path, is_dir).is_ignore() {
+            if let Some(ref gi) = matcher.git_ignore
+                && gi.matched(path, is_dir).is_ignore() {
                     return true;
                 }
-            }
         }
 
         // Check local exclude
-        if let Some(ref gi) = self.local_exclude {
-            if gi.matched(path, is_dir).is_ignore() {
+        if let Some(ref gi) = self.local_exclude
+            && gi.matched(path, is_dir).is_ignore() {
                 return true;
             }
-        }
 
         // Check global ignore
-        if let Some(ref gi) = self.global_ignore {
-            if gi.matched(path, is_dir).is_ignore() {
+        if let Some(ref gi) = self.global_ignore
+            && gi.matched(path, is_dir).is_ignore() {
                 return true;
             }
-        }
 
         false
     }

@@ -15,9 +15,9 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|f| ui(f, app))?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != event::KeyEventKind::Release {
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+                && key.kind != event::KeyEventKind::Release {
                     if app.screen == TuiScreen::GraphContext {
                         match key.code {
                             KeyCode::Char('q') => {
@@ -151,11 +151,7 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                         app.symbol_list_state.select(Some(next));
 
                                         let sym = &app.symbol_search_results[next];
-                                        app.preview_scroll_offset = if sym.range.start_line > 3 {
-                                            sym.range.start_line - 3
-                                        } else {
-                                            0
-                                        };
+                                        app.preview_scroll_offset = sym.range.start_line.saturating_sub(3);
                                     }
                                 }
                                 KeyCode::Up => {
@@ -170,11 +166,7 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                         app.symbol_list_state.select(Some(prev));
 
                                         let sym = &app.symbol_search_results[prev];
-                                        app.preview_scroll_offset = if sym.range.start_line > 3 {
-                                            sym.range.start_line - 3
-                                        } else {
-                                            0
-                                        };
+                                        app.preview_scroll_offset = sym.range.start_line.saturating_sub(3);
                                     }
                                 }
                                 KeyCode::Char(c) => {
@@ -214,11 +206,7 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
 
                                                 let sym = &app.symbol_search_results[next];
                                                 app.preview_scroll_offset =
-                                                    if sym.range.start_line > 3 {
-                                                        sym.range.start_line - 3
-                                                    } else {
-                                                        0
-                                                    };
+                                                    sym.range.start_line.saturating_sub(3);
                                             }
                                         }
                                         KeyCode::Up | KeyCode::Char('k') => {
@@ -234,17 +222,12 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
 
                                                 let sym = &app.symbol_search_results[prev];
                                                 app.preview_scroll_offset =
-                                                    if sym.range.start_line > 3 {
-                                                        sym.range.start_line - 3
-                                                    } else {
-                                                        0
-                                                    };
+                                                    sym.range.start_line.saturating_sub(3);
                                             }
                                         }
                                         KeyCode::Enter | KeyCode::Char('g') => {
                                             if let Some(selected) = app.symbol_list_state.selected()
-                                            {
-                                                if let Some(sym) =
+                                                && let Some(sym) =
                                                     app.symbol_search_results.get(selected)
                                                 {
                                                     let sym_clone = sym.clone();
@@ -260,7 +243,6 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                         std::time::Instant::now(),
                                                     ));
                                                 }
-                                            }
                                         }
                                         _ => {}
                                     },
@@ -401,8 +383,8 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 },
                                 KeyCode::Char('C') => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected) {
                                             let abs_path = if item.path.is_absolute() {
                                                 item.path.clone()
                                             } else {
@@ -433,14 +415,13 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                 }
                                             }
                                         }
-                                    }
                                 }
                                 KeyCode::Char('f') => {
                                     app.search_active = true;
                                 }
                                 KeyCode::Enter => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected) {
                                             if item.kind == NodeKind::Directory {
                                                 let path = item.path.clone();
                                                 if app.expanded_dirs.contains(&path) {
@@ -458,12 +439,11 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                 ));
                                             }
                                         }
-                                    }
                                 }
                                 KeyCode::Char('o') => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
-                                            if let Err(e) = open_file(
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected)
+                                            && let Err(e) = open_file(
                                                 terminal,
                                                 &item.path,
                                                 item.is_text && item.kind == NodeKind::File,
@@ -473,34 +453,28 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                                     std::time::Instant::now(),
                                                 ));
                                             }
-                                        }
-                                    }
                                 }
                                 KeyCode::Left | KeyCode::Char('h') => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
-                                            if item.kind == NodeKind::Directory {
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected)
+                                            && item.kind == NodeKind::Directory {
                                                 let path = item.path.clone();
                                                 if app.expanded_dirs.contains(&path) {
                                                     app.expanded_dirs.remove(&path);
                                                     app.update_visible_items();
                                                 }
                                             }
-                                        }
-                                    }
                                 }
                                 KeyCode::Right | KeyCode::Char('l') => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
-                                            if item.kind == NodeKind::Directory {
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected)
+                                            && item.kind == NodeKind::Directory {
                                                 let path = item.path.clone();
                                                 if !app.expanded_dirs.contains(&path) {
                                                     app.expanded_dirs.insert(path);
                                                     app.update_visible_items();
                                                 }
                                             }
-                                        }
-                                    }
                                 }
                                 KeyCode::Char('r') => {
                                     if let Err(e) = app.rescan() {
@@ -511,8 +485,8 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Char(' ') | KeyCode::Char('x') => {
-                                    if let Some(selected) = app.list_state.selected() {
-                                        if let Some(item) = app.visible_items.get(selected) {
+                                    if let Some(selected) = app.list_state.selected()
+                                        && let Some(item) = app.visible_items.get(selected) {
                                             let path = item.path.clone();
                                             let new_checked = !item.checked;
 
@@ -528,7 +502,6 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
 
                                             app.update_visible_items();
                                         }
-                                    }
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     if !app.visible_items.is_empty() {
@@ -556,18 +529,15 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
                                         app.preview_scroll_offset = 0;
                                     }
                                 }
-                                KeyCode::Char('G') => {
-                                    if !app.visible_items.is_empty() {
+                                KeyCode::Char('G')
+                                    if !app.visible_items.is_empty() => {
                                         app.list_state.select(Some(app.visible_items.len() - 1));
                                         app.preview_scroll_offset = 0;
                                     }
-                                }
                                 _ => {}
                             }
                         }
                     }
                 }
-            }
-        }
     }
 }

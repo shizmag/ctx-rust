@@ -27,11 +27,10 @@ impl NameRule {
 
 impl FilterRule for NameRule {
     fn check(&self, entry: &FilterEntry, _context: &FilterContext<'_>) -> RuleDecision {
-        if let Some(kind) = self.kind {
-            if entry.kind != kind {
+        if let Some(kind) = self.kind
+            && entry.kind != kind {
                 return RuleDecision::Pass;
             }
-        }
 
         if self.name.contains(entry.name.as_str()) {
             return RuleDecision::Hide(self.reason.clone());

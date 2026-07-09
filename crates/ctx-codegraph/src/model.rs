@@ -83,6 +83,7 @@ impl SymbolKind {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Function" => Some(SymbolKind::Function),
@@ -117,6 +118,7 @@ impl ResolutionConfidence {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Syntax" | "Local" => Some(ResolutionConfidence::Syntax),
@@ -185,6 +187,7 @@ impl OccurrenceKind {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Call" => Some(OccurrenceKind::Call),
@@ -248,6 +251,7 @@ impl EdgeKind {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Call" => Some(EdgeKind::Call),
@@ -487,6 +491,7 @@ impl FileParseStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Success" => Some(FileParseStatus::Success),

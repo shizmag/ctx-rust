@@ -74,8 +74,8 @@ pub fn load_file_span(
         return Ok("".to_string());
     }
     let mut result = String::new();
-    for i in (range.start_line - 1)..end {
-        result.push_str(lines[i]);
+    for line in &lines[(range.start_line - 1)..end] {
+        result.push_str(line);
         result.push('\n');
     }
     Ok(result)

@@ -49,11 +49,10 @@ impl FilterEngine {
                         return Visibility::Hidden(HiddenReason::NonDocs);
                     }
                 }
-                Mode::Llm => {
-                    if is_llm_ignored(entry) {
+                Mode::Llm
+                    if is_llm_ignored(entry) => {
                         return Visibility::Hidden(HiddenReason::Binary);
                     }
-                }
                 _ => {}
             }
         }

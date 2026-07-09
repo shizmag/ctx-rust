@@ -16,17 +16,15 @@ pub fn forward_slice(index: &CodeIndex, start: SymbolId, options: SliceOptions) 
     visited.insert(start);
 
     while let Some((curr, depth)) = queue.pop_front() {
-        if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr)) {
-            if !options.include_tests && sym.kind == SymbolKind::Test {
+        if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr))
+            && !options.include_tests && sym.kind == SymbolKind::Test {
                 continue;
             }
-        }
 
-        if let Some(limit) = options.max_nodes {
-            if result.len() >= limit {
+        if let Some(limit) = options.max_nodes
+            && result.len() >= limit {
                 break;
             }
-        }
 
         result.push(curr);
 
@@ -35,14 +33,12 @@ pub fn forward_slice(index: &CodeIndex, start: SymbolId, options: SliceOptions) 
         }
 
         for edge in &index.edges {
-            if edge.from_symbol_id == Some(curr) {
-                if let Some(to_id) = edge.to_symbol_id {
-                    if !visited.contains(&to_id) {
+            if edge.from_symbol_id == Some(curr)
+                && let Some(to_id) = edge.to_symbol_id
+                    && !visited.contains(&to_id) {
                         visited.insert(to_id);
                         queue.push_back((to_id, depth + 1));
                     }
-                }
-            }
         }
     }
 
@@ -58,17 +54,15 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
     visited.insert(target);
 
     while let Some((curr, depth)) = queue.pop_front() {
-        if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr)) {
-            if !options.include_tests && sym.kind == SymbolKind::Test {
+        if let Some(sym) = index.symbols.iter().find(|s| s.id == Some(curr))
+            && !options.include_tests && sym.kind == SymbolKind::Test {
                 continue;
             }
-        }
 
-        if let Some(limit) = options.max_nodes {
-            if result.len() >= limit {
+        if let Some(limit) = options.max_nodes
+            && result.len() >= limit {
                 break;
             }
-        }
 
         result.push(curr);
 
@@ -77,14 +71,12 @@ pub fn reverse_slice(index: &CodeIndex, target: SymbolId, options: SliceOptions)
         }
 
         for edge in &index.edges {
-            if edge.to_symbol_id == Some(curr) {
-                if let Some(from_id) = edge.from_symbol_id {
-                    if !visited.contains(&from_id) {
+            if edge.to_symbol_id == Some(curr)
+                && let Some(from_id) = edge.from_symbol_id
+                    && !visited.contains(&from_id) {
                         visited.insert(from_id);
                         queue.push_back((from_id, depth + 1));
                     }
-                }
-            }
         }
     }
 

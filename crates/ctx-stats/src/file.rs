@@ -62,7 +62,7 @@ pub fn collect_file_stats(
             })
         }
         ctx_models::FileContentResult::ReadError(err) => {
-            Err(io::Error::new(io::ErrorKind::Other, err))
+            Err(io::Error::other(err))
         }
     }
 }

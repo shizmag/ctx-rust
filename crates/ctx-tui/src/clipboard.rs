@@ -73,14 +73,12 @@ pub(crate) fn copy_graph_context_to_clipboard(
     let result = match &app.graph_preview {
         Some(Ok(res)) => res,
         Some(Err(err)) => {
-            return Err(crate::error::TuiError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(crate::error::TuiError::Io(std::io::Error::other(
                 err.clone(),
             )));
         }
         None => {
-            return Err(crate::error::TuiError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(crate::error::TuiError::Io(std::io::Error::other(
                 "No preview generated to copy",
             )));
         }
@@ -94,8 +92,7 @@ pub(crate) fn copy_graph_context_to_clipboard(
         app.graph_max_nodes,
     )
     .map_err(|e| {
-        crate::error::TuiError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        crate::error::TuiError::Io(std::io::Error::other(
             e.to_string(),
         ))
     })?;
@@ -263,8 +260,8 @@ fn get_file_span_content(
         return Ok("".to_string());
     }
     let mut result = String::new();
-    for i in (start_line - 1)..end {
-        result.push_str(lines[i]);
+    for line in &lines[(start_line - 1)..end] {
+        result.push_str(line);
         result.push('\n');
     }
     Ok(result)

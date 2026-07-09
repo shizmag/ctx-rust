@@ -60,15 +60,14 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
 
         let depth = entry.depth().saturating_sub(1);
 
-        if let Some(max_depth) = options.max_depth {
-            if depth > max_depth {
+        if let Some(max_depth) = options.max_depth
+            && depth > max_depth {
                 if kind == NodeKind::Directory {
                     pruned_dirs.push(entry_path.to_path_buf());
                 }
 
                 continue;
             }
-        }
 
         let metadata = entry_path.symlink_metadata().ok();
         let bytes = metadata.as_ref().map(|metadata| metadata.len());

@@ -69,8 +69,8 @@ pub(crate) fn build_file_preview(
                     let indicator = if is_in_symbol_range {
                         "➤ "
                     } else if let Some(ref hits_map) = line_coverage {
-                        if let Some(&hits) = hits_map.get(&line_num) {
-                            if hits > 0 { "█ " } else { "█ " }
+                        if hits_map.contains_key(&line_num) {
+                            "█ "
                         } else {
                             "  "
                         }
@@ -1226,11 +1226,10 @@ pub(crate) fn ui(f: &mut ratatui::Frame, app: &mut TuiApp) {
         }
     }
 
-    if let Some((msg, ts)) = &app.message {
-        if ts.elapsed().as_secs() < 3 {
+    if let Some((msg, ts)) = &app.message
+        && ts.elapsed().as_secs() < 3 {
             draw_popup(f, "Copy Status", msg, 50, 15);
         }
-    }
 }
 
 fn draw_popup(f: &mut ratatui::Frame, title: &str, message: &str, percent_x: u16, percent_y: u16) {

@@ -446,6 +446,7 @@ pub fn retrieve_graph_context_with_options(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn retrieve_graph_context(
     conn: &rusqlite::Connection,
     query_str: &str,

@@ -124,11 +124,10 @@ pub(crate) fn should_index_path(path: &Path) -> bool {
 
 pub(crate) fn should_index_path_with_registry(path: &Path, registry: &BackendRegistry) -> bool {
     for component in path.components() {
-        if let Some(s) = component.as_os_str().to_str() {
-            if crate::discovery::should_skip_dir(s) {
+        if let Some(s) = component.as_os_str().to_str()
+            && crate::discovery::should_skip_dir(s) {
                 return false;
             }
-        }
     }
     registry.find_by_path(path).is_some()
 }
@@ -149,13 +148,11 @@ pub fn build_index_with_registry(
     // Find files
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
         let path = e.path();
-        if path.is_dir() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if crate::discovery::should_skip_dir(name) {
+        if path.is_dir()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && crate::discovery::should_skip_dir(name) {
                     return false;
                 }
-            }
-        }
         true
     });
     let mut matching_files = Vec::new();
@@ -214,11 +211,10 @@ pub fn build_index_with_registry(
             });
 
             for cs in &mut file_occurrences {
-                if let Some(ref mut idx) = cs.enclosing_temp_index {
-                    if let Some(&new_idx) = index_map.get(idx) {
+                if let Some(ref mut idx) = cs.enclosing_temp_index
+                    && let Some(&new_idx) = index_map.get(idx) {
                         *idx = new_idx;
                     }
-                }
             }
         }
 
@@ -267,8 +263,8 @@ pub fn build_index_with_registry(
         let backend = registry.find_by_path(&cs.file);
         let resolver = backend.and_then(|b| b.resolver());
 
-        if options.use_lsp {
-            if let Some(res) = resolver {
+        if options.use_lsp
+            && let Some(res) = resolver {
                 let resolve_input = ResolveInput {
                     workspace_root: root,
                     occurrence: cs,
@@ -287,7 +283,6 @@ pub fn build_index_with_registry(
                     }
                 }
             }
-        }
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
