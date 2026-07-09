@@ -1413,8 +1413,27 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
 
     println!("Installing ctx MCP server using binary: {}", exe);
     println!("Target clients: {}", clients.join(", "));
+
+    // Detection based on real filesystem (inspired by user discovery commands)
+    println!("\nDetection on this machine:");
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    detect_and_print(
+        "Claude Desktop",
+        home.as_ref()
+            .map(|h| h.join("Library/Application Support/Claude")),
+    );
+    detect_and_print("Cursor", home.as_ref().map(|h| h.join(".cursor")));
+    detect_and_print("Gemini", home.as_ref().map(|h| h.join(".gemini/config")));
+    detect_and_print(
+        "Continue",
+        home.as_ref().map(|h| h.join(".config/continue")),
+    );
+    if Path::new(".cursor").exists() || Path::new("mcp.json").exists() {
+        println!("  - Cursor project-level config possible in current dir");
+    }
+
     if args.dry_run {
-        println!("(dry-run mode — no files will be written)");
+        println!("\n(dry-run mode — no files will be written)");
     }
 
     let mut any_written = false;
@@ -1430,20 +1449,26 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
                 }
             }
             "cursor" => {
-                // Project-level is better when possible, but for global auto we target common global locations too.
-                // For simplicity here we document project .cursor/mcp.json and write a global example if .cursor dir exists at home.
+                // Global
                 if let Some(home) = std::env::var_os("HOME") {
                     let global = PathBuf::from(home).join(".cursor/mcp.json");
                     any_written |= write_mcp_entry(&global, &exe, args.dry_run, "Cursor (global)")?;
                 }
-                println!(
-                    "  Note: For per-project Cursor, also create .cursor/mcp.json next to your project (same shape)."
-                );
+                // Project-local (very common and recommended)
+                let local = PathBuf::from(".cursor/mcp.json");
+                any_written |= write_mcp_entry(&local, &exe, args.dry_run, "Cursor (project)")?;
             }
             "gemini" => {
                 if let Some(home) = std::env::var_os("HOME") {
                     let path = PathBuf::from(home).join(".gemini/config/mcp_config.json");
                     any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Gemini")?;
+                }
+            }
+            "continue" => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    // Common locations observed in the wild (mac + linux ~/.config)
+                    let path = PathBuf::from(home).join(".config/continue/mcpServers/mcp.json");
+                    any_written |= write_mcp_entry(&path, &exe, args.dry_run, "Continue.dev")?;
                 }
             }
             other => {
@@ -1507,13 +1532,20 @@ fn write_mcp_entry(
 
     if changed {
         let pretty = serde_json::to_string_pretty(&doc)?;
+        let action = if target.exists() { "update" } else { "create" };
         if dry_run {
-            println!("  [dry-run] Would update {} ({})", label, target.display());
+            println!(
+                "  [dry-run] Would {} {} ({})",
+                action,
+                label,
+                target.display()
+            );
             println!("  Content diff would affect the 'ctx' entry under mcpServers.");
         } else {
             fs::write(target, pretty + "\n")?;
             println!(
-                "  ✓ Wrote {} entry to {} ({})",
+                "  ✓ {}d {} entry at {} ({})",
+                action,
                 label,
                 target.display(),
                 label
@@ -1528,4 +1560,15 @@ fn write_mcp_entry(
     }
 
     Ok(changed)
+}
+
+/// Simple detector to report what MCP-capable agents appear to be present.
+fn detect_and_print(name: &str, path: Option<PathBuf>) {
+    if let Some(p) = path {
+        if p.exists() {
+            println!("  ✓ {} config dir found: {}", name, p.display());
+        } else {
+            println!("  - {} not detected (no {})", name, p.display());
+        }
+    }
 }
