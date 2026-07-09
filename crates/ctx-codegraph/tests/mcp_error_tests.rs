@@ -390,25 +390,22 @@ fn test_mcp_error_initialize_nonexistent_workspace() {
     assert!(responses[0].get("error").is_some());
     let message = responses[0]["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("Index not found") || message.contains("Failed to load graph context"),
-        "expected graceful initialize error, got: {message}"
+        message.contains("does not exist") || message.contains("Workspace"),
+        "expected workspace-does-not-exist error, got: {message}"
     );
 }
 
 #[test]
-fn test_mcp_error_initialize_missing_cargo_toml() {
+fn test_mcp_initialize_succeeds_without_index_for_file_tools() {
     let temp_dir = tempdir().unwrap();
     let root = temp_dir.path();
-    // Directory exists but has no Cargo.toml and no index.
+    // Directory exists but has no index (and no Cargo.toml). File tools should still be available.
     let root_uri = format!("file://{}", root.display());
 
     let responses = run_mcp_requests(&[init_request(&root_uri, 1)]);
-    assert!(responses[0].get("error").is_some());
-    let message = responses[0]["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("Index not found") || message.contains("ctx graph build"),
-        "expected index-not-found style error, got: {message}"
-    );
+    // Should succeed (not error) so read_file / search_code work even without graph index.
+    assert!(responses[0].get("result").is_some(), "expected successful init for file tools");
+    assert!(responses[0].get("error").is_none());
 }
 
 #[test]

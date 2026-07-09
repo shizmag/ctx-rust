@@ -142,6 +142,14 @@ fn handle_initialize(
         effective_root.display()
     );
 
+    if !effective_root.exists() {
+        return JsonRpcResponse::error(
+            request_id,
+            INTERNAL_ERROR,
+            format!("Workspace does not exist: {}", effective_root.display()),
+        );
+    }
+
     match GraphContextService::load_only(&ws_path) {
         Ok(service) => {
             eprintln!("Index loaded from {}", service.repo_root().display());
