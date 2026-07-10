@@ -24,5 +24,6 @@ members = [
     "crates/ctx-codegraph-dense",
     "crates/ctx-mcp",
     "crates/ctx-codegraph",
+    "crates/ctx-health",
 ]
 resolver = "2"

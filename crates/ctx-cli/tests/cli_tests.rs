@@ -210,6 +210,52 @@ fn test_cli_setting_subcommand_help_and_invocation() {
 }
 
 #[test]
+fn test_cli_healthcheck_help_and_run() {
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["healthcheck", "--help"])
+        .output()
+        .expect("failed");
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(out.contains("parsers"));
+    assert!(out.contains("hybrid search"));
+    assert!(out.contains("--probe"));
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let xdg = isolated_xdg_env(temp_dir.path());
+    fs::write(temp_dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([temp_dir.path().to_str().unwrap(), "healthcheck"])
+        .output()
+        .expect("failed to run healthcheck");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Tree-sitter parsers"));
+    assert!(stdout.contains("Language servers"));
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_json = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([
+            temp_dir.path().to_str().unwrap(),
+            "hc",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed json healthcheck");
+    assert!(output_json.status.success());
+    let json = String::from_utf8(output_json.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert!(parsed.get("parsers").is_some());
+    assert!(parsed.get("summary").is_some());
+}
+
+#[test]
 fn test_cli_mcp_install_help_and_dry_run() {
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output = cmd

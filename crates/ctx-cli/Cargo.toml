@@ -17,6 +17,7 @@ ctx-config = { path = "../ctx-config" }
 arboard = { version = "3.6.1", default-features = false }
 ctx-codegraph = { path = "../ctx-codegraph" }
 ctx-mcp = { path = "../ctx-mcp" }
+ctx-health = { path = "../ctx-health" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
 

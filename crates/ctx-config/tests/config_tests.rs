@@ -618,3 +618,21 @@ fn load_global_config_uses_defaults_when_file_missing() {
         assert_eq!(config, Config::default_values());
     });
 }
+
+#[test]
+fn load_config_strips_inline_comments_from_values() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join("config");
+    fs::write(
+        &config_path,
+        "embedding_model = /tmp/model.onnx  # ONNX path\nreranker_model = /tmp/rerank.onnx\n",
+    )
+    .unwrap();
+
+    let config = load_config(&config_path).unwrap();
+    assert_eq!(
+        config.embedding_model.as_deref(),
+        Some("/tmp/model.onnx")
+    );
+    assert_eq!(config.reranker_model.as_deref(), Some("/tmp/rerank.onnx"));
+}

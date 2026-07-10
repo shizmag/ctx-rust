@@ -195,7 +195,7 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         };
 
         let key = key.trim().to_lowercase();
-        let value = value.trim();
+        let value = strip_inline_comment(value.trim());
 
         match key.as_str() {
             "mode" => {
@@ -581,6 +581,14 @@ pub fn save_global_config(config: &Config) -> Result<PathBuf, std::io::Error> {
     })?;
     save_config(&path, config)?;
     Ok(path)
+}
+
+fn strip_inline_comment(value: &str) -> &str {
+    value
+        .split_once('#')
+        .map(|(before, _)| before.trim_end())
+        .unwrap_or(value)
+        .trim()
 }
 
 fn mode_to_str(m: &Mode) -> &'static str {

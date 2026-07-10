@@ -132,6 +132,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Command::Stats(s) => {
                 return handle_stats_command(s);
             }
+            Command::Healthcheck(h) => {
+                return handle_healthcheck_command(h);
+            }
         }
     }
     run_with_args(args, ctx_tui::run_interactive)
@@ -279,6 +282,9 @@ enum Command {
     Setting(SettingCommand),
     /// Show project-level usage stats (files, tokens, lines), codegraph index info if present, and MCP notes
     Stats(StatsCommand),
+    /// Comprehensive health report for parsers, LSP, hybrid search, and codegraph index
+    #[command(visible_alias = "health", visible_alias = "hc")]
+    Healthcheck(HealthcheckCommand),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -301,6 +307,29 @@ struct StatsCommand {
     /// Target project directory for stats (uses .ctxconfig if present)
     #[arg(default_value = ".")]
     path: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(
+    about = "Report health of tree-sitter parsers, LSP servers, hybrid search, and codegraph index",
+    after_help = "Examples:\n  \
+                  ctx healthcheck\n  \
+                  ctx healthcheck --probe\n  \
+                  ctx healthcheck --format json\n  \
+                  ctx hc /path/to/project"
+)]
+struct HealthcheckCommand {
+    /// Target project directory (uses .ctxconfig if present)
+    #[arg(default_value = ".")]
+    path: PathBuf,
+
+    /// Run live probes: LSP init, ONNX inference, hybrid backend wiring
+    #[arg(long)]
+    probe: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1739,6 +1768,38 @@ fn render_graph_context(
     }
 
     Ok(out)
+}
+
+fn handle_healthcheck_command(
+    health: HealthcheckCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if health.format != "text" && health.format != "json" {
+        return Err(format!(
+            "unsupported format: {} (use text or json)",
+            health.format
+        )
+        .into());
+    }
+
+    let report = ctx_health::run_healthcheck(
+        &health.path,
+        env!("CARGO_PKG_VERSION"),
+        ctx_health::HealthcheckOptions {
+            probe: health.probe,
+        },
+    );
+
+    if health.format == "json" {
+        println!("{}", ctx_health::render_json(&report)?);
+    } else {
+        print!("{}", ctx_health::render_text(&report));
+    }
+
+    if report.summary.overall == ctx_health::CheckStatus::Fail {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::Error>> {

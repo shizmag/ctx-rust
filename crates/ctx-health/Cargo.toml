@@ -1,0 +1,17 @@
+[package]
+name = "ctx-health"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ctx-config = { path = "../ctx-config" }
+ctx-codegraph = { path = "../ctx-codegraph" }
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
+ctx-codegraph-resolver = { path = "../ctx-codegraph-resolver" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"
+
+[dev-dependencies]
+assert_cmd = "2"

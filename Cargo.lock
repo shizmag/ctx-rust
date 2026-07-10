@@ -489,6 +489,7 @@ dependencies = [
  "ctx-codegraph",
  "ctx-config",
  "ctx-core",
+ "ctx-health",
  "ctx-mcp",
  "ctx-models",
  "ctx-render",
@@ -664,6 +665,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctx-health"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "ctx-codegraph",
+ "ctx-codegraph-models",
+ "ctx-codegraph-resolver",
+ "ctx-config",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ctx-lang-python"
 version = "0.1.0"
 dependencies = [
@@ -749,6 +765,7 @@ dependencies = [
  "ctx-render",
  "ctx-test",
  "ratatui",
+ "tempfile",
  "thiserror",
 ]
 
