@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use ctx_filter::{FilterContext, FilterEngine, FilterEntry};
 use ctx_models::{
-    HiddenItem, HiddenReason, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult,
+    HiddenItem, HiddenReason, Mode, NodeKind, NodeStats, ProjectSummary, ScanOptions, ScanResult,
     Visibility,
 };
 
@@ -43,7 +43,8 @@ pub fn scan(path: &Path, options: ScanOptions) -> Result<ScanResult, ScanError> 
         let kind = node_kind(&entry);
         let is_dir = kind == NodeKind::Directory;
 
-        if ignore_stack.is_ignored(entry_path, is_dir) {
+        let respect_gitignore = options.mode != Mode::All;
+        if ignore_stack.is_ignored(entry_path, is_dir, respect_gitignore) {
             summary::increment_hidden(&mut summary, is_dir);
             if is_dir {
                 pruned_dirs.push(entry_path.to_path_buf());

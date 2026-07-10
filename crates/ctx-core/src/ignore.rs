@@ -11,6 +11,7 @@ pub struct IgnoreStack {
     pub root_path: PathBuf,
     pub global_ignore: Option<Gitignore>,
     pub local_exclude: Option<Gitignore>,
+    pub user_exclude: Option<Gitignore>,
     pub matchers: Vec<GitignoreMatcher>,
 }
 
@@ -51,27 +52,20 @@ impl IgnoreStack {
                     build_gitignore_from_rules(&root_path, &root_path, &parsed.normal_rules);
             }
 
-        // 3. Build extra excludes from scan options
-        let root_extra = build_gitignore_from_rules(&root_path, &root_path, exclude_patterns);
+        // 3. Build user-provided excludes from scan options
+        let user_exclude =
+            build_gitignore_from_rules(&root_path, &root_path, exclude_patterns);
 
         let mut stack = Self {
             root_path: root_path.clone(),
             global_ignore,
             local_exclude,
+            user_exclude,
             matchers: Vec::new(),
         };
 
         // Push a root level matcher for root .gitignore
         stack.update_for_path(&root_path);
-
-        // If root_extra was built, we can add it as a separate matcher at root_path
-        if let Some(extra) = root_extra {
-            stack.matchers.push(GitignoreMatcher {
-                dir_path: root_path,
-                git_ignore: Some(extra),
-                ctx_bypass: None,
-            });
-        }
 
         stack
     }
@@ -134,7 +128,16 @@ impl IgnoreStack {
         }
     }
 
-    pub fn is_ignored(&mut self, path: &Path, is_dir: bool) -> bool {
+    pub fn is_ignored(&mut self, path: &Path, is_dir: bool, respect_gitignore: bool) -> bool {
+        if let Some(ref gi) = self.user_exclude
+            && gi.matched(path, is_dir).is_ignore() {
+                return true;
+            }
+
+        if !respect_gitignore {
+            return false;
+        }
+
         self.update_for_path(path);
 
         for matcher in self.matchers.iter().rev() {
@@ -385,8 +388,38 @@ third_ctx/
 
         let mut stack = IgnoreStack::new(root.clone(), &["vendor/".to_string()]);
 
-        assert!(stack.is_ignored(&root.join("vendor"), true));
-        assert!(!stack.is_ignored(&root.join("src/main.rs"), false));
+        assert!(stack.is_ignored(&root.join("vendor"), true, true));
+        assert!(!stack.is_ignored(&root.join("src/main.rs"), false, true));
+    }
+
+    #[test]
+    fn ignore_stack_skips_gitignore_when_not_respected() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        fs::create_dir_all(root.join("hidden")).unwrap();
+        fs::write(root.join("hidden/secret.txt"), "secret\n").unwrap();
+        fs::write(root.join(".gitignore"), "hidden/\n").unwrap();
+
+        let mut stack = IgnoreStack::new(root.clone(), &[]);
+
+        assert!(stack.is_ignored(&root.join("hidden"), true, true));
+        assert!(!stack.is_ignored(&root.join("hidden"), true, false));
+        assert!(!stack.is_ignored(&root.join("hidden/secret.txt"), false, false));
+    }
+
+    #[test]
+    fn ignore_stack_still_applies_user_exclude_when_gitignore_disabled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        fs::create_dir_all(root.join("vendor/pkg")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("vendor/pkg/lib.rs"), "fn lib() {}\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut stack = IgnoreStack::new(root.clone(), &["vendor/".to_string()]);
+
+        assert!(stack.is_ignored(&root.join("vendor"), true, false));
+        assert!(!stack.is_ignored(&root.join("src/main.rs"), false, false));
     }
 
     #[test]
@@ -403,7 +436,7 @@ third_ctx/
 
         let mut stack = IgnoreStack::new(root.clone(), &[]);
 
-        assert!(stack.is_ignored(&root.join("ignored"), true));
-        assert!(!stack.is_ignored(&root.join("ignored/secret.txt"), false));
+        assert!(stack.is_ignored(&root.join("ignored"), true, true));
+        assert!(!stack.is_ignored(&root.join("ignored/secret.txt"), false, true));
     }
 }
