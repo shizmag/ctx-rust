@@ -305,7 +305,7 @@ pub fn list_tools() -> serde_json::Value {
             {
                 "name": "rebuild_index",
                 "title": "Rebuild Index",
-                "description": "Rebuild the codegraph index (optionally with embeddings/lexical search indexes). When to use: only when index missing/stale or hybrid retrieval fails. Example: rebuild_index(use_lsp: true, with_emb: true).",
+                "description": "Rebuild the codegraph index (optionally with embeddings/lexical search indexes). When to use: only when index missing/stale or hybrid retrieval fails. Example: rebuild_index(with_all: true) or rebuild_index(use_lsp: true, with_emb: true).",
                 "inputSchema": rebuild_index_schema(),
                 "annotations": { "destructiveHint": true }
             },
@@ -542,19 +542,24 @@ fn handle_rebuild_index(
     record_rebuild();
     let config = find_and_load_config(root).unwrap_or_default();
     let default_use_lsp = config.use_lsp.unwrap_or(true);
-    let use_lsp = get_bool_arg(args, "use_lsp", default_use_lsp);
+    let with_all = get_bool_arg(args, "with_all", false);
+    let use_lsp = if with_all {
+        get_bool_arg(args, "use_lsp", true)
+    } else {
+        get_bool_arg(args, "use_lsp", default_use_lsp)
+    };
 
-    let with_embeddings = if get_bool_arg(args, "with_emb", false) {
-        Some(true)
-    } else if get_bool_arg(args, "without_emb", false) {
+    let with_embeddings = if get_bool_arg(args, "without_emb", false) {
         Some(false)
+    } else if get_bool_arg(args, "with_emb", false) || with_all {
+        Some(true)
     } else {
         None
     };
-    let with_lexical = if get_bool_arg(args, "with_lex", false) {
-        Some(true)
-    } else if get_bool_arg(args, "without_lex", false) {
+    let with_lexical = if get_bool_arg(args, "without_lex", false) {
         Some(false)
+    } else if get_bool_arg(args, "with_lex", false) || with_all {
+        Some(true)
     } else {
         None
     };
@@ -700,9 +705,13 @@ fn rebuild_index_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "with_all": {
+                "type": "boolean",
+                "description": "Enable all build methods: LSP resolution, dense embeddings, and lexical search. Default: false."
+            },
             "use_lsp": {
                 "type": "boolean",
-                "description": "Use LSP for edge resolution (rust-analyzer, etc.). Default: true."
+                "description": "Use LSP for edge resolution (rust-analyzer, etc.). Default: true (or from .ctxconfig); with with_all, defaults to true unless explicitly false."
             },
             "with_emb": {
                 "type": "boolean",

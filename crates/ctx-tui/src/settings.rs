@@ -35,13 +35,14 @@ struct SettingsState {
     exclude_preset: usize,
 }
 
-const N_FIELDS: usize = 21;
+const N_FIELDS: usize = 22;
 const EXCLUDE_IDX: usize = 3;
 const ENABLE_RERANK_IDX: usize = 16;
 const EMBEDDING_MODEL_IDX: usize = 17;
 const RERANKER_MODEL_IDX: usize = 18;
 const EMBEDDING_TOKENIZER_IDX: usize = 19;
 const RERANK_TOKENIZER_IDX: usize = 20;
+const BUILD_BATCH_SIZE_IDX: usize = 21;
 
 // Common exclude patterns for arrow cycling (no free-text input)
 const COMMON_EXCLUDES: &[&str] = &[
@@ -64,6 +65,7 @@ const DEFAULT_RRF_K: usize = 60;
 const DEFAULT_BM25_TOP_K: usize = 50;
 const DEFAULT_DENSE_TOP_K: usize = 50;
 const DEFAULT_RERANK_TOP_K: usize = 20;
+const DEFAULT_BUILD_BATCH_SIZE: usize = 32;
 
 impl SettingsState {
     fn new(dir: PathBuf) -> Self {
@@ -109,6 +111,7 @@ impl SettingsState {
             18 => "reranker_model (Search)",
             19 => "embedding_tokenizer (Search)",
             20 => "rerank_tokenizer (Search)",
+            21 => "build_batch_size (Build)",
             _ => "",
         }
     }
@@ -139,6 +142,8 @@ impl SettingsState {
                     Converts text to token IDs before vector embedding. Defaults to embedding model's parent folder.",
             20 => "Directory with tokenizer.json (HuggingFace) for the reranker ONNX model. \
                     Tokenizes query+document pairs for cross-encoder scoring. Defaults to reranker model's parent folder.",
+            21 => "Files processed per build batch (tree-sitter → LSP → embeddings → DB). \
+                    Sequential batches; no concurrency. Typical: 32.",
             _ => "",
         }
     }
@@ -216,6 +221,9 @@ impl SettingsState {
                 .rerank_tokenizer
                 .clone()
                 .unwrap_or_else(|| "(default: reranker model dir)".into()),
+            21 => c.build_batch_size
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| DEFAULT_BUILD_BATCH_SIZE.to_string()),
             _ => String::new(),
         }
     }
@@ -225,7 +233,7 @@ impl SettingsState {
     }
 
     fn is_numeric_field(&self, idx: usize) -> bool {
-        matches!(idx, 1 | 2 | 10 | 12 | 13 | 14 | 15)
+        matches!(idx, 1 | 2 | 10 | 12 | 13 | 14 | 15 | 21)
     }
 
     fn is_cyclable_field(&self, idx: usize) -> bool {
@@ -439,6 +447,15 @@ impl SettingsState {
                 let cur = self.effective().rerank_top_k.unwrap_or(DEFAULT_RERANK_TOP_K);
                 let new = (cur as i64 + delta * step).max(1) as usize;
                 self.config.rerank_top_k = Some(new);
+            }
+            21 => {
+                let step: i64 = 4;
+                let cur = self
+                    .effective()
+                    .build_batch_size
+                    .unwrap_or(DEFAULT_BUILD_BATCH_SIZE);
+                let new = (cur as i64 + delta * step).max(1) as usize;
+                self.config.build_batch_size = Some(new);
             }
             _ => {}
         }
@@ -847,6 +864,15 @@ mod tests {
         let help = s.field_help(RERANK_TOKENIZER_IDX);
         assert!(help.contains("tokenizer.json"));
         assert!(help.contains("reranker"));
+    }
+
+    #[test]
+    fn build_batch_size_help_mentions_file_batches() {
+        let s = make_test_state();
+        let help = s.field_help(BUILD_BATCH_SIZE_IDX);
+        assert!(help.contains("batch"));
+        assert!(help.contains("tree-sitter"));
+        assert!(help.contains("embeddings"));
     }
 
     #[test]

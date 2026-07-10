@@ -7,6 +7,16 @@ use crate::error::ModelError;
 use crate::tokenizer::CodeTokenizer;
 
 pub const EMBEDDING_DIM: usize = 768;
+pub const DEFAULT_EMBED_BATCH_SIZE: usize = 32;
+
+/// Yields half-open index ranges `[start, end)` covering `0..len` in batches of `batch_size`.
+pub fn batch_ranges(len: usize, batch_size: usize) -> impl Iterator<Item = std::ops::Range<usize>> {
+    assert!(batch_size > 0, "batch_size must be > 0");
+    (0..len).step_by(batch_size).map(move |start| {
+        let end = (start + batch_size).min(len);
+        start..end
+    })
+}
 
 pub struct EmbeddingModel {
     session: Session,
@@ -115,6 +125,25 @@ impl EmbeddingModel {
 
         Ok(embeddings)
     }
+
+    /// Embeds texts in fixed-size batches using a single loaded model session.
+    pub fn embed_texts_batched(
+        &mut self,
+        texts: &[String],
+        batch_size: usize,
+    ) -> Result<Vec<Vec<f32>>, ModelError> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        assert!(batch_size > 0, "batch_size must be > 0");
+
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        for range in batch_ranges(texts.len(), batch_size) {
+            let batch_embeddings = self.embed_texts(&texts[range])?;
+            all_embeddings.extend(batch_embeddings);
+        }
+        Ok(all_embeddings)
+    }
 }
 
 fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelError> {
@@ -156,6 +185,64 @@ pub fn l2_normalize(vector: &mut [f32]) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn batch_ranges_splits_evenly() {
+        assert_eq!(
+            batch_ranges(10, 3).collect::<Vec<_>>(),
+            vec![0..3, 3..6, 6..9, 9..10]
+        );
+    }
+
+    #[test]
+    fn batch_ranges_empty_when_len_zero() {
+        assert_eq!(batch_ranges(0, 32).collect::<Vec<_>>(), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn batch_ranges_single_batch_when_len_smaller_than_batch_size() {
+        assert_eq!(batch_ranges(5, 32).collect::<Vec<_>>(), vec![0..5]);
+    }
+
+    #[test]
+    fn batch_ranges_exact_multiple_has_no_trailing_partial() {
+        assert_eq!(
+            batch_ranges(6, 3).collect::<Vec<_>>(),
+            vec![0..3, 3..6]
+        );
+    }
+
+    #[test]
+    fn batch_ranges_covers_all_indices_without_gaps() {
+        let len = 37;
+        let batch_size = 8;
+        let ranges: Vec<_> = batch_ranges(len, batch_size).collect();
+        assert_eq!(ranges.first().map(|r| r.start), Some(0));
+        assert_eq!(ranges.last().map(|r| r.end), Some(len));
+        let covered: usize = ranges.iter().map(|r| r.end - r.start).sum();
+        assert_eq!(covered, len);
+        for window in ranges.windows(2) {
+            assert_eq!(window[0].end, window[1].start, "batch ranges must be contiguous");
+        }
+    }
+
+    #[test]
+    fn default_embed_batch_size_is_positive() {
+        assert!(DEFAULT_EMBED_BATCH_SIZE > 0);
+    }
+
+    /// `embed_texts_batched` short-circuits on empty input before any ONNX inference.
+    #[test]
+    fn embed_texts_batched_empty_input_uses_no_batch_ranges() {
+        assert!(batch_ranges(0, DEFAULT_EMBED_BATCH_SIZE).next().is_none());
+    }
+
+    /// Single-text batched embedding uses exactly one batch range (no ONNX required to verify plan).
+    #[test]
+    fn embed_texts_batched_single_text_uses_one_batch_range() {
+        let ranges: Vec<_> = batch_ranges(1, DEFAULT_EMBED_BATCH_SIZE).collect();
+        assert_eq!(ranges, vec![0..1]);
+    }
 
     #[test]
     fn l2_normalize_scales_to_unit_length() {
@@ -298,6 +385,37 @@ mod tests {
         assert_eq!(vectors.len(), 1);
         assert_eq!(vectors[0].len(), EMBEDDING_DIM);
         assert_unit_length(&vectors[0]);
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn embed_texts_batched_matches_single_call() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let texts = vec![
+            "fn main() {}".to_string(),
+            "struct Point { x: f32, y: f32 }".to_string(),
+            "impl Display for Point {}".to_string(),
+            "enum Color { Red, Green, Blue }".to_string(),
+            "trait Greeter { fn greet(&self); }".to_string(),
+        ];
+
+        let mut model = load_default_embedding_model();
+        let single = model.embed_texts(&texts).expect("embed batch");
+        let batched = model
+            .embed_texts_batched(&texts, 2)
+            .expect("embed batched");
+
+        assert_eq!(batched.len(), texts.len());
+        assert_eq!(batched.len(), single.len());
+        for (expected, actual) in single.iter().zip(batched.iter()) {
+            assert_eq!(expected.len(), actual.len());
+            for (a, b) in expected.iter().zip(actual.iter()) {
+                assert!((a - b).abs() < 1e-5, "batched embeddings should match single call");
+            }
+        }
     }
 
     #[test]

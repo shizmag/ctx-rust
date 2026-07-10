@@ -2,7 +2,7 @@ use ctx_config::{
     ensure_global_config, find_and_load_config, find_config, find_project_config,
     global_config_path, load_config, load_global_config, merge_configs,
     missing_config_setting_keys, save_config, save_global_config, Config, CONFIG_DIR_NAME,
-    CONFIG_FILE_NAME, EnsureOutcome, KNOWN_CONFIG_SETTING_KEYS,
+    CONFIG_FILE_NAME, EnsureOutcome, KNOWN_CONFIG_SETTING_KEYS, DEFAULT_BUILD_BATCH_SIZE,
 };
 use ctx_models::Mode;
 use std::fs;
@@ -294,6 +294,21 @@ fn load_config_settings_defaults_to_none_when_absent() {
     assert!(config.use_lsp.is_none());
     assert!(config.stats_enabled.is_none());
     assert!(config.default_token_budget.is_none());
+}
+
+#[test]
+fn load_config_build_batch_size_and_embed_batch_size_alias() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let config_path = temp_dir.path().join("build_batch.ctxconfig");
+    fs::write(&config_path, "build_batch_size = 16\n").unwrap();
+    let config = load_config(&config_path).unwrap();
+    assert_eq!(config.build_batch_size, Some(16));
+
+    let alias_path = temp_dir.path().join("embed_batch.ctxconfig");
+    fs::write(&alias_path, "embed_batch_size = 8\n").unwrap();
+    let alias_config = load_config(&alias_path).unwrap();
+    assert_eq!(alias_config.build_batch_size, Some(8));
 }
 
 #[test]
@@ -629,6 +644,7 @@ fn ensure_global_config_upgrades_legacy_config_missing_new_feature_settings() {
             config.default_retrieval_strategy.as_deref(),
             Some("hybrid")
         );
+        assert_eq!(config.build_batch_size, Some(DEFAULT_BUILD_BATCH_SIZE));
 
         let content = fs::read_to_string(&path).unwrap();
         for key in [
@@ -638,6 +654,7 @@ fn ensure_global_config_upgrades_legacy_config_missing_new_feature_settings() {
             "rerank_top_k",
             "enable_rerank",
             "default_retrieval_strategy",
+            "build_batch_size",
             "# embedding_model",
             "# embedding_tokenizer",
             "# reranker_model",
@@ -695,6 +712,7 @@ fn save_config_writes_all_known_settings() {
         "rerank_top_k",
         "enable_rerank",
         "default_retrieval_strategy",
+        "build_batch_size",
     ] {
         assert!(content.contains(key), "missing key {key} in:\n{content}");
     }

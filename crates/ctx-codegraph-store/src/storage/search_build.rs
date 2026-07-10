@@ -5,7 +5,7 @@ use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{EdgeKind, FileId, SymbolId};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lexical::{IndexDoc, LexicalIndex};
-use ctx_codegraph_models::{file_fingerprint, EmbeddingModel};
+use ctx_codegraph_models::{batch_ranges, file_fingerprint, EmbeddingModel};
 use ctx_config::Config;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -99,26 +99,73 @@ pub fn build_search_indexes(
         return Ok(SearchBuildReport::default());
     }
 
-    let mut report = SearchBuildReport::default();
     if options.force_search_rebuild {
         clear_chunks(conn)?;
     }
 
-    let mut all_chunks: Vec<Chunk> = Vec::new();
+    let file_ids = collect_file_ids(conn)?;
+    let file_batch_size = config.effective_build_batch_size();
+    let embed_batch_size = file_batch_size;
+
+    let mut report = SearchBuildReport::default();
+    let mut all_chunks = Vec::new();
     let mut next_chunk_id = 0i64;
 
-    let mut file_ids = Vec::new();
-    {
-        let mut stmt = conn.prepare("SELECT id, path FROM files")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((FileId(row.get::<_, i64>(0)?), row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            file_ids.push(row?);
+    // Load the embedding model once for the whole build when embeddings are enabled.
+    let mut embedding_ctx = if options.builds_embeddings(auto) {
+        Some(open_embedding_build_context(workspace_root, options, config)?)
+    } else {
+        None
+    };
+
+    // Process files in sequential batches: chunks → embeddings → DB (lexical at end).
+    for file_range in batch_ranges(file_ids.len(), file_batch_size) {
+        let file_batch = &file_ids[file_range];
+        let batch_chunks =
+            build_chunks_for_files(conn, file_batch, options, &mut next_chunk_id)?;
+        report.chunks_written += batch_chunks.len();
+
+        if let Some(ctx) = embedding_ctx.as_mut() {
+            report.embeddings_written +=
+                embed_and_store_chunks(ctx, &batch_chunks, embed_batch_size)?;
         }
+
+        all_chunks.extend(batch_chunks);
     }
 
-    for (file_id, abs_path) in &file_ids {
+    if options.builds_lexical(auto) {
+        report.lexical_docs_written =
+            build_lexical_index(conn, workspace_root, &all_chunks)?;
+    }
+
+    if let Some(ctx) = embedding_ctx.as_mut() {
+        finalize_embedding_metadata(conn, ctx)?;
+    }
+
+    Ok(report)
+}
+
+fn collect_file_ids(conn: &Connection) -> Result<Vec<(FileId, String)>, CodeGraphError> {
+    let mut file_ids = Vec::new();
+    let mut stmt = conn.prepare("SELECT id, path FROM files")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((FileId(row.get::<_, i64>(0)?), row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        file_ids.push(row?);
+    }
+    Ok(file_ids)
+}
+
+fn build_chunks_for_files(
+    conn: &Connection,
+    file_ids: &[(FileId, String)],
+    options: &BuildIndexOptions,
+    next_chunk_id: &mut i64,
+) -> Result<Vec<Chunk>, CodeGraphError> {
+    let mut all_chunks = Vec::new();
+
+    for (file_id, abs_path) in file_ids {
         if options.force_search_rebuild {
             delete_chunks_for_file(conn, *file_id)?;
         }
@@ -133,71 +180,115 @@ pub fn build_search_indexes(
             .build(&symbols, &contains_parent, &occurrences)
             .map_err(CodeGraphError::Io)?;
         for chunk in &mut chunks {
-            chunk.id = Some(ChunkId(next_chunk_id));
-            next_chunk_id += 1;
+            chunk.id = Some(ChunkId(*next_chunk_id));
+            *next_chunk_id += 1;
         }
         save_chunks(conn, &chunks)?;
         all_chunks.extend(chunks);
     }
-    report.chunks_written = all_chunks.len();
 
-    if options.builds_lexical(auto) {
-        let docs: Vec<IndexDoc> = all_chunks
-            .iter()
-            .filter_map(|c| {
-                let text = c.text.as_ref()?;
-                Some(IndexDoc {
-                    chunk_id: c.id.unwrap(),
-                    symbol_id: c.symbol_id,
-                    path: file_path_for_chunk(conn, c.file_id).ok()?,
-                    qualified_name: c.qualified_name.clone(),
-                    text: text.clone(),
-                })
+    Ok(all_chunks)
+}
+
+fn build_lexical_index(
+    conn: &Connection,
+    workspace_root: &Path,
+    all_chunks: &[Chunk],
+) -> Result<usize, CodeGraphError> {
+    let docs: Vec<IndexDoc> = all_chunks
+        .iter()
+        .filter_map(|c| {
+            let text = c.text.as_ref()?;
+            Some(IndexDoc {
+                chunk_id: c.id.unwrap(),
+                symbol_id: c.symbol_id,
+                path: file_path_for_chunk(conn, c.file_id).ok()?,
+                qualified_name: c.qualified_name.clone(),
+                text: text.clone(),
             })
-            .collect();
-        let mut lexical = LexicalIndex::open(workspace_root)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        lexical
-            .build(&docs)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        report.lexical_docs_written = docs.len();
-        write_meta(conn, "lexical_index_version", "0.1.0")?;
+        })
+        .collect();
+    let mut lexical = LexicalIndex::open(workspace_root)
+        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+    lexical
+        .build(&docs)
+        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+    write_meta(conn, "lexical_index_version", "0.1.0")?;
+    Ok(docs.len())
+}
+
+fn resolve_embedding_model_path(
+    options: &BuildIndexOptions,
+    config: &Config,
+) -> Result<std::path::PathBuf, CodeGraphError> {
+    match config.resolved_embedding_model() {
+        Some(path) => Ok(path),
+        None if options.with_embeddings == Some(true) => {
+            let default = ctx_config::Config::default_embedding_model_path();
+            if default.exists() {
+                Ok(default)
+            } else {
+                Err(CodeGraphError::Parse(
+                    "embedding model path not configured".into(),
+                ))
+            }
+        }
+        None => Err(CodeGraphError::Parse(
+            "embedding model path not configured".into(),
+        )),
+    }
+}
+
+fn chunk_embedding_text(chunk: &Chunk) -> String {
+    chunk
+        .text
+        .clone()
+        .unwrap_or_else(|| chunk.qualified_name.clone())
+}
+
+struct EmbeddingBuildContext {
+    embedding_path: std::path::PathBuf,
+    model: EmbeddingModel,
+    dense: DenseIndex,
+}
+
+fn open_embedding_build_context(
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    config: &Config,
+) -> Result<EmbeddingBuildContext, CodeGraphError> {
+    let embedding_path = resolve_embedding_model_path(options, config)?;
+    let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
+    let model = EmbeddingModel::load(&embedding_path, &tokenizer_dir)
+        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+    let dense = DenseIndex::open(workspace_root)
+        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+    Ok(EmbeddingBuildContext {
+        embedding_path,
+        model,
+        dense,
+    })
+}
+
+fn embed_and_store_chunks(
+    ctx: &mut EmbeddingBuildContext,
+    chunks: &[Chunk],
+    embed_batch_size: usize,
+) -> Result<usize, CodeGraphError> {
+    if chunks.is_empty() {
+        return Ok(0);
     }
 
-    if options.builds_embeddings(auto) {
-        let embedding_path = match config.resolved_embedding_model() {
-            Some(path) => path,
-            None if options.with_embeddings == Some(true) => {
-                let default = ctx_config::Config::default_embedding_model_path();
-                if default.exists() {
-                    default
-                } else {
-                    return Err(CodeGraphError::Parse(
-                        "embedding model path not configured".into(),
-                    ));
-                }
-            }
-            None => {
-                return Err(CodeGraphError::Parse(
-                    "embedding model path not configured".into(),
-                ));
-            }
-        };
-        let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
-        let mut model = EmbeddingModel::load(&embedding_path, &tokenizer_dir)
+    let texts: Vec<String> = chunks.iter().map(chunk_embedding_text).collect();
+    let mut embeddings_written = 0usize;
+    for range in batch_ranges(texts.len(), embed_batch_size) {
+        let batch_texts = &texts[range.clone()];
+        let batch_chunks = &chunks[range];
+        let embeddings = ctx
+            .model
+            .embed_texts(batch_texts)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        let texts: Vec<String> = all_chunks
-            .iter()
-            .map(|c| {
-                c.text
-                    .clone()
-                    .unwrap_or_else(|| c.qualified_name.clone())
-            })
-            .collect();
-        let embeddings = model
-            .embed_texts(&texts)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        let records: Vec<EmbeddingRecord> = all_chunks
+        let records: Vec<EmbeddingRecord> = batch_chunks
             .iter()
             .zip(embeddings.iter())
             .map(|(chunk, emb)| EmbeddingRecord {
@@ -205,23 +296,27 @@ pub fn build_search_indexes(
                 embedding: emb.clone(),
             })
             .collect();
-        let mut dense = DenseIndex::open(workspace_root)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        dense
+        ctx.dense
             .upsert_batch(&records)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        report.embeddings_written = records.len();
-        let fp = file_fingerprint(&embedding_path)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-        write_meta(conn, "embedding_model_fingerprint", &fp)?;
-        write_meta(
-            conn,
-            "embedding_model_path",
-            &embedding_path.to_string_lossy(),
-        )?;
+        embeddings_written += records.len();
     }
+    Ok(embeddings_written)
+}
 
-    Ok(report)
+fn finalize_embedding_metadata(
+    conn: &Connection,
+    ctx: &EmbeddingBuildContext,
+) -> Result<(), CodeGraphError> {
+    let fp = file_fingerprint(&ctx.embedding_path)
+        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+    write_meta(conn, "embedding_model_fingerprint", &fp)?;
+    write_meta(
+        conn,
+        "embedding_model_path",
+        &ctx.embedding_path.to_string_lossy(),
+    )?;
+    Ok(())
 }
 
 fn write_meta(conn: &Connection, key: &str, value: &str) -> Result<(), CodeGraphError> {
@@ -300,6 +395,7 @@ mod tests {
     use super::*;
     use crate::storage::schema::init_schema;
     use ctx_codegraph_lang::backend::BackendRegistry;
+    use ctx_codegraph_models::DEFAULT_EMBED_BATCH_SIZE;
     use ctx_codegraph_lang::model::{OccurrenceKind, ResolutionConfidence};
     use std::path::PathBuf;
 
@@ -476,6 +572,28 @@ mod tests {
             &options,
             &Config::default()
         ));
+    }
+
+    #[test]
+    fn dense_embedding_batch_plan_covers_all_chunks() {
+        let chunk_count = DEFAULT_EMBED_BATCH_SIZE * 2 + 5;
+        let ranges: Vec<_> = batch_ranges(chunk_count, DEFAULT_EMBED_BATCH_SIZE).collect();
+
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges.first().map(|r| r.start), Some(0));
+        assert_eq!(ranges.last().map(|r| r.end), Some(chunk_count));
+        let covered: usize = ranges.iter().map(|r| r.end - r.start).sum();
+        assert_eq!(covered, chunk_count);
+    }
+
+    #[test]
+    fn file_batch_plan_covers_all_files() {
+        let file_count = 10;
+        let batch_size = 3;
+        let ranges: Vec<_> = batch_ranges(file_count, batch_size).collect();
+        assert_eq!(ranges, vec![0..3, 3..6, 6..9, 9..10]);
+        let covered: usize = ranges.iter().map(|r| r.end - r.start).sum();
+        assert_eq!(covered, file_count);
     }
 
     #[test]

@@ -996,6 +996,7 @@ struct InstallCommand {
     after_help = "Examples:\n  \
                   ctx graph build\n  \
                   ctx graph build --with-lsp\n  \
+                  ctx graph build --all\n  \
                   ctx graph symbols\n  \
                   ctx graph calls my_function\n  \
                   ctx graph callers my_function\n  \
@@ -1011,6 +1012,10 @@ struct GraphCommand {
     /// Target directory path containing the project to analyze
     #[arg(default_value = ".", global = true)]
     path: PathBuf,
+
+    /// Enable all build methods: LSP resolution, dense embeddings, and lexical search
+    #[arg(long, global = true)]
+    all: bool,
 
     /// Disable language server database fallback (forces tree-sitter fallback only)
     #[arg(long, global = true)]
@@ -1161,7 +1166,8 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
     use ctx_codegraph::BuildIndexOptions;
     use std::collections::HashMap;
 
-    let use_rust_analyzer = graph_args.with_lsp && !graph_args.no_rust_analyzer;
+    let use_rust_analyzer =
+        (graph_args.with_lsp || graph_args.all) && !graph_args.no_rust_analyzer;
 
     match graph_args.command {
         GraphSubcommand::Info { format } => {
@@ -1173,14 +1179,14 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             let config = ctx_config::find_and_load_config(&graph_args.path).unwrap_or_default();
             let with_emb = if graph_args.without_emb {
                 Some(false)
-            } else if graph_args.with_emb {
+            } else if graph_args.with_emb || graph_args.all {
                 Some(true)
             } else {
                 None
             };
             let with_lex = if graph_args.without_lex {
                 Some(false)
-            } else if graph_args.with_lex {
+            } else if graph_args.with_lex || graph_args.all {
                 Some(true)
             } else {
                 None

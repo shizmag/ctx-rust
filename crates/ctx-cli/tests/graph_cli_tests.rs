@@ -1,5 +1,11 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn isolated_xdg_env(temp_root: &Path) -> PathBuf {
+    let xdg = temp_root.join("xdg-config");
+    fs::create_dir_all(&xdg).unwrap();
+    xdg
+}
 
 fn create_temp_project(root: &Path) {
     let cargo_content = r#"
@@ -249,6 +255,8 @@ fn test_cli_graph_help_and_alias() {
     assert!(stdout.contains("slice"));
     assert!(stdout.contains("info"));
     assert!(stdout.contains("Examples:"));
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("ctx graph build --all"));
     assert!(stdout.contains("ctx g symbols"));
     assert!(stdout.contains("ctx g info"));
 
@@ -270,6 +278,73 @@ fn test_cli_graph_help_and_alias() {
     assert!(stdout_g.contains("Examples:"));
     assert!(stdout_g.contains("ctx g symbols"));
     assert!(stdout_g.contains("ctx g info"));
+    assert!(stdout_g.contains("--all"));
+}
+
+#[test]
+fn test_cli_graph_build_help_lists_all_flag() {
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["g", "build", "--help"])
+        .output()
+        .expect("failed to run ctx g build --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("--all"),
+        "build --help should document --all flag, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("LSP") || stdout.contains("embedding") || stdout.contains("lexical"),
+        "build --help should describe what --all enables, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_cli_graph_build_all_enables_embeddings_without_silent_skip() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    let xdg = isolated_xdg_env(root);
+    create_temp_project(root);
+    // Force a missing embedding model so --all cannot silently use the developer's default ONNX path.
+    fs::write(
+        root.join(".ctxconfig"),
+        "embedding_model = /tmp/ctx_test_missing_embedding_model.onnx\n",
+    )
+    .unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--all",
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph build --all");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let combined = format!(
+        "{}{}",
+        stderr,
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // Graph build succeeds; --all must attempt embeddings (warn or write), not silently skip.
+    assert!(
+        output.status.success(),
+        "--all should complete graph build even when embeddings fail, got:\n{combined}"
+    );
+    assert!(
+        combined.contains("embedding model")
+            || combined.contains("model file not found")
+            || combined.contains("model path not configured")
+            || combined.contains("search index build failed")
+            || combined.contains("Embeddings Written"),
+        "expected embedding build attempt with --all, got:\n{combined}"
+    );
 }
 
 #[test]

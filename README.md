@@ -247,7 +247,10 @@ ctx graph build
 ```
 
 Options:
+- `--all`: Enables all build methods (LSP, dense embeddings, lexical search). Respects `--without-emb` / `--without-lex` and `--no-rust-analyzer` when set.
 - `--with-lsp`: Enables language server fallback (e.g., `rust-analyzer` or `pyright-langserver`) to enrich calls with precise `LspExact` resolution.
+- `--with-emb`, `--with-lex`: Force dense embedding and BM25 lexical indexes (auto-enabled when `embedding_model` is in `.ctxconfig`).
+- `--without-emb`, `--without-lex`: Skip search indexes even when configured or `--all` is set.
 - `--no-rust-analyzer`: Disables language server integration, forcing tree-sitter fallback only.
 - `--verbose`, `-v`: Displays detailed build statistics, parsed files, edge kinds, and timings.
 
@@ -408,9 +411,10 @@ See [docs/hybrid-search.md](docs/hybrid-search.md) for hybrid search setup, mode
 
 ### `rebuild_index`
 
-- `use_lsp` (optional): Use LSP resolution. Default: `true`.
+- `with_all` (optional): Enable all build methods (LSP, dense embeddings, lexical search). Default: `false`.
+- `use_lsp` (optional): Use LSP resolution. Default: `true` (or from `.ctxconfig`); with `with_all`, defaults to `true` unless explicitly `false`.
 - `with_emb`, `with_lex` (optional): Build dense/lexical search indexes (requires `embedding_model` in `.ctxconfig`).
-- `without_emb`, `without_lex` (optional): Skip search indexes.
+- `without_emb`, `without_lex` (optional): Skip search indexes (overrides `with_all`).
 
 When symbol resolution is ambiguous, tools return structured text listing candidate symbols so the agent can refine `query` and retry.
 

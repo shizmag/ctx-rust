@@ -76,14 +76,28 @@ default_retrieval_strategy = hybrid   # graph | hybrid | lexical | dense
 # Graph only (default when embedding_model not configured)
 ctx graph build
 
+# All build methods: LSP + lexical + dense embeddings
+ctx graph build --all
+
 # Graph + lexical + dense embeddings (requires embedding_model in .ctxconfig)
 ctx graph build --with-emb --with-lex
 
-# Disable search indexes explicitly
-ctx graph build --without-emb --without-lex
+# Disable search indexes explicitly (overrides --all)
+ctx graph build --all --without-emb --without-lex
 ```
 
 ### MCP `rebuild_index`
+
+```json
+{
+  "name": "rebuild_index",
+  "arguments": {
+    "with_all": true
+  }
+}
+```
+
+Or explicitly:
 
 ```json
 {

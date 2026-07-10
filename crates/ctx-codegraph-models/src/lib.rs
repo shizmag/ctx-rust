@@ -5,7 +5,9 @@ pub mod paths;
 pub mod reranker;
 pub mod tokenizer;
 
-pub use embedding::{EmbeddingModel, EMBEDDING_DIM, l2_normalize};
+pub use embedding::{
+    batch_ranges, EmbeddingModel, DEFAULT_EMBED_BATCH_SIZE, EMBEDDING_DIM, l2_normalize,
+};
 pub use error::ModelError;
 pub use fingerprint::file_fingerprint;
 pub use paths::{ModelPaths, DEFAULT_EMBEDDING_ONNX, DEFAULT_RERANKER_ONNX};
@@ -20,6 +22,17 @@ mod tests {
     #[test]
     fn embedding_dim_constant_is_public() {
         assert_eq!(EMBEDDING_DIM, 768);
+    }
+
+    #[test]
+    fn default_embed_batch_size_is_reexported() {
+        assert_eq!(DEFAULT_EMBED_BATCH_SIZE, 32);
+    }
+
+    #[test]
+    fn batch_ranges_reexport_splits_indices() {
+        let ranges: Vec<_> = batch_ranges(7, 3).collect();
+        assert_eq!(ranges, vec![0..3, 3..6, 6..7]);
     }
 
     #[test]

@@ -1,17 +1,138 @@
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::IndexState;
+use ctx_codegraph_models::{batch_ranges, DEFAULT_EMBED_BATCH_SIZE};
 use ctx_codegraph_store::storage::{
     build_search_indexes, dense_embedding_count, get_index_state_with_registry, load_chunk,
     load_chunks_for_symbol, read_metadata, rebuild_index_db_with_registry,
 };
-use ctx_config::Config;
+use ctx_config::{Config, DEFAULT_BUILD_BATCH_SIZE};
 use std::fs;
+use std::path::Path;
 
 mod common;
 use common::{
     indexed_db, lexical_index_dir, lexical_search_options, no_search_options, production_registry,
     setup_mini_rust_project,
 };
+
+/// Many top-level functions across several source files (for file-batch and chunk-batch tests).
+fn setup_many_functions_project(root: &Path) {
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"batch_embed_test\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+    )
+    .unwrap();
+    let src = root.join("src");
+    fs::create_dir_all(&src).unwrap();
+
+    let file_count = DEFAULT_EMBED_BATCH_SIZE + 5;
+    let mut lib_rs = String::from("pub mod generated;\n");
+    for file_idx in 0..4 {
+        lib_rs.push_str(&format!("pub mod part_{file_idx};\n"));
+    }
+    for idx in 0..file_count {
+        lib_rs.push_str(&format!("pub fn fn_{idx}() {{ generated::helper_{idx}(); }}\n"));
+    }
+    fs::write(src.join("lib.rs"), lib_rs).unwrap();
+
+    let mut generated_rs = String::new();
+    for idx in 0..file_count {
+        generated_rs.push_str(&format!(
+            "pub fn helper_{idx}() {{ let _ = {idx}; }}\n"
+        ));
+    }
+    fs::write(src.join("generated.rs"), generated_rs).unwrap();
+
+    for file_idx in 0..4 {
+        let mut part_rs = String::new();
+        for idx in 0..3 {
+            part_rs.push_str(&format!("pub fn part_{file_idx}_{idx}() {{}}\n"));
+        }
+        fs::write(src.join(format!("part_{file_idx}.rs")), part_rs).unwrap();
+    }
+}
+
+#[test]
+fn test_build_search_indexes_respects_custom_file_batch_size() {
+    const FILE_BATCH: usize = 2;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup_many_functions_project(root);
+
+    let (conn, _index, _registry) = indexed_db(root, no_search_options());
+    let file_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert!(
+        file_count > FILE_BATCH as i64,
+        "fixture should index more files than one batch (got {file_count})"
+    );
+
+    let ranges: Vec<_> = batch_ranges(file_count as usize, FILE_BATCH).collect();
+    assert!(
+        ranges.len() > 1,
+        "expected multiple file batches for {file_count} files at batch size {FILE_BATCH}"
+    );
+
+    let config = Config {
+        build_batch_size: Some(FILE_BATCH),
+        ..Default::default()
+    };
+    let report = build_search_indexes(
+        &conn,
+        root,
+        &lexical_search_options(),
+        &config,
+    )
+    .unwrap();
+
+    assert!(report.chunks_written > 0);
+    assert_eq!(report.chunks_written, report.lexical_docs_written);
+    assert_eq!(config.effective_build_batch_size(), FILE_BATCH);
+
+    let covered: usize = ranges.iter().map(|r| r.end - r.start).sum();
+    assert_eq!(covered, file_count as usize);
+    assert_eq!(ranges.first().map(|r| r.start), Some(0));
+    assert_eq!(ranges.last().map(|r| r.end), Some(file_count as usize));
+}
+
+#[test]
+fn test_build_search_indexes_many_chunks_use_multiple_embedding_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup_many_functions_project(root);
+
+    let (conn, _index, _registry) = indexed_db(root, no_search_options());
+    let report = build_search_indexes(
+        &conn,
+        root,
+        &lexical_search_options(),
+        &Config::default(),
+    )
+    .unwrap();
+
+    assert!(
+        report.chunks_written > DEFAULT_EMBED_BATCH_SIZE,
+        "fixture should produce more chunks than one embedding batch (got {})",
+        report.chunks_written
+    );
+
+    let ranges: Vec<_> = batch_ranges(
+        report.chunks_written,
+        DEFAULT_BUILD_BATCH_SIZE,
+    )
+    .collect();
+    assert!(
+        ranges.len() > 1,
+        "expected multiple build batches for {} chunks at default batch size {}",
+        report.chunks_written,
+        DEFAULT_BUILD_BATCH_SIZE,
+    );
+    let covered: usize = ranges.iter().map(|r| r.end - r.start).sum();
+    assert_eq!(covered, report.chunks_written);
+    assert_eq!(ranges.first().map(|r| r.start), Some(0));
+    assert_eq!(ranges.last().map(|r| r.end), Some(report.chunks_written));
+}
 
 #[test]
 fn test_build_search_indexes_skipped_without_config_options() {
