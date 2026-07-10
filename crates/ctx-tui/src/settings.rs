@@ -17,7 +17,7 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 
-use ctx_config::{Config, find_and_load_config, save_global_config};
+use ctx_config::{Config, EnsureOutcome, ensure_global_config, save_global_config};
 use ctx_models::Mode;
 
 const GREEN: Color = Color::Rgb(158, 206, 106);
@@ -58,12 +58,21 @@ const DEFAULT_TOKEN_BUDGET: usize = 12000;
 
 impl SettingsState {
     fn new(dir: PathBuf) -> Self {
-        let config = find_and_load_config(&dir).unwrap_or_default();
+        let (config_path, config, outcome) =
+            ensure_global_config().unwrap_or_else(|_| (dir.clone(), Config::default_values(), EnsureOutcome::Created));
+        let message = match outcome {
+            EnsureOutcome::Created => Some(format!("created {}", config_path.display())),
+            EnsureOutcome::Upgraded => Some(format!(
+                "upgraded {} with new default settings",
+                config_path.display()
+            )),
+            EnsureOutcome::Unchanged => None,
+        };
         Self {
             dir,
             config,
             selected: 0,
-            message: None,
+            message,
             exclude_preset: 0,
         }
     }
@@ -424,6 +433,7 @@ impl SettingsState {
 
     fn save(&mut self) -> Result<(), String> {
         let target_path = save_global_config(&self.config).map_err(|e| e.to_string())?;
+        self.config = self.config.clone().apply_defaults();
         self.message = Some(format!("saved to {}", target_path.display()));
         Ok(())
     }
@@ -640,7 +650,26 @@ pub fn run_settings_editor(dir: PathBuf) -> Result<(), crate::error::TuiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ctx_config::{ensure_global_config, EnsureOutcome, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn with_xdg_config_home<F: FnOnce(&PathBuf)>(f: F) {
+        let _guard = env_lock();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let xdg = temp_dir.path().join("xdg-config");
+        fs::create_dir_all(&xdg).unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
+        f(&xdg);
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
 
     fn make_test_state() -> SettingsState {
         // direct construct to avoid fs side effects in tests
@@ -773,5 +802,62 @@ mod tests {
         s.selected = 1;
         s.activate_forward(1);
         assert!(s.config.max_depth.is_some());
+    }
+
+    #[test]
+    fn settings_state_creates_global_config_on_first_open() {
+        with_xdg_config_home(|xdg| {
+            let state = SettingsState::new(PathBuf::from("."));
+            let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+            assert!(path.exists());
+            assert_eq!(state.config, ctx_config::Config::default_values());
+            assert!(
+                state
+                    .message
+                    .as_deref()
+                    .is_some_and(|m| m.contains("created"))
+            );
+        });
+    }
+
+    #[test]
+    fn settings_state_upgrades_existing_global_config() {
+        with_xdg_config_home(|xdg| {
+            let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "mode = docs\n").unwrap();
+
+            let state = SettingsState::new(PathBuf::from("."));
+            assert_eq!(state.config.mode, Some(Mode::Docs));
+            assert_eq!(state.config.default_format, Some("yaml".into()));
+            assert!(
+                state
+                    .message
+                    .as_deref()
+                    .is_some_and(|m| m.contains("upgraded"))
+            );
+
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("default_format = yaml"));
+            assert!(!content.contains("embedding_model"));
+        });
+    }
+
+    #[test]
+    fn settings_save_writes_full_global_config() {
+        with_xdg_config_home(|xdg| {
+            let mut state = SettingsState::new(PathBuf::from("."));
+            state.config.mode = Some(Mode::Code);
+            state.save().unwrap();
+
+            let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("mode = code"));
+            assert!(content.contains("default_retrieval_strategy = hybrid"));
+            assert!(!content.contains("embedding_model"));
+
+            let (_, _, outcome) = ensure_global_config().unwrap();
+            assert_eq!(outcome, EnsureOutcome::Unchanged);
+        });
     }
 }

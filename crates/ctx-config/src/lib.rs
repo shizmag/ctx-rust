@@ -42,7 +42,78 @@ pub const DEFAULT_EMBEDDING_MODEL: &str =
 pub const DEFAULT_RERANKER_MODEL: &str =
     "/Users/vladimirkasterin/models/reranker/jina-reranker-v2-base-multilingual/model.onnx";
 
+/// What happened the last time [`ensure_global_config`] ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnsureOutcome {
+    /// Global config file did not exist and was created with defaults.
+    Created,
+    /// Existing config was missing newer settings and was upgraded on disk.
+    Upgraded,
+    /// Config already contained all known settings.
+    Unchanged,
+}
+
 impl Config {
+    /// Factory defaults for a fresh global config (no ONNX model paths).
+    pub fn default_values() -> Self {
+        Self {
+            mode: Some(Mode::Smart),
+            max_depth: Some(10),
+            max_file_size: Some(512 * 1024),
+            exclude: Vec::new(),
+            default_format: Some("yaml".into()),
+            mcp_target: None,
+            use_lsp: Some(true),
+            stats_enabled: Some(true),
+            default_packing: Some("sandwich".into()),
+            default_ranking: Some("hybrid".into()),
+            default_token_budget: Some(12000),
+            embedding_model: None,
+            reranker_model: None,
+            tokenizer_dir: None,
+            rrf_k: Some(60),
+            bm25_top_k: Some(50),
+            dense_top_k: Some(50),
+            rerank_top_k: Some(20),
+            enable_rerank: Some(false),
+            default_retrieval_strategy: Some("hybrid".into()),
+        }
+    }
+
+    /// Fill unset fields from [`Self::default_values`]; leaves explicit values intact.
+    pub fn apply_defaults(self) -> Self {
+        let d = Self::default_values();
+        Self {
+            mode: self.mode.or(d.mode),
+            max_depth: self.max_depth.or(d.max_depth),
+            max_file_size: self.max_file_size.or(d.max_file_size),
+            exclude: self.exclude,
+            default_format: self.default_format.or(d.default_format),
+            mcp_target: self.mcp_target.or(d.mcp_target),
+            use_lsp: self.use_lsp.or(d.use_lsp),
+            stats_enabled: self.stats_enabled.or(d.stats_enabled),
+            default_packing: self.default_packing.or(d.default_packing),
+            default_ranking: self.default_ranking.or(d.default_ranking),
+            default_token_budget: self.default_token_budget.or(d.default_token_budget),
+            embedding_model: self.embedding_model,
+            reranker_model: self.reranker_model,
+            tokenizer_dir: self.tokenizer_dir,
+            rrf_k: self.rrf_k.or(d.rrf_k),
+            bm25_top_k: self.bm25_top_k.or(d.bm25_top_k),
+            dense_top_k: self.dense_top_k.or(d.dense_top_k),
+            rerank_top_k: self.rerank_top_k.or(d.rerank_top_k),
+            enable_rerank: self.enable_rerank.or(d.enable_rerank),
+            default_retrieval_strategy: self
+                .default_retrieval_strategy
+                .or(d.default_retrieval_strategy),
+        }
+    }
+
+    /// True when [`apply_defaults`] would add at least one missing setting.
+    pub fn needs_upgrade(&self) -> bool {
+        self.clone().apply_defaults() != *self
+    }
+
     pub fn resolved_embedding_model(&self) -> Option<PathBuf> {
         self.embedding_model.as_ref().map(PathBuf::from)
     }
@@ -310,12 +381,17 @@ pub fn merge_configs(base: Config, overlay: Config) -> Config {
     }
 }
 
+pub fn load_global_config() -> Result<Config, std::io::Error> {
+    if let Some(path) = global_config_path() {
+        if path.exists() {
+            return Ok(load_config(&path)?.apply_defaults());
+        }
+    }
+    Ok(Config::default_values())
+}
+
 pub fn find_and_load_config(start_dir: &Path) -> Result<Config, std::io::Error> {
-    let global = if let Some(path) = global_config_path() {
-        load_config(&path)?
-    } else {
-        Config::default()
-    };
+    let global = load_global_config()?;
 
     let merged = if let Some(project_path) = find_project_config(start_dir) {
         let project = load_config(&project_path)?;
@@ -327,18 +403,41 @@ pub fn find_and_load_config(start_dir: &Path) -> Result<Config, std::io::Error> 
     Ok(merged)
 }
 
+/// Create or upgrade the global config used by `ctx setting`.
+pub fn ensure_global_config() -> Result<(PathBuf, Config, EnsureOutcome), std::io::Error> {
+    let path = global_config_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not resolve global config path (HOME/XDG_CONFIG_HOME not set)",
+        )
+    })?;
+
+    if !path.exists() {
+        let config = Config::default_values();
+        save_config(&path, &config)?;
+        return Ok((path, config, EnsureOutcome::Created));
+    }
+
+    let loaded = load_config(&path)?;
+    if loaded.needs_upgrade() {
+        let upgraded = loaded.apply_defaults();
+        save_config(&path, &upgraded)?;
+        Ok((path, upgraded, EnsureOutcome::Upgraded))
+    } else {
+        Ok((path, loaded.apply_defaults(), EnsureOutcome::Unchanged))
+    }
+}
+
 /// Save the config to the global config file (or an explicit path).
-/// Produces the simple key=value format understood by load_config.
+/// Writes every known setting (defaults applied; model paths only when set).
 pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::Error> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
+    let config = config.clone().apply_defaults();
     let mut lines: Vec<String> = vec![
-        format!(
-            "# {} - saved by `ctx setting`",
-            config_path.display()
-        ),
+        format!("# {} - saved by `ctx setting`", config_path.display()),
         "# Edit manually or via interactive TUI".to_string(),
     ];
 

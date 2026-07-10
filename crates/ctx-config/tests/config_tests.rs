@@ -1,6 +1,7 @@
 use ctx_config::{
-    find_and_load_config, find_config, find_project_config, global_config_path, load_config,
-    merge_configs, save_config, save_global_config, Config, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
+    ensure_global_config, find_and_load_config, find_config, find_project_config,
+    global_config_path, load_config, load_global_config, merge_configs, save_config,
+    save_global_config, Config, CONFIG_DIR_NAME, CONFIG_FILE_NAME, EnsureOutcome,
 };
 use ctx_models::Mode;
 use std::fs;
@@ -204,7 +205,7 @@ fn find_and_load_config_returns_default_when_no_config() {
 
         let config = find_and_load_config(&sub_dir).unwrap();
 
-        assert_eq!(config, Config::default());
+        assert_eq!(config, Config::default_values());
     });
 }
 
@@ -338,7 +339,7 @@ fn save_config_roundtrip_and_creates_file() {
     save_config(&config_path, &cfg).unwrap();
 
     let loaded = load_config(&config_path).unwrap();
-    assert_eq!(loaded, cfg);
+    assert_eq!(loaded.apply_defaults(), cfg.apply_defaults());
 
     let mut partial = Config::default();
     partial.mode = Some(Mode::Llm);
@@ -348,7 +349,7 @@ fn save_config_roundtrip_and_creates_file() {
     let loaded2 = load_config(&p2).unwrap();
     assert_eq!(loaded2.mode, Some(Mode::Llm));
     assert_eq!(loaded2.exclude, vec!["*.log".to_string()]);
-    assert!(loaded2.max_depth.is_none());
+    assert_eq!(loaded2.max_depth, Config::default_values().max_depth);
 }
 
 #[test]
@@ -389,4 +390,124 @@ fn merge_configs_prefers_overlay_values() {
     assert_eq!(merged.default_format.as_deref(), Some("yaml"));
     assert_eq!(merged.default_token_budget, Some(8000));
     assert_eq!(merged.exclude, vec!["target".to_string()]);
+}
+
+#[test]
+fn default_values_has_no_model_paths() {
+    let defaults = Config::default_values();
+    assert!(defaults.embedding_model.is_none());
+    assert!(defaults.reranker_model.is_none());
+    assert!(defaults.tokenizer_dir.is_none());
+    assert_eq!(defaults.mode, Some(Mode::Smart));
+    assert_eq!(defaults.default_format.as_deref(), Some("yaml"));
+    assert_eq!(defaults.default_retrieval_strategy.as_deref(), Some("hybrid"));
+    assert_eq!(defaults.rrf_k, Some(60));
+}
+
+#[test]
+fn apply_defaults_fills_missing_fields() {
+    let partial = Config {
+        mode: Some(Mode::Code),
+        ..Default::default()
+    };
+    let filled = partial.apply_defaults();
+    assert_eq!(filled.mode, Some(Mode::Code));
+    assert_eq!(filled.max_depth, Config::default_values().max_depth);
+    assert_eq!(filled.default_format, Config::default_values().default_format);
+    assert_eq!(
+        filled.default_retrieval_strategy,
+        Config::default_values().default_retrieval_strategy
+    );
+}
+
+#[test]
+fn ensure_global_config_creates_defaults_without_model_paths() {
+    with_xdg_config_home(|xdg| {
+        let (path, config, outcome) = ensure_global_config().unwrap();
+        assert_eq!(outcome, EnsureOutcome::Created);
+        assert_eq!(path, xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME));
+        assert!(path.exists());
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mode = smart"));
+        assert!(content.contains("default_format = yaml"));
+        assert!(content.contains("default_retrieval_strategy = hybrid"));
+        assert!(content.contains("rrf_k = 60"));
+        assert!(!content.contains("embedding_model"));
+        assert!(!content.contains("reranker_model"));
+
+        assert_eq!(config, Config::default_values());
+    });
+}
+
+#[test]
+fn ensure_global_config_upgrades_partial_existing_file() {
+    with_xdg_config_home(|xdg| {
+        let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "mode = code\ndefault_format = json\n").unwrap();
+
+        let (_, config, outcome) = ensure_global_config().unwrap();
+        assert_eq!(outcome, EnsureOutcome::Upgraded);
+        assert_eq!(config.mode, Some(Mode::Code));
+        assert_eq!(config.default_format.as_deref(), Some("json"));
+        assert_eq!(config.max_depth, Config::default_values().max_depth);
+        assert_eq!(
+            config.default_retrieval_strategy,
+            Config::default_values().default_retrieval_strategy
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mode = code"));
+        assert!(content.contains("default_format = json"));
+        assert!(content.contains("max_depth = 10"));
+        assert!(content.contains("default_retrieval_strategy = hybrid"));
+        assert!(!content.contains("embedding_model"));
+    });
+}
+
+#[test]
+fn ensure_global_config_is_idempotent_when_complete() {
+    with_xdg_config_home(|_xdg| {
+        let (_, _, first) = ensure_global_config().unwrap();
+        assert_eq!(first, EnsureOutcome::Created);
+
+        let (_, _, second) = ensure_global_config().unwrap();
+        assert_eq!(second, EnsureOutcome::Unchanged);
+    });
+}
+
+#[test]
+fn save_config_writes_all_known_settings() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join("config");
+    save_config(&config_path, &Config::default_values()).unwrap();
+    let content = fs::read_to_string(&config_path).unwrap();
+    for key in [
+        "mode",
+        "max_depth",
+        "max_file_size",
+        "default_format",
+        "use_lsp",
+        "stats_enabled",
+        "default_packing",
+        "default_ranking",
+        "default_token_budget",
+        "rrf_k",
+        "bm25_top_k",
+        "dense_top_k",
+        "rerank_top_k",
+        "enable_rerank",
+        "default_retrieval_strategy",
+    ] {
+        assert!(content.contains(key), "missing key {key} in:\n{content}");
+    }
+}
+
+#[test]
+fn load_global_config_uses_defaults_when_file_missing() {
+    with_xdg_config_home(|_xdg| {
+        let config = load_global_config().unwrap();
+        assert_eq!(config, Config::default_values());
+    });
 }
