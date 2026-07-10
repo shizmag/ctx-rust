@@ -223,6 +223,52 @@ fn test_python_resolver_fallback_noop() {
     assert_eq!(output.confidence, ResolutionConfidence::Syntax);
 }
 
+fn write_custom_mock_lsp_script(bin_dir: &std::path::Path, command_name: &str, definition_handler: &str) {
+    let script_path = bin_dir.join(command_name);
+    let script_content = [
+        "#!/usr/bin/env python3",
+        "import sys",
+        "import json",
+        "",
+        "def write_response(req_id, result):",
+        "    response = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"result\": result}",
+        "    msg = json.dumps(response)",
+        "    sys.stdout.write(f\"Content-Length: {len(msg)}\\r\\n\\r\\n{msg}\")",
+        "    sys.stdout.flush()",
+        "",
+        "def write_error(req_id, code, message):",
+        "    response = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"error\": {\"code\": code, \"message\": message}}",
+        "    msg = json.dumps(response)",
+        "    sys.stdout.write(f\"Content-Length: {len(msg)}\\r\\n\\r\\n{msg}\")",
+        "    sys.stdout.flush()",
+        "",
+        "while True:",
+        "    line = sys.stdin.readline()",
+        "    if not line:",
+        "        break",
+        "    if line.startswith(\"Content-Length:\"):",
+        "        length = int(line.split(\":\")[1].strip())",
+        "        sys.stdin.readline()",
+        "        content = sys.stdin.read(length)",
+        "        req = json.loads(content)",
+        "        method = req.get(\"method\")",
+        "        req_id = req.get(\"id\")",
+        "        if method == \"initialize\":",
+        "            write_response(req_id, {\"capabilities\": {\"textDocumentSync\": 1}})",
+        "        elif method == \"textDocument/definition\":",
+        definition_handler,
+        "",
+    ]
+    .join("\n");
+
+    let mut file = File::create(&script_path).unwrap();
+    file.write_all(script_content.as_bytes()).unwrap();
+
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+}
+
 fn write_mock_lsp_script(bin_dir: &std::path::Path, command_name: &str, definition_mode: &str) {
     let script_path = bin_dir.join(command_name);
     let definition_handler = match definition_mode {
@@ -495,6 +541,228 @@ fn test_lsp_transport_spawn_failure() {
 
     let err = result.err().expect("expected spawn failure");
     assert!(err.contains("Failed to spawn") || err.contains("definitely-not-a-real-lsp-binary"));
+}
+
+#[test]
+fn test_lsp_empty_definition_falls_back_to_name_match() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_custom_mock_lsp_script(
+        &bin_dir,
+        "pyright-langserver",
+        r#"            uri = req.get("params", {}).get("textDocument", {}).get("uri")
+            if uri:
+                write_response(req_id, [])
+            else:
+                write_response(req_id, [])"#,
+    );
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &sample_symbols(&test_file),
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::Syntax);
+    });
+}
+
+#[test]
+fn test_lsp_definition_error_falls_back_with_warning() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_custom_mock_lsp_script(
+        &bin_dir,
+        "pyright-langserver",
+        r#"            write_error(req_id, -32000, "definition unavailable")"#,
+    );
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &sample_symbols(&test_file),
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::Syntax);
+    });
+}
+
+#[test]
+fn test_lsp_retries_transient_32603_errors_during_warmup() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_custom_mock_lsp_script(
+        &bin_dir,
+        "pyright-langserver",
+        r#"            global definition_calls
+            try:
+                definition_calls
+            except NameError:
+                definition_calls = 0
+            definition_calls += 1
+            uri = req.get("params", {}).get("textDocument", {}).get("uri")
+            if definition_calls < 2:
+                write_error(req_id, -32603, "file not found yet")
+            elif uri:
+                write_response(req_id, [{
+                    "targetUri": uri,
+                    "targetRange": {
+                        "start": {"line": 4, "character": 4},
+                        "end": {"line": 4, "character": 8}
+                    }
+                }])
+            else:
+                write_response(req_id, [])"#,
+    );
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &sample_symbols(&test_file),
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::LspExact);
+    });
+}
+
+#[test]
+fn test_lsp_non_file_uri_location_falls_back() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_custom_mock_lsp_script(
+        &bin_dir,
+        "pyright-langserver",
+        r#"            write_response(req_id, [{
+                "uri": "https://example.com/main.py",
+                "range": {
+                    "start": {"line": 4, "character": 4},
+                    "end": {"line": 4, "character": 8}
+                }
+            }])"#,
+    );
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &sample_symbols(&test_file),
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::Syntax);
+    });
+}
+
+#[test]
+fn test_lsp_null_definition_result_falls_back() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_custom_mock_lsp_script(
+        &bin_dir,
+        "pyright-langserver",
+        r#"            write_response(req_id, None)"#,
+    );
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &sample_symbols(&test_file),
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::Syntax);
+    });
+}
+
+#[test]
+fn test_lsp_no_matching_symbol_at_location_falls_back() {
+    let _guard = env_lock();
+    let temp_dir = tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    write_mock_lsp_script(&bin_dir, "pyright-langserver", "standard");
+
+    let workspace_root = temp_dir.path();
+    let test_file = workspace_root.join("main.py");
+    fs::write(&test_file, "# python\n").unwrap();
+
+    // Symbol range does not overlap LSP target line 5 / col 5 from mock.
+    let symbols = vec![Symbol {
+        id: None,
+        file_id: None,
+        name: "run".to_string(),
+        qualified_name: "Other::run".to_string(),
+        kind: SymbolKind::Method,
+        language: LanguageId::new("python"),
+        file: test_file.clone(),
+        range: TextRange {
+            start_line: 20,
+            start_col: 1,
+            end_line: 20,
+            end_col: 10,
+        },
+        body_range: None,
+    }];
+
+    with_mock_path(&bin_dir, || {
+        let resolver = LspDefinitionResolver::python();
+        let input = ResolveInput {
+            workspace_root,
+            occurrence: &sample_occurrence(&test_file),
+            symbols: &symbols,
+        };
+        let output = resolver.resolve(input).unwrap();
+        assert_eq!(output.resolved_symbol_index, Some(0));
+        assert_eq!(output.confidence, ResolutionConfidence::Syntax);
+    });
 }
 
 #[test]

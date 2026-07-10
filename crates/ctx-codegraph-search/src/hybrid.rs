@@ -67,13 +67,19 @@ impl<B: HybridSearchBackend> HybridSearcher<B> {
         Ok(fused
             .into_iter()
             .take(limit)
-            .map(|hit| SearchResult {
-                chunk_id: hit.chunk_id,
-                symbol_id: hit.symbol_id.unwrap_or(ctx_codegraph_lang::model::SymbolId(0)),
-                score: hit.score,
-                snippet: None,
-            })
+            .map(fused_hit_to_result)
             .collect())
+    }
+}
+
+fn fused_hit_to_result(hit: ChunkHit) -> SearchResult {
+    SearchResult {
+        chunk_id: hit.chunk_id,
+        symbol_id: hit
+            .symbol_id
+            .unwrap_or(ctx_codegraph_lang::model::SymbolId(0)),
+        score: hit.score,
+        snippet: None,
     }
 }
 
@@ -86,4 +92,39 @@ fn hits_from_results(results: &[SearchResult]) -> Vec<ChunkHit> {
             score: r.score,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ctx_codegraph_chunk::ChunkId;
+    use ctx_codegraph_lang::model::SymbolId;
+
+    #[test]
+    fn fused_hit_to_result_defaults_missing_symbol_id_to_zero() {
+        let hit = ChunkHit {
+            chunk_id: ChunkId(9),
+            symbol_id: None,
+            score: 0.25,
+        };
+        let result = fused_hit_to_result(hit);
+        assert_eq!(result.chunk_id, ChunkId(9));
+        assert_eq!(result.symbol_id, SymbolId(0));
+        assert_eq!(result.score, 0.25);
+        assert_eq!(result.snippet, None);
+    }
+
+    #[test]
+    fn hits_from_results_wraps_symbol_ids() {
+        let results = vec![SearchResult {
+            chunk_id: ChunkId(3),
+            symbol_id: SymbolId(30),
+            score: 0.75,
+            snippet: Some("snippet".to_string()),
+        }];
+        let hits = hits_from_results(&results);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].symbol_id, Some(SymbolId(30)));
+        assert_eq!(hits[0].chunk_id, ChunkId(3));
+    }
 }

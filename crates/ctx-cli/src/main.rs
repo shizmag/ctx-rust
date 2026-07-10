@@ -712,6 +712,199 @@ mod tests {
         let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
         assert!(res.is_ok());
     }
+
+    #[test]
+    fn test_render_graph_context_output() {
+        use ctx_codegraph::{
+            ContextFileSpan, GraphContextEdge, GraphContextMode, GraphContextResult, LanguageObject,
+            LanguageObjectKind, SourceRange, SymbolId,
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let file = root.join("lib.rs");
+        fs::write(&file, "fn root_fn() {}\nfn callee() {}\n").unwrap();
+
+        let root_obj = LanguageObject {
+            id: SymbolId(1),
+            name: "root_fn".to_string(),
+            qualified_name: "root_fn".to_string(),
+            kind: LanguageObjectKind::Function,
+            file_path: file.clone(),
+            range: SourceRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 15,
+            },
+            signature: None,
+            language: Some("rust".to_string()),
+        };
+        let callee = LanguageObject {
+            id: SymbolId(2),
+            name: "callee".to_string(),
+            qualified_name: "callee".to_string(),
+            kind: LanguageObjectKind::Function,
+            file_path: file.clone(),
+            range: SourceRange {
+                start_line: 2,
+                start_col: 1,
+                end_line: 2,
+                end_col: 14,
+            },
+            signature: None,
+            language: Some("rust".to_string()),
+        };
+
+        let result = GraphContextResult {
+            root: root_obj,
+            nodes: vec![callee],
+            edges: vec![GraphContextEdge {
+                from: SymbolId(1),
+                to: SymbolId(2),
+                label: Some("call".to_string()),
+                confidence: Some("Syntax".to_string()),
+            }],
+            files: vec![ContextFileSpan {
+                file_path: file.clone(),
+                range: SourceRange {
+                    start_line: 1,
+                    end_line: 2,
+                    start_col: 1,
+                    end_col: 1,
+                },
+            }],
+            diagnostics: vec![],
+        };
+
+        let rendered =
+            render_graph_context(&result, &root, GraphContextMode::Callees, 2, 50).unwrap();
+        assert!(rendered.contains("# Graph Context"));
+        assert!(rendered.contains("Root: fn root_fn"));
+        assert!(rendered.contains("root_fn -> callee"));
+        assert!(rendered.contains("```rust"));
+        assert!(rendered.contains("fn callee()"));
+    }
+
+    #[test]
+    fn test_print_slice_tree_helper_truncation_marker() {
+        use ctx_codegraph::model::{
+            CodeIndex, Language, Symbol, SymbolId, SymbolKind, TextRange,
+        };
+
+        let root = PathBuf::from("/proj");
+        let file = root.join("lib.rs");
+        let sym = Symbol {
+            id: Some(SymbolId(1)),
+            file_id: None,
+            name: "only".to_string(),
+            qualified_name: "only".to_string(),
+            kind: SymbolKind::Function,
+            language: Language::rust(),
+            file: file.clone(),
+            range: TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 1,
+            },
+            body_range: None,
+        };
+        let index = CodeIndex {
+            root,
+            files: vec![],
+            symbols: vec![sym],
+            occurrences: vec![],
+            call_sites: vec![],
+            edges: vec![],
+        };
+
+        let mut visited = HashSet::new();
+        let mut printed_count = 100;
+        print_slice_tree_helper(
+            &index,
+            SymbolId(1),
+            0,
+            10,
+            &mut visited,
+            &mut printed_count,
+        );
+        assert!(printed_count >= 101);
+    }
+
+    #[test]
+    fn test_write_mcp_entry_vscode_style_with_type() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("mcp.json");
+
+        let changed = write_mcp_entry(
+            &target,
+            "/usr/local/bin/ctx",
+            false,
+            "VS Code",
+            "servers",
+            true,
+        )
+        .unwrap();
+        assert!(changed);
+        let content = fs::read_to_string(&target).unwrap();
+        assert!(content.contains("\"servers\""));
+        assert!(content.contains("\"type\": \"stdio\""));
+        assert!(content.contains("\"mcp\""));
+    }
+
+    #[test]
+    fn test_handle_graph_info_text_and_json_formats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+
+        handle_graph_info(&root, false, "text").unwrap();
+        handle_graph_info(&root, false, "json").unwrap();
+
+        let err = handle_graph_info(&root, false, "yaml").unwrap_err();
+        assert!(err.to_string().contains("unsupported format"));
+    }
+
+    #[test]
+    fn test_get_file_span_content_missing_file_errors() {
+        let err = get_file_span_content(Path::new("/definitely/missing/file.rs"), 1, 1).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_get_markdown_lang_additional_extensions() {
+        assert_eq!(get_markdown_lang(Path::new("app.tsx")), "tsx");
+        assert_eq!(get_markdown_lang(Path::new("app.jsx")), "jsx");
+        assert_eq!(get_markdown_lang(Path::new("main.c")), "c");
+        assert_eq!(get_markdown_lang(Path::new("main.cc")), "cpp");
+        assert_eq!(get_markdown_lang(Path::new("App.kt")), "kotlin");
+        assert_eq!(get_markdown_lang(Path::new("App.swift")), "swift");
+        assert_eq!(get_markdown_lang(Path::new("run.sh")), "bash");
+    }
+
+    #[test]
+    fn test_graph_info_hints_db_exists_but_state_missing() {
+        let hints = graph_info_hints(&IndexState::Missing, true);
+        assert!(hints.iter().any(|h| h.contains("ctx stats")));
+    }
+
+    #[test]
+    fn test_run_with_args_ordinary_tree_scan() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let args = base_args(temp_path);
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
+    }
 }
 
 #[derive(clap::Subcommand, Debug)]

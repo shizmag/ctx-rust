@@ -228,16 +228,98 @@ mod tests {
     }
 
     #[test]
+    fn load_returns_onnx_error_for_corrupt_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_path = dir.path().join("corrupt.onnx");
+        std::fs::write(&model_path, b"not a valid onnx file").unwrap();
+
+        let err = match EmbeddingModel::load(&model_path, dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("expected Onnx error"),
+        };
+        assert!(matches!(err, ModelError::Onnx(_)));
+    }
+
+    #[test]
+    fn load_returns_tokenizer_error_for_invalid_tokenizer_json() {
+        let model_path = Path::new(crate::paths::DEFAULT_EMBEDDING_ONNX);
+        if !model_path.exists() {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tokenizer.json"), "not valid json").unwrap();
+
+        let err = match EmbeddingModel::load(model_path, dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("expected Tokenizer error"),
+        };
+        assert!(matches!(err, ModelError::Tokenizer(_)));
+    }
+
+    fn load_default_embedding_model() -> EmbeddingModel {
+        let paths = crate::paths::ModelPaths::default_paths();
+        EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer)
+            .expect("embedding model")
+    }
+
+    fn assert_unit_length(vector: &[f32]) {
+        let norm: f32 = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "expected unit-length embedding, got norm {norm}"
+        );
+    }
+
+    #[test]
     #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
     fn embed_texts_empty_batch_returns_empty() {
         if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
             return;
         }
 
-        let paths = crate::paths::ModelPaths::default_paths();
-        let mut model =
-            EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer).unwrap();
+        let mut model = load_default_embedding_model();
         let vectors = model.embed_texts(&[]).unwrap();
         assert!(vectors.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn embed_texts_single_text_produces_normalized_vector() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let mut model = load_default_embedding_model();
+        let vectors = model
+            .embed_texts(&["fn main() {}".to_string()])
+            .expect("embed single text");
+
+        assert_eq!(vectors.len(), 1);
+        assert_eq!(vectors[0].len(), EMBEDDING_DIM);
+        assert_unit_length(&vectors[0]);
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn embed_texts_batch_returns_one_vector_per_text() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let texts = vec![
+            "fn main() {}".to_string(),
+            "struct Point { x: f32, y: f32 }".to_string(),
+            "impl Display for Point {}".to_string(),
+        ];
+
+        let mut model = load_default_embedding_model();
+        let vectors = model.embed_texts(&texts).expect("embed batch");
+
+        assert_eq!(vectors.len(), texts.len());
+        for vector in &vectors {
+            assert_eq!(vector.len(), EMBEDDING_DIM);
+            assert_unit_length(vector);
+        }
     }
 }

@@ -23,11 +23,42 @@ mod tests {
     }
 
     #[test]
+    fn default_onnx_constants_are_non_empty_paths() {
+        assert!(!DEFAULT_EMBEDDING_ONNX.is_empty());
+        assert!(!DEFAULT_RERANKER_ONNX.is_empty());
+        assert!(DEFAULT_EMBEDDING_ONNX.ends_with(".onnx"));
+        assert!(DEFAULT_RERANKER_ONNX.ends_with(".onnx"));
+    }
+
+    #[test]
     fn l2_normalize_is_reexported() {
         let mut vector = vec![3.0_f32, 4.0];
         l2_normalize(&mut vector);
         assert!((vector[0] - 0.6).abs() < 1e-6);
         assert!((vector[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn file_fingerprint_reexport_computes_sha256_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sample.txt");
+        std::fs::write(&file_path, b"ctx-codegraph-models").unwrap();
+
+        let digest = file_fingerprint(&file_path).unwrap();
+        assert_eq!(digest.len(), 64);
+        assert_eq!(
+            digest,
+            "b86138d3c1d9ace53b17a2bf014e2292dd97dd512e6434b8e9fdfe9b8cdb56d9"
+        );
+    }
+
+    #[test]
+    fn code_tokenizer_reexport_is_usable() {
+        let dir = tempfile::tempdir().unwrap();
+        let tokenizer = CodeTokenizer::from_dir(dir.path()).unwrap();
+        let (ids, mask) = tokenizer.encode("alpha beta").unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(mask, vec![1, 1]);
     }
 
     #[test]
@@ -45,48 +76,51 @@ mod tests {
     }
 
     #[test]
-    fn model_error_display_includes_path_for_missing_model() {
+    fn model_error_variants_are_reexported_and_display_correctly() {
         let path = PathBuf::from("/tmp/missing-model.onnx");
-        let err = ModelError::ModelNotFound(path.clone());
         assert_eq!(
-            err.to_string(),
+            ModelError::ModelNotFound(path.clone()).to_string(),
             format!("model file not found: {}", path.display())
+        );
+        assert_eq!(
+            ModelError::Tokenizer("bad vocab".into()).to_string(),
+            "tokenizer error: bad vocab"
+        );
+        assert_eq!(
+            ModelError::Inference("no outputs".into()).to_string(),
+            "inference error: no outputs"
+        );
+        assert_eq!(
+            ModelError::InvalidEmbeddingDim {
+                expected: EMBEDDING_DIM,
+                got: 512,
+            }
+            .to_string(),
+            format!("invalid embedding dimension: expected {EMBEDDING_DIM}, got 512")
         );
     }
 
     #[test]
-    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
-    fn load_default_models_when_env_set() {
-        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
-            return;
+    fn embedding_and_reranker_types_are_reexported() {
+        fn assert_embedding_loadable(path: &std::path::Path, tokenizer_dir: &std::path::Path) {
+            let err = match EmbeddingModel::load(path, tokenizer_dir) {
+                Err(err) => err,
+                Ok(_) => panic!("expected ModelNotFound error"),
+            };
+            assert!(matches!(err, ModelError::ModelNotFound(_)));
         }
 
-        let paths = ModelPaths::default_paths();
-        assert!(
-            paths.embedding_onnx.exists(),
-            "embedding model missing at {}",
-            paths.embedding_onnx.display()
-        );
-
-        let mut embedding = EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer)
-            .expect("embedding");
-        let vectors = embedding
-            .embed_texts(&["fn main() {}".to_string()])
-            .expect("embed");
-        assert_eq!(vectors.len(), 1);
-        assert_eq!(vectors[0].len(), EMBEDDING_DIM);
-
-        if let Some(reranker_path) = paths.reranker_onnx.as_ref() {
-            let rerank_tokenizer = paths
-                .rerank_tokenizer
-                .as_ref()
-                .expect("rerank tokenizer dir");
-            let mut reranker =
-                RerankerModel::load(reranker_path, rerank_tokenizer).expect("reranker");
-            let scores = reranker
-                .score_pairs("main function", &["fn main() {}".to_string()])
-                .expect("score");
-            assert_eq!(scores.len(), 1);
+        fn assert_reranker_loadable(path: &std::path::Path, tokenizer_dir: &std::path::Path) {
+            let err = match RerankerModel::load(path, tokenizer_dir) {
+                Err(err) => err,
+                Ok(_) => panic!("expected ModelNotFound error"),
+            };
+            assert!(matches!(err, ModelError::ModelNotFound(_)));
         }
+
+        let missing = std::path::Path::new("/nonexistent/ctx-codegraph-models/model.onnx");
+        let tokenizer_dir = std::path::Path::new("/tmp");
+        assert_embedding_loadable(missing, tokenizer_dir);
+        assert_reranker_loadable(missing, tokenizer_dir);
     }
 }

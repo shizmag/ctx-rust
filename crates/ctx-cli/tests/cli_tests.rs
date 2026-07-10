@@ -364,6 +364,80 @@ fn test_cli_xml_format_output() {
 }
 
 #[test]
+fn test_cli_mcp_help_serve_subcommand() {
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args(["mcp", "--help"])
+        .output()
+        .expect("failed to run ctx mcp --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("serve") || stdout.contains("install"));
+    assert!(stdout.contains("MCP"));
+}
+
+#[test]
+fn test_cli_stats_with_built_codegraph_index() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"stats_proj\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn counted() {}\n").unwrap();
+
+    let mut build_cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let build_out = build_cmd
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("build failed");
+    assert!(build_out.status.success());
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([root.to_str().unwrap(), "stats"])
+        .output()
+        .expect("failed to run ctx stats");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Codegraph index present"));
+    assert!(stdout.contains("Symbols:"));
+    assert!(stdout.contains("Edges:"));
+}
+
+#[test]
+fn test_cli_all_mode_and_max_depth() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+    fs::write(temp_path.join("a.rs"), "fn a() {}\n").unwrap();
+    fs::create_dir_all(temp_path.join("nested")).unwrap();
+    fs::write(temp_path.join("nested/b.rs"), "fn b() {}\n").unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            temp_path.to_str().unwrap(),
+            "-m",
+            "all",
+            "--max-depth",
+            "1",
+            "--no-stats",
+        ])
+        .output()
+        .expect("failed to run ctx all mode");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("a.rs"));
+}
+
+#[test]
 fn test_cli_healthcheck_invalid_format() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();

@@ -325,3 +325,193 @@ fn resolve_via_lsp(
 
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ctx_codegraph_lang::model::{Language, SymbolKind};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn sample_range(line: usize) -> TextRange {
+        TextRange {
+            start_line: line,
+            start_col: 1,
+            end_line: line,
+            end_col: 20,
+        }
+    }
+
+    fn make_symbol(
+        name: &str,
+        file: &Path,
+        range: TextRange,
+        kind: SymbolKind,
+        body_range: Option<TextRange>,
+    ) -> Symbol {
+        Symbol {
+            id: None,
+            file_id: None,
+            name: name.to_string(),
+            qualified_name: name.to_string(),
+            kind,
+            language: Language::rust(),
+            file: file.to_path_buf(),
+            range,
+            body_range,
+        }
+    }
+
+    #[test]
+    fn is_inside_range_respects_bounds() {
+        let range = TextRange {
+            start_line: 2,
+            start_col: 3,
+            end_line: 4,
+            end_col: 10,
+        };
+        assert!(!is_inside_range(&range, 1, 3));
+        assert!(is_inside_range(&range, 2, 3));
+        assert!(is_inside_range(&range, 3, 1));
+        assert!(!is_inside_range(&range, 2, 2));
+        assert!(!is_inside_range(&range, 4, 11));
+        assert!(!is_inside_range(&range, 5, 1));
+    }
+
+    #[test]
+    fn parse_location_standard_and_extended_variants() {
+        let loc = serde_json::json!({
+            "uri": "file:///tmp/foo.rs",
+            "range": { "start": { "line": 4, "character": 4 }, "end": { "line": 4, "character": 8 } }
+        });
+        let (path, line, col) = parse_location(&loc, LocationParser::Standard).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/foo.rs"));
+        assert_eq!((line, col), (5, 5));
+
+        let extended = serde_json::json!({
+            "targetUri": "file:///tmp/bar.py",
+            "targetSelectionRange": {
+                "start": { "line": 1, "character": 0 },
+                "end": { "line": 1, "character": 3 }
+            }
+        });
+        let (path, line, col) = parse_location(&extended, LocationParser::Extended).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/bar.py"));
+        assert_eq!((line, col), (2, 1));
+    }
+
+    #[test]
+    fn parse_location_rejects_non_file_uris_and_missing_fields() {
+        let http_uri = serde_json::json!({
+            "uri": "https://example.com/foo.rs",
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }
+        });
+        assert!(parse_location(&http_uri, LocationParser::Standard).is_none());
+
+        let missing_range = serde_json::json!({ "uri": "file:///tmp/x.rs" });
+        assert!(parse_location(&missing_range, LocationParser::Standard).is_none());
+    }
+
+    #[test]
+    fn find_matching_symbol_skips_impl_and_body_range() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "fn outer() {}\nfn inner() {}\n").unwrap();
+
+        let outer = make_symbol(
+            "outer",
+            &file,
+            sample_range(1),
+            SymbolKind::Function,
+            Some(TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 15,
+            }),
+        );
+        let inner = make_symbol(
+            "inner",
+            &file,
+            sample_range(2),
+            SymbolKind::Function,
+            None,
+        );
+        let impl_sym = make_symbol(
+            "Outer",
+            &file,
+            sample_range(1),
+            SymbolKind::Impl,
+            None,
+        );
+
+        // Target inside outer body should not match outer declaration.
+        assert!(find_matching_symbol(&[outer.clone(), inner.clone()], &file, 1, 10).is_none());
+        assert_eq!(
+            find_matching_symbol(&[outer, impl_sym, inner], &file, 2, 1),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn find_matching_symbol_prefers_smaller_range() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+
+        let wide = make_symbol(
+            "wide",
+            &file,
+            TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 3,
+                end_col: 1,
+            },
+            SymbolKind::Function,
+            None,
+        );
+        let narrow = make_symbol(
+            "narrow",
+            &file,
+            TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 5,
+            },
+            SymbolKind::Function,
+            None,
+        );
+
+        assert_eq!(
+            find_matching_symbol(&[wide, narrow], &file, 1, 2),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn matches_definition_rejects_out_of_range_columns() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "fn demo() {}\n").unwrap();
+        let sym = make_symbol(
+            "demo",
+            &file,
+            TextRange {
+                start_line: 1,
+                start_col: 4,
+                end_line: 1,
+                end_col: 8,
+            },
+            SymbolKind::Function,
+            None,
+        );
+        let mut cache = std::collections::HashMap::new();
+        let canon = file.canonicalize().unwrap();
+
+        assert!(matches_definition(&sym, &canon, 1, 4, &mut cache));
+        assert!(!matches_definition(&sym, &canon, 1, 3, &mut cache));
+        assert!(!matches_definition(&sym, &canon, 1, 9, &mut cache));
+    }
+}

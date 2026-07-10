@@ -689,6 +689,187 @@ fn test_cli_graph_callees_alias_and_build_verbose() {
 }
 
 #[test]
+fn test_cli_graph_callers_not_found() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "callers",
+            "missing_symbol_xyz",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph callers not found");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Symbol not found"));
+}
+
+#[test]
+fn test_cli_graph_slice_not_found() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "slice",
+            "no_such_fn",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph slice not found");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Symbol not found"));
+}
+
+#[test]
+fn test_cli_graph_calls_not_found() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "calls",
+            "ghost_fn",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph calls not found");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Symbol not found"));
+}
+
+#[test]
+fn test_cli_graph_symbols_ambiguous_query() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+
+    let cargo_content = r#"
+        [package]
+        name = "temp_project"
+        version = "0.1.0"
+        edition = "2024"
+    "#;
+    fs::write(root.join("Cargo.toml"), cargo_content).unwrap();
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(
+        src_dir.join("lib.rs"),
+        r#"
+        pub mod m1 { pub fn dup() {} }
+        pub mod m2 { pub fn dup() {} }
+        "#,
+    )
+    .unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "symbols",
+            "dup",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed ambiguous symbols query");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Ambiguous query"));
+    assert!(stdout.contains("m1::dup"));
+    assert!(stdout.contains("m2::dup"));
+}
+
+#[test]
+fn test_cli_graph_context_not_found() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "context",
+            "missing_ctx_symbol",
+            "--mode",
+            "callees",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph context not found");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Symbol not found"));
+}
+
+#[test]
+fn test_cli_graph_symbols_dir_as_query_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "symbols",
+            root.join("src").to_str().unwrap(),
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph symbols with dir query");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("lib.rs"));
+    assert!(stdout.contains("run_pipeline") || stdout.contains("a"));
+}
+
+#[test]
+fn test_cli_graph_affect_text_mode_with_snippets() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "affect",
+            "run_pipeline",
+            "--format",
+            "text",
+            "--with-snippets",
+            "--mode",
+            "callees",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed graph affect text");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.is_empty());
+}
+
+#[test]
 fn test_cli_graph_info_invalid_format() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = temp_dir.path();

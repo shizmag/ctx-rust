@@ -103,8 +103,15 @@ impl RerankerModel {
 }
 
 fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelError> {
-    let names: Vec<String> = session.inputs().iter().map(|input| input.name().to_string()).collect();
+    let names: Vec<String> = session
+        .inputs()
+        .iter()
+        .map(|input| input.name().to_string())
+        .collect();
+    discover_text_input_names(&names)
+}
 
+fn discover_text_input_names(names: &[String]) -> Result<(String, String), ModelError> {
     let input_ids = names
         .iter()
         .find(|name| name.contains("input_ids"))
@@ -127,6 +134,41 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn discover_text_input_names_finds_standard_inputs() {
+        let names = vec![
+            "token_type_ids".into(),
+            "input_ids".into(),
+            "attention_mask".into(),
+        ];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "input_ids");
+        assert_eq!(attention_mask, "attention_mask");
+    }
+
+    #[test]
+    fn discover_text_input_names_falls_back_to_first_input() {
+        let names = vec!["tokens".into(), "masks".into()];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "tokens");
+        assert_eq!(attention_mask, "tokens");
+    }
+
+    #[test]
+    fn discover_text_input_names_reuses_input_ids_when_mask_missing() {
+        let names = vec!["input_ids".into(), "token_type_ids".into()];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "input_ids");
+        assert_eq!(attention_mask, "input_ids");
+    }
+
+    #[test]
+    fn discover_text_input_names_errors_when_empty() {
+        let names: Vec<String> = vec![];
+        let err = discover_text_input_names(&names).unwrap_err();
+        assert!(matches!(err, ModelError::Inference(msg) if msg == "model has no inputs"));
+    }
+
+    #[test]
     fn load_returns_model_not_found_for_missing_file() {
         let missing = Path::new("/nonexistent/ctx-codegraph-models/reranker.onnx");
         let tokenizer_dir = Path::new("/tmp");
@@ -139,24 +181,92 @@ mod tests {
     }
 
     #[test]
+    fn load_returns_onnx_error_for_corrupt_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_path = dir.path().join("corrupt.onnx");
+        std::fs::write(&model_path, b"not a valid onnx file").unwrap();
+
+        let err = match RerankerModel::load(&model_path, dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("expected Onnx error"),
+        };
+        assert!(matches!(err, ModelError::Onnx(_)));
+    }
+
+    #[test]
+    fn load_returns_tokenizer_error_for_invalid_tokenizer_json() {
+        let model_path = Path::new(crate::paths::DEFAULT_RERANKER_ONNX);
+        if !model_path.exists() {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tokenizer.json"), "not valid json").unwrap();
+
+        let err = match RerankerModel::load(model_path, dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("expected Tokenizer error"),
+        };
+        assert!(matches!(err, ModelError::Tokenizer(_)));
+    }
+
+    fn load_default_reranker_model() -> Option<RerankerModel> {
+        let paths = crate::paths::ModelPaths::default_paths();
+        let reranker_path = paths.reranker_onnx.as_ref()?;
+        let rerank_tokenizer = paths.rerank_tokenizer.as_ref()?;
+        Some(
+            RerankerModel::load(reranker_path, rerank_tokenizer)
+                .expect("reranker model"),
+        )
+    }
+
+    #[test]
     #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
     fn score_pairs_empty_docs_returns_empty() {
         if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
             return;
         }
 
-        let paths = crate::paths::ModelPaths::default_paths();
-        let reranker_path = paths
-            .reranker_onnx
-            .as_ref()
-            .expect("reranker model path");
-        let rerank_tokenizer = paths
-            .rerank_tokenizer
-            .as_ref()
-            .expect("rerank tokenizer dir");
-
-        let mut model = RerankerModel::load(reranker_path, rerank_tokenizer).unwrap();
+        let mut model = load_default_reranker_model().expect("reranker model path");
         let scores = model.score_pairs("query", &[]).unwrap();
         assert!(scores.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn score_pairs_single_doc_returns_one_score() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let mut model = load_default_reranker_model().expect("reranker model path");
+        let scores = model
+            .score_pairs("main function", &["fn main() {}".to_string()])
+            .expect("score single doc");
+
+        assert_eq!(scores.len(), 1);
+        assert!(scores[0].is_finite());
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn score_pairs_multi_doc_batch_returns_score_per_doc() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let docs = vec![
+            "fn main() {}".to_string(),
+            "struct Point { x: f32, y: f32 }".to_string(),
+            "fn add(a: i32, b: i32) -> i32 { a + b }".to_string(),
+        ];
+
+        let mut model = load_default_reranker_model().expect("reranker model path");
+        let scores = model
+            .score_pairs("entry point function", &docs)
+            .expect("score multi-doc batch");
+
+        assert_eq!(scores.len(), docs.len());
+        assert!(scores.iter().all(|score| score.is_finite()));
     }
 }
