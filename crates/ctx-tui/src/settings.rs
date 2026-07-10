@@ -111,6 +111,35 @@ impl SettingsState {
         }
     }
 
+    /// Short explanation shown under the settings list for the selected field.
+    fn field_help(&self, idx: usize) -> &'static str {
+        match idx {
+            0 => "Files to include when scanning: smart (auto-detect), code, docs, all, or llm-only.",
+            1 => "Maximum directory depth when walking the project tree. Deeper folders are skipped.",
+            2 => "Skip files larger than this size in bytes (524288 = 512 KB).",
+            3 => "Comma-separated glob patterns to exclude from scans (e.g. target, node_modules).",
+            4 => "Default output format for MCP tools and agents: yaml, json, markdown, xml, or plain text.",
+            5 => "Preferred coding agent for `ctx mcp install`: claude, cursor, gemini, continue, vscode, or code.",
+            6 => "Use language servers (rust-analyzer, pyright) to resolve call edges as LspExact. Slower but more precise.",
+            7 => "Collect MCP session usage stats (calls, tokens, timings) into the codegraph index.",
+            8 => "How context chunks are ordered in responses: sandwich (edges first), frontloaded, or balanced.",
+            9 => "Ranking strategy for retrieved chunks: hybrid (graph+lexical), graph-only, or lexical-only.",
+            10 => "Maximum tokens returned by retrieve_context / affect. Approximate; depends on chunk sizes.",
+            11 => "Default retrieval mode: hybrid (BM25+embeddings), graph (symbol traversal), lexical, or dense.",
+            12 => "Reciprocal Rank Fusion smoothing (RRF k). Higher values flatten combined BM25+embedding ranks. Typical: 60.",
+            13 => "Number of lexical (BM25 keyword) hits to fetch before fusion with dense results.",
+            14 => "Number of dense (embedding similarity) hits to fetch before fusion with lexical results.",
+            15 => "How many fused candidates to pass to the reranker when enable_rerank is true.",
+            16 => "Re-score top search hits with the reranker ONNX model. Requires reranker_model to be set.",
+            17 => "Path to the embedding ONNX model (.onnx). Required to build and query hybrid/dense search indexes.",
+            18 => "Path to the reranker ONNX model (.onnx). Optional cross-encoder that improves result ordering.",
+            19 => "Directory with tokenizer.json (HuggingFace format) for the embedding and reranker models. \
+                    Converts text to token IDs the ONNX models expect. If unset, defaults to the embedding \
+                    model's parent folder. Falls back to a simple whitespace tokenizer when tokenizer.json is missing.",
+            _ => "",
+        }
+    }
+
     fn effective(&self) -> Config {
         self.config.clone().apply_defaults()
     }
@@ -485,13 +514,40 @@ impl SettingsState {
     }
 }
 
+fn wrap_help(text: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current = word.to_string();
+        } else if current.len() + 1 + word.len() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(Line::from(Span::styled(
+                std::mem::take(&mut current),
+                Style::default().fg(GRAY),
+            )));
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(Line::from(Span::styled(current, Style::default().fg(GRAY))));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::raw("")));
+    }
+    lines
+}
+
 fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header
-            Constraint::Min(8),    // body
-            Constraint::Length(3), // footer
+            Constraint::Length(3),  // header
+            Constraint::Min(6),     // body
+            Constraint::Length(4),  // field description
+            Constraint::Length(3),  // footer
         ])
         .split(f.size());
 
@@ -554,10 +610,29 @@ fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
     // we render as plain list (manual highlight via prefix) to keep very small, no ListState needed
     f.render_widget(list, chunks[1]);
 
+    let help_width = chunks[2].width.saturating_sub(4) as usize;
+    let mut desc_lines = vec![Line::from(Span::styled(
+        state.field_label(state.selected),
+        Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+    ))];
+    desc_lines.extend(wrap_help(state.field_help(state.selected), help_width.max(20)));
+    if state.is_path_field(state.selected) {
+        desc_lines.push(Line::from(Span::styled(
+            "Edit path fields in ~/.config/ctx/config",
+            Style::default().fg(GREEN),
+        )));
+    }
+    let description = Paragraph::new(desc_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(GRAY))
+            .title(Span::styled("About this setting", Style::default().fg(GRAY))),
+    );
+    f.render_widget(description, chunks[2]);
+
     // footer help + message
-    // no more text input: ←→ (or h/l) cycle enums or ± numeric or choose exclude preset
     let help = if state.is_path_field(state.selected) {
-        "path fields: edit ~/.config/ctx/config manually  c:clear  s:save  q:quit"
+        "path fields: edit config file  c:reset  s:save  q:quit"
     } else {
         "↑↓/jk:nav  ←→/hl:cycle or ±val  Space/a:toggle  c:reset  r:rm-ex  s:save  q:quit"
     };
@@ -729,6 +804,27 @@ mod tests {
             message: None,
             exclude_preset: 0,
         }
+    }
+
+    #[test]
+    fn all_fields_have_help_text() {
+        let s = make_test_state();
+        for idx in 0..N_FIELDS {
+            assert!(
+                !s.field_help(idx).is_empty(),
+                "missing help for field {idx}: {}",
+                s.field_label(idx)
+            );
+        }
+    }
+
+    #[test]
+    fn tokenizer_dir_help_mentions_format_and_models() {
+        let s = make_test_state();
+        let help = s.field_help(TOKENIZER_DIR_IDX);
+        assert!(help.contains("tokenizer.json"));
+        assert!(help.contains("embedding"));
+        assert!(help.contains("reranker"));
     }
 
     #[test]

@@ -515,7 +515,7 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     match &config.tokenizer_dir {
         Some(p) => lines.push(format!("tokenizer_dir = {}", p)),
         None => lines.push(
-            "# tokenizer_dir =         # optional; defaults to embedding model parent dir".to_string(),
+            "# tokenizer_dir =         # dir with tokenizer.json (HuggingFace); for embedding + reranker ONNX".to_string(),
         ),
     }
     if let Some(v) = config.rrf_k {
