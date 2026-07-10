@@ -114,6 +114,11 @@ impl Config {
         self.clone().apply_defaults() != *self
     }
 
+    /// True when the config still matches factory defaults (never customized).
+    pub fn is_pristine(&self) -> bool {
+        *self == Self::default_values()
+    }
+
     pub fn resolved_embedding_model(&self) -> Option<PathBuf> {
         self.embedding_model.as_ref().map(PathBuf::from)
     }
@@ -403,8 +408,18 @@ pub fn find_and_load_config(start_dir: &Path) -> Result<Config, std::io::Error> 
     Ok(merged)
 }
 
+fn import_legacy_project_config(global: Config, project_dir: &Path) -> Config {
+    let Some(project_path) = find_project_config(project_dir) else {
+        return global;
+    };
+    let Ok(project) = load_config(&project_path) else {
+        return global;
+    };
+    merge_configs(global, project)
+}
+
 /// Create or upgrade the global config used by `ctx setting`.
-pub fn ensure_global_config() -> Result<(PathBuf, Config, EnsureOutcome), std::io::Error> {
+pub fn ensure_global_config(project_dir: &Path) -> Result<(PathBuf, Config, EnsureOutcome), std::io::Error> {
     let path = global_config_path().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -413,7 +428,7 @@ pub fn ensure_global_config() -> Result<(PathBuf, Config, EnsureOutcome), std::i
     })?;
 
     if !path.exists() {
-        let config = Config::default_values();
+        let config = import_legacy_project_config(Config::default_values(), project_dir);
         save_config(&path, &config)?;
         return Ok((path, config, EnsureOutcome::Created));
     }
@@ -422,10 +437,20 @@ pub fn ensure_global_config() -> Result<(PathBuf, Config, EnsureOutcome), std::i
     if loaded.needs_upgrade() {
         let upgraded = loaded.apply_defaults();
         save_config(&path, &upgraded)?;
-        Ok((path, upgraded, EnsureOutcome::Upgraded))
-    } else {
-        Ok((path, loaded.apply_defaults(), EnsureOutcome::Unchanged))
+        return Ok((path, upgraded, EnsureOutcome::Upgraded));
     }
+
+    let mut config = loaded.apply_defaults();
+    if config.is_pristine() {
+        let imported = import_legacy_project_config(config.clone(), project_dir);
+        if imported != config {
+            config = imported.apply_defaults();
+            save_config(&path, &config)?;
+            return Ok((path, config, EnsureOutcome::Upgraded));
+        }
+    }
+
+    Ok((path, config, EnsureOutcome::Unchanged))
 }
 
 /// Save the config to the global config file (or an explicit path).
@@ -450,14 +475,17 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     if let Some(s) = config.max_file_size {
         lines.push(format!("max_file_size = {}", s));
     }
-    if !config.exclude.is_empty() {
+    if config.exclude.is_empty() {
+        lines.push("exclude =".to_string());
+    } else {
         lines.push(format!("exclude = {}", config.exclude.join(", ")));
     }
     if let Some(f) = &config.default_format {
         lines.push(format!("default_format = {}", f));
     }
-    if let Some(t) = &config.mcp_target {
-        lines.push(format!("mcp_target = {}", t));
+    match &config.mcp_target {
+        Some(t) => lines.push(format!("mcp_target = {}", t)),
+        None => lines.push("# mcp_target =          # claude, cursor, gemini, continue, vscode, code".to_string()),
     }
     if let Some(b) = config.use_lsp {
         lines.push(format!("use_lsp = {}", b));
@@ -474,14 +502,21 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     if let Some(b) = config.default_token_budget {
         lines.push(format!("default_token_budget = {}", b));
     }
-    if let Some(p) = &config.embedding_model {
-        lines.push(format!("embedding_model = {}", p));
+    match &config.embedding_model {
+        Some(p) => lines.push(format!("embedding_model = {}", p)),
+        None => lines.push(
+            "# embedding_model =       # ONNX path; uncomment to enable hybrid search".to_string(),
+        ),
     }
-    if let Some(p) = &config.reranker_model {
-        lines.push(format!("reranker_model = {}", p));
+    match &config.reranker_model {
+        Some(p) => lines.push(format!("reranker_model = {}", p)),
+        None => lines.push("# reranker_model =        # optional cross-encoder reranker ONNX path".to_string()),
     }
-    if let Some(p) = &config.tokenizer_dir {
-        lines.push(format!("tokenizer_dir = {}", p));
+    match &config.tokenizer_dir {
+        Some(p) => lines.push(format!("tokenizer_dir = {}", p)),
+        None => lines.push(
+            "# tokenizer_dir =         # optional; defaults to embedding model parent dir".to_string(),
+        ),
     }
     if let Some(v) = config.rrf_k {
         lines.push(format!("rrf_k = {}", v));

@@ -35,8 +35,12 @@ struct SettingsState {
     exclude_preset: usize,
 }
 
-const N_FIELDS: usize = 11;
+const N_FIELDS: usize = 20;
 const EXCLUDE_IDX: usize = 3;
+const ENABLE_RERANK_IDX: usize = 16;
+const EMBEDDING_MODEL_IDX: usize = 17;
+const RERANKER_MODEL_IDX: usize = 18;
+const TOKENIZER_DIR_IDX: usize = 19;
 
 // Common exclude patterns for arrow cycling (no free-text input)
 const COMMON_EXCLUDES: &[&str] = &[
@@ -55,11 +59,15 @@ const COMMON_EXCLUDES: &[&str] = &[
 const DEFAULT_MAX_DEPTH: usize = 10;
 const DEFAULT_MAX_FILE_SIZE: u64 = 512 * 1024;
 const DEFAULT_TOKEN_BUDGET: usize = 12000;
+const DEFAULT_RRF_K: usize = 60;
+const DEFAULT_BM25_TOP_K: usize = 50;
+const DEFAULT_DENSE_TOP_K: usize = 50;
+const DEFAULT_RERANK_TOP_K: usize = 20;
 
 impl SettingsState {
     fn new(dir: PathBuf) -> Self {
-        let (config_path, config, outcome) =
-            ensure_global_config().unwrap_or_else(|_| (dir.clone(), Config::default_values(), EnsureOutcome::Created));
+        let (config_path, config, outcome) = ensure_global_config(&dir)
+            .unwrap_or_else(|_| (dir.clone(), Config::default_values(), EnsureOutcome::Created));
         let message = match outcome {
             EnsureOutcome::Created => Some(format!("created {}", config_path.display())),
             EnsureOutcome::Upgraded => Some(format!(
@@ -90,86 +98,105 @@ impl SettingsState {
             8 => "default_packing (AI/MCP)",
             9 => "default_ranking (AI/MCP)",
             10 => "default_token_budget (AI/MCP)",
+            11 => "default_retrieval_strategy (Search)",
+            12 => "rrf_k (Search)",
+            13 => "bm25_top_k (Search)",
+            14 => "dense_top_k (Search)",
+            15 => "rerank_top_k (Search)",
+            16 => "enable_rerank (Search)",
+            17 => "embedding_model (Search)",
+            18 => "reranker_model (Search)",
+            19 => "tokenizer_dir (Search)",
             _ => "",
         }
     }
 
+    fn effective(&self) -> Config {
+        self.config.clone().apply_defaults()
+    }
+
     fn field_value_str(&self, idx: usize) -> String {
+        let c = self.effective();
         match idx {
-            0 => match self.config.mode {
+            0 => match c.mode {
                 Some(Mode::Smart) => "smart".into(),
                 Some(Mode::All) => "all".into(),
                 Some(Mode::Code) => "code".into(),
                 Some(Mode::Docs) => "docs".into(),
                 Some(Mode::Llm) => "llm".into(),
-                None => "(default: smart)".into(),
+                None => "smart".into(),
             },
-            1 => self
-                .config
-                .max_depth
-                .map(|d| d.to_string())
-                .unwrap_or_else(|| "(default)".into()),
-            2 => self
-                .config
-                .max_file_size
+            1 => c.max_depth.map(|d| d.to_string()).unwrap_or_else(|| "10".into()),
+            2 => c.max_file_size
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| "(default)".into()),
+                .unwrap_or_else(|| "524288".into()),
             3 => {
-                if self.config.exclude.is_empty() {
+                if c.exclude.is_empty() {
                     "(none)".into()
                 } else {
-                    self.config.exclude.join(", ")
+                    c.exclude.join(", ")
                 }
             }
-            4 => self
-                .config
-                .default_format
-                .clone()
-                .unwrap_or_else(|| "(default)".into()),
-            5 => self
-                .config
-                .mcp_target
-                .clone()
-                .unwrap_or_else(|| "(default)".into()),
-            6 => match self.config.use_lsp {
+            4 => c.default_format.unwrap_or_else(|| "yaml".into()),
+            5 => c.mcp_target.unwrap_or_else(|| "(none)".into()),
+            6 => match c.use_lsp {
                 Some(true) => "true".into(),
                 Some(false) => "false".into(),
-                None => "(default)".into(),
+                None => "true".into(),
             },
-            7 => match self.config.stats_enabled {
+            7 => match c.stats_enabled {
                 Some(true) => "true".into(),
                 Some(false) => "false".into(),
-                None => "(default)".into(),
+                None => "true".into(),
             },
-            8 => self
-                .config
-                .default_packing
-                .clone()
-                .unwrap_or_else(|| "(default: sandwich)".into()),
-            9 => self
-                .config
-                .default_ranking
-                .clone()
-                .unwrap_or_else(|| "(default: hybrid)".into()),
-            10 => self
-                .config
-                .default_token_budget
+            8 => c.default_packing.unwrap_or_else(|| "sandwich".into()),
+            9 => c.default_ranking.unwrap_or_else(|| "hybrid".into()),
+            10 => c.default_token_budget
                 .map(|b| b.to_string())
-                .unwrap_or_else(|| "(default)".into()),
+                .unwrap_or_else(|| "12000".into()),
+            11 => c.default_retrieval_strategy.unwrap_or_else(|| "hybrid".into()),
+            12 => c.rrf_k.map(|v| v.to_string()).unwrap_or_else(|| "60".into()),
+            13 => c.bm25_top_k.map(|v| v.to_string()).unwrap_or_else(|| "50".into()),
+            14 => c.dense_top_k.map(|v| v.to_string()).unwrap_or_else(|| "50".into()),
+            15 => c.rerank_top_k.map(|v| v.to_string()).unwrap_or_else(|| "20".into()),
+            16 => match c.enable_rerank {
+                Some(true) => "true".into(),
+                Some(false) => "false".into(),
+                None => "false".into(),
+            },
+            17 => self
+                .config
+                .embedding_model
+                .clone()
+                .unwrap_or_else(|| "(not set — edit config file)".into()),
+            18 => self
+                .config
+                .reranker_model
+                .clone()
+                .unwrap_or_else(|| "(not set — edit config file)".into()),
+            19 => self
+                .config
+                .tokenizer_dir
+                .clone()
+                .unwrap_or_else(|| "(not set — edit config file)".into()),
             _ => String::new(),
         }
     }
 
     fn is_bool_field(&self, idx: usize) -> bool {
-        matches!(idx, 6 | 7)
+        matches!(idx, 6 | 7 | 16)
     }
 
     fn is_numeric_field(&self, idx: usize) -> bool {
-        matches!(idx, 1 | 2 | 10)
+        matches!(idx, 1 | 2 | 10 | 12 | 13 | 14 | 15)
     }
 
     fn is_cyclable_field(&self, idx: usize) -> bool {
-        matches!(idx, 0 | 4 | 5 | 8 | 9)
+        matches!(idx, 0 | 4 | 5 | 8 | 9 | 11)
+    }
+
+    fn is_path_field(&self, idx: usize) -> bool {
+        matches!(idx, EMBEDDING_MODEL_IDX | RERANKER_MODEL_IDX | TOKENIZER_DIR_IDX)
     }
 
     fn cycle_value(&mut self, idx: usize, forward: bool) {
@@ -195,25 +222,15 @@ impl SettingsState {
                 self.config.mode = Some(modes[i]);
             }
             4 => {
-                // default_format cycles including (default) to allow clearing without input
-                let fmts = ["(default)", "yaml", "json", "markdown", "xml", "plain"];
-                let cur = self
-                    .config
-                    .default_format
-                    .clone()
-                    .unwrap_or_else(|| "(default)".into());
+                let fmts = ["yaml", "json", "markdown", "xml", "plain"];
+                let cur = self.effective().default_format.unwrap_or_else(|| "yaml".into());
                 let mut i = fmts.iter().position(|&f| f == cur).unwrap_or(0);
                 if forward {
                     i = (i + 1) % fmts.len();
                 } else {
                     i = if i == 0 { fmts.len() - 1 } else { i - 1 };
                 }
-                let choice = fmts[i];
-                self.config.default_format = if choice == "(default)" {
-                    None
-                } else {
-                    Some(choice.to_string())
-                };
+                self.config.default_format = Some(fmts[i].to_string());
             }
             5 => {
                 // mcp_target: use known targets (from install etc), (default) clears
@@ -265,15 +282,10 @@ impl SettingsState {
             }
             9 => {
                 let rankings = ["hybrid", "graph", "lexical"];
-                if self.config.default_ranking.is_none() {
-                    self.config.default_ranking = if forward {
-                        Some("hybrid".into())
-                    } else {
-                        Some("lexical".into())
-                    };
-                    return;
-                }
-                let cur = self.config.default_ranking.clone().unwrap();
+                let cur = self
+                    .effective()
+                    .default_ranking
+                    .unwrap_or_else(|| "hybrid".into());
                 let mut i = rankings.iter().position(|&r| r == cur).unwrap_or(0);
                 if forward {
                     i = (i + 1) % rankings.len();
@@ -282,20 +294,30 @@ impl SettingsState {
                 }
                 self.config.default_ranking = Some(rankings[i].to_string());
             }
+            11 => {
+                let strategies = ["hybrid", "graph", "lexical", "dense"];
+                let cur = self
+                    .effective()
+                    .default_retrieval_strategy
+                    .unwrap_or_else(|| "hybrid".into());
+                let mut i = strategies.iter().position(|&s| s == cur).unwrap_or(0);
+                if forward {
+                    i = (i + 1) % strategies.len();
+                } else {
+                    i = if i == 0 { strategies.len() - 1 } else { i - 1 };
+                }
+                self.config.default_retrieval_strategy = Some(strategies[i].to_string());
+            }
             _ => {}
         }
     }
 
     fn toggle_bool(&mut self, idx: usize) {
+        let c = self.effective();
         match idx {
-            6 => {
-                let v = self.config.use_lsp.unwrap_or(false);
-                self.config.use_lsp = Some(!v);
-            }
-            7 => {
-                let v = self.config.stats_enabled.unwrap_or(true);
-                self.config.stats_enabled = Some(!v);
-            }
+            6 => self.config.use_lsp = Some(!c.use_lsp.unwrap_or(true)),
+            7 => self.config.stats_enabled = Some(!c.stats_enabled.unwrap_or(true)),
+            16 => self.config.enable_rerank = Some(!c.enable_rerank.unwrap_or(false)),
             _ => {}
         }
     }
@@ -342,24 +364,38 @@ impl SettingsState {
                 self.message = Some(format!("max_file_size → {} (s to save)", shown));
             }
             10 => {
-                // default_token_budget step 100; 0 means default
                 let step: i64 = 100;
-                if self.config.default_token_budget.is_none() {
-                    if delta > 0 {
-                        self.config.default_token_budget = Some(DEFAULT_TOKEN_BUDGET);
-                        let shown = self.field_value_str(10);
-                        self.message = Some(format!("default_token_budget → {} (s to save)", shown));
-                        return;
-                    } else {
-                        self.message = Some("(default) — use → to set value".into());
-                        return;
-                    }
-                }
-                let cur = self.config.default_token_budget.unwrap();
-                let new = (cur as i64 + delta * step).max(0) as usize;
-                self.config.default_token_budget = if new == 0 { None } else { Some(new) };
+                let cur = self
+                    .effective()
+                    .default_token_budget
+                    .unwrap_or(DEFAULT_TOKEN_BUDGET);
+                let new = (cur as i64 + delta * step).max(100) as usize;
+                self.config.default_token_budget = Some(new);
                 let shown = self.field_value_str(10);
                 self.message = Some(format!("default_token_budget → {} (s to save)", shown));
+            }
+            12 => {
+                let cur = self.effective().rrf_k.unwrap_or(DEFAULT_RRF_K);
+                let new = (cur as i64 + delta).max(1) as usize;
+                self.config.rrf_k = Some(new);
+            }
+            13 => {
+                let step: i64 = 5;
+                let cur = self.effective().bm25_top_k.unwrap_or(DEFAULT_BM25_TOP_K);
+                let new = (cur as i64 + delta * step).max(1) as usize;
+                self.config.bm25_top_k = Some(new);
+            }
+            14 => {
+                let step: i64 = 5;
+                let cur = self.effective().dense_top_k.unwrap_or(DEFAULT_DENSE_TOP_K);
+                let new = (cur as i64 + delta * step).max(1) as usize;
+                self.config.dense_top_k = Some(new);
+            }
+            15 => {
+                let step: i64 = 5;
+                let cur = self.effective().rerank_top_k.unwrap_or(DEFAULT_RERANK_TOP_K);
+                let new = (cur as i64 + delta * step).max(1) as usize;
+                self.config.rerank_top_k = Some(new);
             }
             _ => {}
         }
@@ -399,21 +435,31 @@ impl SettingsState {
     }
 
     fn clear_field(&mut self, idx: usize) {
+        let d = Config::default_values();
         match idx {
-            0 => self.config.mode = None,
-            1 => self.config.max_depth = None,
-            2 => self.config.max_file_size = None,
+            0 => self.config.mode = d.mode,
+            1 => self.config.max_depth = d.max_depth,
+            2 => self.config.max_file_size = d.max_file_size,
             3 => self.config.exclude.clear(),
-            4 => self.config.default_format = None,
-            5 => self.config.mcp_target = None,
-            6 => self.config.use_lsp = None,
-            7 => self.config.stats_enabled = None,
-            8 => self.config.default_packing = None,
-            9 => self.config.default_ranking = None,
-            10 => self.config.default_token_budget = None,
+            4 => self.config.default_format = d.default_format,
+            5 => self.config.mcp_target = d.mcp_target,
+            6 => self.config.use_lsp = d.use_lsp,
+            7 => self.config.stats_enabled = d.stats_enabled,
+            8 => self.config.default_packing = d.default_packing,
+            9 => self.config.default_ranking = d.default_ranking,
+            10 => self.config.default_token_budget = d.default_token_budget,
+            11 => self.config.default_retrieval_strategy = d.default_retrieval_strategy,
+            12 => self.config.rrf_k = d.rrf_k,
+            13 => self.config.bm25_top_k = d.bm25_top_k,
+            14 => self.config.dense_top_k = d.dense_top_k,
+            15 => self.config.rerank_top_k = d.rerank_top_k,
+            16 => self.config.enable_rerank = d.enable_rerank,
+            EMBEDDING_MODEL_IDX => self.config.embedding_model = None,
+            RERANKER_MODEL_IDX => self.config.reranker_model = None,
+            TOKENIZER_DIR_IDX => self.config.tokenizer_dir = None,
             _ => {}
         }
-        self.message = Some("cleared to default (s to save)".into());
+        self.message = Some("reset to default (s to save)".into());
     }
 
     fn activate_forward(&mut self, idx: usize) {
@@ -510,7 +556,11 @@ fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
 
     // footer help + message
     // no more text input: ←→ (or h/l) cycle enums or ± numeric or choose exclude preset
-    let help = "↑↓/jk:nav  ←→/hl:cycle or ±val  Space/a:toggle  c:clear  r:rm-ex  s:save  q:quit";
+    let help = if state.is_path_field(state.selected) {
+        "path fields: edit ~/.config/ctx/config manually  c:clear  s:save  q:quit"
+    } else {
+        "↑↓/jk:nav  ←→/hl:cycle or ±val  Space/a:toggle  c:reset  r:rm-ex  s:save  q:quit"
+    };
     let mut footer_lines = vec![Span::styled(help, Style::default().fg(GRAY))];
     if let Some(ref msg) = state.message {
         footer_lines.push(Span::raw("  "));
@@ -672,10 +722,9 @@ mod tests {
     }
 
     fn make_test_state() -> SettingsState {
-        // direct construct to avoid fs side effects in tests
         SettingsState {
             dir: PathBuf::from("."),
-            config: Config::default(),
+            config: Config::default_values(),
             selected: 0,
             message: None,
             exclude_preset: 0,
@@ -685,21 +734,18 @@ mod tests {
     #[test]
     fn test_cycle_mode_and_clear() {
         let mut s = make_test_state();
-        assert!(s.config.mode.is_none());
-        s.cycle_value(0, true);
-        assert_eq!(s.config.mode, Some(Mode::Smart)); // first forward selects the default explicitly
+        assert_eq!(s.config.mode, Some(Mode::Smart));
         s.cycle_value(0, true);
         assert_eq!(s.config.mode, Some(Mode::All));
         s.cycle_value(0, false);
         assert_eq!(s.config.mode, Some(Mode::Smart));
         s.clear_field(0);
-        assert!(s.config.mode.is_none());
+        assert_eq!(s.config.mode, Some(Mode::Smart));
     }
 
     #[test]
     fn test_cycle_default_format_and_mcp_target() {
         let mut s = make_test_state();
-        s.cycle_value(4, true);
         assert_eq!(s.config.default_format.as_deref(), Some("yaml"));
         s.cycle_value(4, true);
         assert_eq!(s.config.default_format.as_deref(), Some("json"));
@@ -709,63 +755,55 @@ mod tests {
         s.cycle_value(4, true); // markdown
         s.cycle_value(4, true); // xml
         s.cycle_value(4, true); // plain
-        s.cycle_value(4, true); // (default)
-        assert!(s.config.default_format.is_none());
+        s.cycle_value(4, true); // yaml
+        assert_eq!(s.config.default_format.as_deref(), Some("yaml"));
 
         s.cycle_value(5, true);
         assert_eq!(s.config.mcp_target.as_deref(), Some("claude"));
         s.cycle_value(5, true);
         assert_eq!(s.config.mcp_target.as_deref(), Some("cursor"));
         s.clear_field(5);
-        assert!(s.config.mcp_target.is_none());
+        assert!(s.config.mcp_target.is_none()); // factory default is none
     }
 
     #[test]
     fn test_numeric_adjust_and_clear() {
         let mut s = make_test_state();
-        assert!(s.config.max_depth.is_none());
-        s.adjust_numeric(1, 1);
-        assert_eq!(s.config.max_depth, Some(DEFAULT_MAX_DEPTH)); // first + sets the default value
+        assert_eq!(s.config.max_depth, Some(DEFAULT_MAX_DEPTH));
         s.adjust_numeric(1, 1);
         assert_eq!(s.config.max_depth, Some(DEFAULT_MAX_DEPTH + 1));
         s.adjust_numeric(1, -1);
         assert_eq!(s.config.max_depth, Some(DEFAULT_MAX_DEPTH));
-        s.adjust_numeric(1, -100); // goes below 0 -> None
-        assert!(s.config.max_depth.is_none());
+        s.clear_field(1);
+        assert_eq!(s.config.max_depth, Some(DEFAULT_MAX_DEPTH));
 
-        // left on default numeric leaves it (message set)
-        s.adjust_numeric(1, -1);
-        assert!(s.config.max_depth.is_none());
-
-        s.adjust_numeric(2, 1);
-        assert_eq!(s.config.max_file_size, Some(DEFAULT_MAX_FILE_SIZE)); // first + sets default bytes value
+        assert_eq!(s.config.max_file_size, Some(DEFAULT_MAX_FILE_SIZE));
         s.adjust_numeric(2, 1);
         assert_eq!(s.config.max_file_size, Some(DEFAULT_MAX_FILE_SIZE + 1024));
         s.clear_field(2);
-        assert!(s.config.max_file_size.is_none());
+        assert_eq!(s.config.max_file_size, Some(DEFAULT_MAX_FILE_SIZE));
 
-        s.adjust_numeric(10, 1);
-        assert_eq!(s.config.default_token_budget, Some(DEFAULT_TOKEN_BUDGET)); // first +
+        assert_eq!(s.config.default_token_budget, Some(DEFAULT_TOKEN_BUDGET));
         s.adjust_numeric(10, 1);
         assert_eq!(s.config.default_token_budget, Some(DEFAULT_TOKEN_BUDGET + 100));
-        s.adjust_numeric(10, -1000);
-        assert!(s.config.default_token_budget.is_none());
+        s.clear_field(10);
+        assert_eq!(s.config.default_token_budget, Some(DEFAULT_TOKEN_BUDGET));
     }
 
     #[test]
     fn test_bool_toggle_and_clear() {
         let mut s = make_test_state();
         s.toggle_bool(6);
-        assert_eq!(s.config.use_lsp, Some(true));
-        s.toggle_bool(6);
         assert_eq!(s.config.use_lsp, Some(false));
+        s.toggle_bool(6);
+        assert_eq!(s.config.use_lsp, Some(true));
         s.clear_field(6);
-        assert!(s.config.use_lsp.is_none());
+        assert_eq!(s.config.use_lsp, Some(true));
 
         s.toggle_bool(7);
         assert_eq!(s.config.stats_enabled, Some(false)); // default in toggle is true, ! -> false
         s.clear_field(7);
-        assert!(s.config.stats_enabled.is_none());
+        assert_eq!(s.config.stats_enabled, Some(true));
     }
 
     #[test]
@@ -807,7 +845,8 @@ mod tests {
     #[test]
     fn settings_state_creates_global_config_on_first_open() {
         with_xdg_config_home(|xdg| {
-            let state = SettingsState::new(PathBuf::from("."));
+            let empty_project = tempfile::tempdir().unwrap();
+            let state = SettingsState::new(empty_project.path().to_path_buf());
             let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
             assert!(path.exists());
             assert_eq!(state.config, ctx_config::Config::default_values());
@@ -823,11 +862,12 @@ mod tests {
     #[test]
     fn settings_state_upgrades_existing_global_config() {
         with_xdg_config_home(|xdg| {
+            let empty_project = tempfile::tempdir().unwrap();
             let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, "mode = docs\n").unwrap();
 
-            let state = SettingsState::new(PathBuf::from("."));
+            let state = SettingsState::new(empty_project.path().to_path_buf());
             assert_eq!(state.config.mode, Some(Mode::Docs));
             assert_eq!(state.config.default_format, Some("yaml".into()));
             assert!(
@@ -839,14 +879,15 @@ mod tests {
 
             let content = fs::read_to_string(&path).unwrap();
             assert!(content.contains("default_format = yaml"));
-            assert!(!content.contains("embedding_model"));
+            assert!(content.contains("# embedding_model ="));
         });
     }
 
     #[test]
     fn settings_save_writes_full_global_config() {
         with_xdg_config_home(|xdg| {
-            let mut state = SettingsState::new(PathBuf::from("."));
+            let empty_project = tempfile::tempdir().unwrap();
+            let mut state = SettingsState::new(empty_project.path().to_path_buf());
             state.config.mode = Some(Mode::Code);
             state.save().unwrap();
 
@@ -854,9 +895,9 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert!(content.contains("mode = code"));
             assert!(content.contains("default_retrieval_strategy = hybrid"));
-            assert!(!content.contains("embedding_model"));
+            assert!(content.contains("# embedding_model ="));
 
-            let (_, _, outcome) = ensure_global_config().unwrap();
+            let (_, _, outcome) = ensure_global_config(empty_project.path()).unwrap();
             assert_eq!(outcome, EnsureOutcome::Unchanged);
         });
     }

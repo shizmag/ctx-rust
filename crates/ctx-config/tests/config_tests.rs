@@ -393,6 +393,60 @@ fn merge_configs_prefers_overlay_values() {
 }
 
 #[test]
+fn ensure_global_config_imports_legacy_project_ctxconfig_on_create() {
+    with_xdg_config_home(|_xdg| {
+        let temp_dir = tempfile::tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(".ctxconfig"),
+            "max_depth = 5\nmax_file_size = 532480\ndefault_token_budget = 8000\n",
+        )
+        .unwrap();
+
+        let (_, config, outcome) = ensure_global_config(temp_dir.path()).unwrap();
+        assert_eq!(outcome, EnsureOutcome::Created);
+        assert_eq!(config.max_depth, Some(5));
+        assert_eq!(config.max_file_size, Some(532480));
+        assert_eq!(config.default_token_budget, Some(8000));
+        assert_eq!(config.mode, Config::default_values().mode);
+    });
+}
+
+#[test]
+fn ensure_global_config_imports_legacy_project_when_global_is_pristine() {
+    with_xdg_config_home(|xdg| {
+        let temp_dir = tempfile::tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(".ctxconfig"),
+            "max_depth = 5\n",
+        )
+        .unwrap();
+
+        let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        save_config(&path, &Config::default_values()).unwrap();
+
+        let (_, config, outcome) = ensure_global_config(temp_dir.path()).unwrap();
+        assert_eq!(outcome, EnsureOutcome::Upgraded);
+        assert_eq!(config.max_depth, Some(5));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("max_depth = 5"));
+        assert!(content.contains("exclude ="));
+        assert!(content.contains("# embedding_model ="));
+    });
+}
+
+#[test]
+fn save_config_writes_placeholders_for_optional_paths() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join("config");
+    save_config(&config_path, &Config::default_values()).unwrap();
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("exclude ="));
+    assert!(content.contains("# embedding_model ="));
+    assert!(content.contains("# mcp_target ="));
+}
+
+#[test]
 fn default_values_has_no_model_paths() {
     let defaults = Config::default_values();
     assert!(defaults.embedding_model.is_none());
@@ -423,7 +477,8 @@ fn apply_defaults_fills_missing_fields() {
 #[test]
 fn ensure_global_config_creates_defaults_without_model_paths() {
     with_xdg_config_home(|xdg| {
-        let (path, config, outcome) = ensure_global_config().unwrap();
+        let empty_project = tempfile::tempdir().unwrap();
+        let (path, config, outcome) = ensure_global_config(empty_project.path()).unwrap();
         assert_eq!(outcome, EnsureOutcome::Created);
         assert_eq!(path, xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME));
         assert!(path.exists());
@@ -433,8 +488,9 @@ fn ensure_global_config_creates_defaults_without_model_paths() {
         assert!(content.contains("default_format = yaml"));
         assert!(content.contains("default_retrieval_strategy = hybrid"));
         assert!(content.contains("rrf_k = 60"));
-        assert!(!content.contains("embedding_model"));
-        assert!(!content.contains("reranker_model"));
+        assert!(content.contains("# embedding_model ="));
+        assert!(content.contains("# reranker_model ="));
+        assert!(content.contains("exclude ="));
 
         assert_eq!(config, Config::default_values());
     });
@@ -447,7 +503,7 @@ fn ensure_global_config_upgrades_partial_existing_file() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "mode = code\ndefault_format = json\n").unwrap();
 
-        let (_, config, outcome) = ensure_global_config().unwrap();
+        let (_, config, outcome) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
         assert_eq!(outcome, EnsureOutcome::Upgraded);
         assert_eq!(config.mode, Some(Mode::Code));
         assert_eq!(config.default_format.as_deref(), Some("json"));
@@ -462,17 +518,17 @@ fn ensure_global_config_upgrades_partial_existing_file() {
         assert!(content.contains("default_format = json"));
         assert!(content.contains("max_depth = 10"));
         assert!(content.contains("default_retrieval_strategy = hybrid"));
-        assert!(!content.contains("embedding_model"));
+        assert!(content.contains("# embedding_model ="));
     });
 }
 
 #[test]
 fn ensure_global_config_is_idempotent_when_complete() {
     with_xdg_config_home(|_xdg| {
-        let (_, _, first) = ensure_global_config().unwrap();
+        let (_, _, first) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
         assert_eq!(first, EnsureOutcome::Created);
 
-        let (_, _, second) = ensure_global_config().unwrap();
+        let (_, _, second) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
         assert_eq!(second, EnsureOutcome::Unchanged);
     });
 }
