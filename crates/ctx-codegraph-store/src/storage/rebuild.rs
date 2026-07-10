@@ -49,6 +49,14 @@ pub fn rebuild_index_db_with_registry(
         }
         IndexState::Ready => {
             let index = load_index(&conn, &workspace_root)?;
+            let config = ctx_config::find_and_load_config(&workspace_root).unwrap_or_default();
+            let search_report = super::search_build::maybe_build_search_indexes(
+                &conn,
+                &workspace_root,
+                &options,
+                &config,
+                false,
+            );
             let report = ctx_codegraph_lang::model::BuildReport {
                 full_rebuild: false,
                 full_rebuild_reason: None,
@@ -81,9 +89,9 @@ pub fn rebuild_index_db_with_registry(
                     .iter()
                     .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
                     .count(),
-                chunks_written: 0,
-                embeddings_written: 0,
-                lexical_docs_written: 0,
+                chunks_written: search_report.chunks_written,
+                embeddings_written: search_report.embeddings_written,
+                lexical_docs_written: search_report.lexical_docs_written,
             };
             Ok((index, report))
         }
@@ -537,18 +545,13 @@ pub fn run_full_rebuild_with_registry(
     validate_index_invariants(conn)?;
 
     let config = ctx_config::find_and_load_config(workspace_root).unwrap_or_default();
-    let search_report = match super::search_build::build_search_indexes(
+    let search_report = super::search_build::maybe_build_search_indexes(
         conn,
         workspace_root,
         &options,
         &config,
-    ) {
-        Ok(report) => report,
-        Err(err) => {
-            eprintln!("Warning: search index build failed: {}", err);
-            super::search_build::SearchBuildReport::default()
-        }
-    };
+        true,
+    );
 
     let loaded = load_index(conn, workspace_root)?;
 
@@ -933,6 +936,15 @@ pub fn run_incremental_update_with_registry(
 
     validate_index_invariants(conn)?;
 
+    let config = ctx_config::find_and_load_config(workspace_root).unwrap_or_default();
+    let search_report = super::search_build::maybe_build_search_indexes(
+        conn,
+        workspace_root,
+        &options,
+        &config,
+        false,
+    );
+
     let final_index = load_index(conn, workspace_root)?;
 
     let lsp_count = final_index
@@ -972,9 +984,9 @@ pub fn run_incremental_update_with_registry(
         syntax_edges: syntax_count,
         heuristic_edges: heuristic_count,
         unresolved_edges: unresolved_count,
-        chunks_written: 0,
-        embeddings_written: 0,
-        lexical_docs_written: 0,
+        chunks_written: search_report.chunks_written,
+        embeddings_written: search_report.embeddings_written,
+        lexical_docs_written: search_report.lexical_docs_written,
     };
 
     Ok((final_index, report))

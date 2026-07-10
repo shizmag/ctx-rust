@@ -45,6 +45,17 @@ pub const DEFAULT_EMBEDDING_MODEL: &str =
 pub const DEFAULT_RERANKER_MODEL: &str =
     "/Users/vladimirkasterin/models/reranker/jina-reranker-v2-base-multilingual/model.onnx";
 
+/// Resolve a configured model path to the ONNX file.
+///
+/// Config may store either a direct `.onnx` file path or a model directory
+/// containing `model.onnx` (common when pointing at a HuggingFace export folder).
+pub fn resolve_model_onnx_path(path: PathBuf) -> PathBuf {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("onnx") => path,
+        _ => path.join("model.onnx"),
+    }
+}
+
 /// What happened the last time [`ensure_global_config`] ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureOutcome {
@@ -125,11 +136,15 @@ impl Config {
     }
 
     pub fn resolved_embedding_model(&self) -> Option<PathBuf> {
-        self.embedding_model.as_ref().map(PathBuf::from)
+        self.embedding_model
+            .as_ref()
+            .map(|p| resolve_model_onnx_path(PathBuf::from(p)))
     }
 
     pub fn resolved_reranker_model(&self) -> Option<PathBuf> {
-        self.reranker_model.as_ref().map(PathBuf::from)
+        self.reranker_model
+            .as_ref()
+            .map(|p| resolve_model_onnx_path(PathBuf::from(p)))
     }
 
     /// Suggested default embedding path for documentation / CLI hints.
@@ -146,14 +161,24 @@ impl Config {
         self.embedding_tokenizer
             .as_ref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| embedding_model.parent().unwrap_or(embedding_model).to_path_buf())
+            .unwrap_or_else(|| {
+                embedding_model
+                    .parent()
+                    .unwrap_or(embedding_model)
+                    .to_path_buf()
+            })
     }
 
     pub fn resolved_rerank_tokenizer(&self, reranker_model: &Path) -> PathBuf {
         self.rerank_tokenizer
             .as_ref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| reranker_model.parent().unwrap_or(reranker_model).to_path_buf())
+            .unwrap_or_else(|| {
+                reranker_model
+                    .parent()
+                    .unwrap_or(reranker_model)
+                    .to_path_buf()
+            })
     }
 
     pub fn search_auto_enabled(&self) -> bool {

@@ -746,7 +746,7 @@ fn check_search(workspace_root: &Path, config: &Config, probe: bool) -> Vec<Sear
         .map(|p| config.resolved_embedding_tokenizer(p));
 
     if let Some(model_path) = embedding_path {
-        let exists = model_path.exists();
+        let exists = model_path.is_file();
         checks.push(SearchCheck {
             component: "embedding model".into(),
             status: if exists {
@@ -1088,5 +1088,85 @@ mod tests {
         assert!(parsed.get("parsers").is_some());
         assert!(parsed.get("lsp").is_some());
         assert!(parsed.get("search").is_some());
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn healthcheck_dense_index_ok_after_ready_embedding_build() {
+        use ctx_codegraph::BuildIndexOptions;
+        use ctx_codegraph::storage::rebuild_index_db;
+        use ctx_codegraph_models::ModelPaths;
+
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let paths = ModelPaths::default_paths();
+        if !paths.embedding_onnx.is_file() {
+            eprintln!("skipping: embedding model missing");
+            return;
+        }
+        if EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer).is_err() {
+            eprintln!("skipping: embedding model not loadable in this environment");
+            return;
+        }
+
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname=\"health_dense\"\nversion=\"0.1.0\"\nedition=\"2021\"",
+        )
+        .unwrap();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub fn greet() {}\n").unwrap();
+        let model_dir = paths
+            .embedding_onnx
+            .parent()
+            .expect("embedding model parent dir");
+        fs::write(
+            root.join(".ctxconfig"),
+            format!(
+                "embedding_model = {}\nembedding_tokenizer = {}\n",
+                model_dir.display(),
+                paths.embedding_tokenizer.display()
+            ),
+        )
+        .unwrap();
+
+        rebuild_index_db(
+            root,
+            BuildIndexOptions {
+                with_lexical: Some(false),
+                with_embeddings: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        rebuild_index_db(
+            root,
+            BuildIndexOptions {
+                with_lexical: Some(true),
+                with_embeddings: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let report = run_healthcheck(root, "0.0-test", HealthcheckOptions::default());
+        let dense = report
+            .search
+            .iter()
+            .find(|c| c.component == "dense index")
+            .expect("dense index check");
+        assert_eq!(
+            dense.status,
+            CheckStatus::Ok,
+            "expected dense index ok, got: {}",
+            dense.message
+        );
+        assert!(dense.count.unwrap_or(0) > 0);
     }
 }

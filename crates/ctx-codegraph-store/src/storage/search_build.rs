@@ -21,6 +21,73 @@ pub struct SearchBuildReport {
     pub lexical_docs_written: usize,
 }
 
+/// Returns the number of rows in the workspace dense embedding index.
+pub fn dense_embedding_count(workspace_root: &Path) -> u64 {
+    let path = workspace_root.join(".ctx-codegraph/dense.sqlite");
+    if !path.exists() {
+        return 0;
+    }
+    let Ok(conn) = Connection::open(&path) else {
+        return 0;
+    };
+    conn.query_row("SELECT COUNT(*) FROM chunk_embeddings", [], |row| row.get::<_, i64>(0))
+        .unwrap_or(0)
+        .max(0) as u64
+}
+
+/// Whether search indexes should be built on a ready graph index.
+pub fn needs_search_index_build(
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    config: &Config,
+) -> bool {
+    let auto = config.search_auto_enabled();
+    if !options.builds_chunks(auto) {
+        return false;
+    }
+    if options.force_search_rebuild {
+        return true;
+    }
+    if options.with_embeddings == Some(true) || options.with_lexical == Some(true) {
+        return true;
+    }
+    if options.builds_embeddings(auto) && dense_embedding_count(workspace_root) == 0 {
+        return true;
+    }
+    if options.builds_lexical(auto)
+        && !workspace_root
+            .join(".ctx-codegraph/lexical/meta.json")
+            .exists()
+    {
+        return true;
+    }
+    false
+}
+
+/// Builds search indexes when requested or missing. Errors are logged and ignored.
+pub fn maybe_build_search_indexes(
+    conn: &Connection,
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    config: &Config,
+    force: bool,
+) -> SearchBuildReport {
+    let auto = config.search_auto_enabled();
+    if !options.builds_chunks(auto) {
+        return SearchBuildReport::default();
+    }
+    if !force && !needs_search_index_build(workspace_root, options, config) {
+        return SearchBuildReport::default();
+    }
+    match build_search_indexes(conn, workspace_root, options, config) {
+        Ok(report) => report,
+        Err(err) => {
+            eprintln!("Warning: search index build failed: {}", err);
+            SearchBuildReport::default()
+        }
+    }
+}
+
 pub fn build_search_indexes(
     conn: &Connection,
     workspace_root: &Path,
@@ -98,9 +165,24 @@ pub fn build_search_indexes(
     }
 
     if options.builds_embeddings(auto) {
-        let embedding_path = config
-            .resolved_embedding_model()
-            .ok_or_else(|| CodeGraphError::Parse("embedding model path not configured".into()))?;
+        let embedding_path = match config.resolved_embedding_model() {
+            Some(path) => path,
+            None if options.with_embeddings == Some(true) => {
+                let default = ctx_config::Config::default_embedding_model_path();
+                if default.exists() {
+                    default
+                } else {
+                    return Err(CodeGraphError::Parse(
+                        "embedding model path not configured".into(),
+                    ));
+                }
+            }
+            None => {
+                return Err(CodeGraphError::Parse(
+                    "embedding model path not configured".into(),
+                ));
+            }
+        };
         let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
         let mut model = EmbeddingModel::load(&embedding_path, &tokenizer_dir)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
@@ -352,6 +434,48 @@ mod tests {
 
         let rel_path = file_path_for_chunk(&conn, file_id).unwrap();
         assert_eq!(rel_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn needs_search_index_build_when_embeddings_explicitly_requested() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let config = Config::default();
+        let options = BuildIndexOptions {
+            with_embeddings: Some(true),
+            with_lexical: Some(false),
+            ..Default::default()
+        };
+        assert!(needs_search_index_build(root, &options, &config));
+    }
+
+    #[test]
+    fn needs_search_index_build_when_dense_index_missing_and_auto_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let paths = ctx_codegraph_models::ModelPaths::default_paths();
+        let config = Config {
+            embedding_model: Some(paths.embedding_onnx.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let options = BuildIndexOptions::default();
+        assert!(needs_search_index_build(root, &options, &config));
+        assert_eq!(dense_embedding_count(root), 0);
+    }
+
+    #[test]
+    fn needs_search_index_build_false_when_search_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = BuildIndexOptions {
+            with_embeddings: Some(false),
+            with_lexical: Some(false),
+            ..Default::default()
+        };
+        assert!(!needs_search_index_build(
+            dir.path(),
+            &options,
+            &Config::default()
+        ));
     }
 
     #[test]

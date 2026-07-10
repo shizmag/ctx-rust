@@ -26,5 +26,8 @@ pub use rebuild::{
 };
 pub use chunks::{load_child_chunks, load_chunk, load_chunks_by_ids, load_chunks_for_symbol};
 pub use schema::{init_schema, validate_index_invariants};
-pub use search_build::{build_search_indexes, SearchBuildReport};
+pub use search_build::{
+    build_search_indexes, dense_embedding_count, maybe_build_search_indexes,
+    needs_search_index_build, SearchBuildReport,
+};
 pub use workspace::{find_workspace_root, open_codegraph_db, open_db, read_metadata, write_metadata};

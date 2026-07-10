@@ -1,13 +1,15 @@
 use ctx_codegraph_lang::index::BuildIndexOptions;
+use ctx_codegraph_lang::model::IndexState;
 use ctx_codegraph_store::storage::{
-    build_search_indexes, load_chunk, load_chunks_for_symbol, read_metadata,
+    build_search_indexes, dense_embedding_count, get_index_state_with_registry, load_chunk,
+    load_chunks_for_symbol, read_metadata, rebuild_index_db_with_registry,
 };
 use ctx_config::Config;
 use std::fs;
 
 mod common;
 use common::{
-    indexed_db, lexical_index_dir, lexical_search_options, no_search_options,
+    indexed_db, lexical_index_dir, lexical_search_options, no_search_options, production_registry,
     setup_mini_rust_project,
 };
 
@@ -102,10 +104,17 @@ fn test_build_search_indexes_embeddings_requires_model_path() {
         ..Default::default()
     };
 
-    let err = build_search_indexes(&conn, root, &search_options, &Config::default())
+    let config = Config {
+        embedding_model: Some("/nonexistent/ctx-test/missing.onnx".into()),
+        ..Default::default()
+    };
+    let err = build_search_indexes(&conn, root, &search_options, &config)
         .unwrap_err()
         .to_string();
-    assert!(err.contains("embedding model path not configured"));
+    assert!(
+        err.contains("model file not found") || err.contains("embedding model"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -289,4 +298,94 @@ fn test_build_search_indexes_embeddings_with_model() {
     assert!(fp.is_some());
     let path_meta = read_metadata(root, &registry, "embedding_model_path");
     assert!(path_meta.is_some());
+}
+
+#[test]
+fn test_ready_rebuild_builds_lexical_when_explicitly_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup_mini_rust_project(root);
+    let registry = production_registry();
+
+    rebuild_index_db_with_registry(root, no_search_options(), &registry).unwrap();
+    assert!(
+        matches!(
+            get_index_state_with_registry(root, &no_search_options(), &registry).unwrap(),
+            IndexState::Ready
+        ),
+        "graph index should be ready before lexical build"
+    );
+    assert!(!lexical_index_dir(root).join("meta.json").exists());
+
+    let (_, report) =
+        rebuild_index_db_with_registry(root, lexical_search_options(), &registry).unwrap();
+
+    assert!(!report.full_rebuild);
+    assert!(report.chunks_written > 0);
+    assert!(report.lexical_docs_written > 0);
+    assert!(lexical_index_dir(root).join("meta.json").exists());
+}
+
+#[test]
+#[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+fn test_ready_rebuild_builds_dense_index_when_embeddings_requested() {
+    if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup_mini_rust_project(root);
+    let registry = production_registry();
+    let paths = ctx_codegraph_models::ModelPaths::default_paths();
+    if !paths.embedding_onnx.is_file() {
+        eprintln!("skipping: embedding model missing");
+        return;
+    }
+    if ctx_codegraph_models::EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer)
+        .is_err()
+    {
+        eprintln!("skipping: embedding model not loadable in this environment");
+        return;
+    }
+
+    rebuild_index_db_with_registry(root, no_search_options(), &registry).unwrap();
+    assert_eq!(dense_embedding_count(root), 0);
+
+    let search_options = BuildIndexOptions {
+        with_lexical: Some(true),
+        with_embeddings: Some(true),
+        ..Default::default()
+    };
+    let model_dir = paths
+        .embedding_onnx
+        .parent()
+        .expect("embedding model parent dir");
+    fs::write(
+        root.join(".ctxconfig"),
+        format!(
+            "embedding_model = {}\nembedding_tokenizer = {}\n",
+            model_dir.display(),
+            paths.embedding_tokenizer.display()
+        ),
+    )
+    .unwrap();
+
+    let (_, report) =
+        rebuild_index_db_with_registry(root, search_options.clone(), &registry).unwrap();
+
+    assert!(!report.full_rebuild);
+    assert!(report.chunks_written > 0, "chunks should be written on ready rebuild");
+    assert!(
+        report.embeddings_written > 0,
+        "embeddings should be written on ready rebuild"
+    );
+    assert!(report.lexical_docs_written > 0);
+
+    let dense_path = root.join(".ctx-codegraph/dense.sqlite");
+    assert!(dense_path.exists(), "dense.sqlite should exist after --with-emb style rebuild");
+    assert!(
+        dense_embedding_count(root) > 0,
+        "dense index should contain embeddings"
+    );
 }

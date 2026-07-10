@@ -636,3 +636,27 @@ fn load_config_strips_inline_comments_from_values() {
     );
     assert_eq!(config.reranker_model.as_deref(), Some("/tmp/rerank.onnx"));
 }
+
+#[test]
+fn resolved_embedding_model_joins_model_onnx_for_directory_paths() {
+    let config = Config {
+        embedding_model: Some("/models/snowflake-arctic-embed".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        config.resolved_embedding_model(),
+        Some(PathBuf::from("/models/snowflake-arctic-embed/model.onnx"))
+    );
+}
+
+#[test]
+fn resolved_embedding_model_keeps_file_paths_unchanged() {
+    let config = Config {
+        embedding_model: Some("/models/custom.onnx".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        config.resolved_embedding_model(),
+        Some(PathBuf::from("/models/custom.onnx"))
+    );
+}
