@@ -101,7 +101,7 @@ pub fn build_search_indexes(
         let embedding_path = config
             .resolved_embedding_model()
             .ok_or_else(|| CodeGraphError::Parse("embedding model path not configured".into()))?;
-        let tokenizer_dir = config.resolved_tokenizer_dir(&embedding_path);
+        let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
         let mut model = EmbeddingModel::load(&embedding_path, &tokenizer_dir)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
         let texts: Vec<String> = all_chunks

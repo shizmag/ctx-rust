@@ -30,8 +30,8 @@ mod tests {
             paths.embedding_onnx.display()
         );
 
-        let mut embedding =
-            EmbeddingModel::load(&paths.embedding_onnx, &paths.tokenizer_dir).expect("embedding");
+        let mut embedding = EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer)
+            .expect("embedding");
         let vectors = embedding
             .embed_texts(&["fn main() {}".to_string()])
             .expect("embed");
@@ -39,8 +39,12 @@ mod tests {
         assert_eq!(vectors[0].len(), EMBEDDING_DIM);
 
         if let Some(reranker_path) = paths.reranker_onnx.as_ref() {
+            let rerank_tokenizer = paths
+                .rerank_tokenizer
+                .as_ref()
+                .expect("rerank tokenizer dir");
             let mut reranker =
-                RerankerModel::load(reranker_path, &paths.tokenizer_dir).expect("reranker");
+                RerankerModel::load(reranker_path, rerank_tokenizer).expect("reranker");
             let scores = reranker
                 .score_pairs("main function", &["fn main() {}".to_string()])
                 .expect("score");

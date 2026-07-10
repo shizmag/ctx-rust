@@ -443,7 +443,57 @@ fn save_config_writes_placeholders_for_optional_paths() {
     let content = fs::read_to_string(&config_path).unwrap();
     assert!(content.contains("exclude ="));
     assert!(content.contains("# embedding_model ="));
+    assert!(content.contains("# embedding_tokenizer ="));
+    assert!(content.contains("# rerank_tokenizer ="));
     assert!(content.contains("# mcp_target ="));
+}
+
+#[test]
+fn load_config_legacy_tokenizer_dir_maps_to_embedding_tokenizer() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join("config");
+    fs::write(&config_path, "tokenizer_dir = /legacy/tokenizer\n").unwrap();
+
+    let config = load_config(&config_path).unwrap();
+    assert_eq!(
+        config.embedding_tokenizer.as_deref(),
+        Some("/legacy/tokenizer")
+    );
+    assert!(config.rerank_tokenizer.is_none());
+}
+
+#[test]
+fn resolved_tokenizers_default_to_model_parent_dirs() {
+    let config = Config::default();
+    let embedding = std::path::Path::new("/models/embed/model.onnx");
+    let reranker = std::path::Path::new("/models/rerank/model.onnx");
+    assert_eq!(
+        config.resolved_embedding_tokenizer(embedding),
+        std::path::PathBuf::from("/models/embed")
+    );
+    assert_eq!(
+        config.resolved_rerank_tokenizer(reranker),
+        std::path::PathBuf::from("/models/rerank")
+    );
+}
+
+#[test]
+fn resolved_tokenizers_use_explicit_paths() {
+    let config = Config {
+        embedding_tokenizer: Some("/tok/embed".into()),
+        rerank_tokenizer: Some("/tok/rerank".into()),
+        ..Default::default()
+    };
+    let embedding = std::path::Path::new("/models/embed/model.onnx");
+    let reranker = std::path::Path::new("/models/rerank/model.onnx");
+    assert_eq!(
+        config.resolved_embedding_tokenizer(embedding),
+        std::path::PathBuf::from("/tok/embed")
+    );
+    assert_eq!(
+        config.resolved_rerank_tokenizer(reranker),
+        std::path::PathBuf::from("/tok/rerank")
+    );
 }
 
 #[test]
@@ -451,7 +501,8 @@ fn default_values_has_no_model_paths() {
     let defaults = Config::default_values();
     assert!(defaults.embedding_model.is_none());
     assert!(defaults.reranker_model.is_none());
-    assert!(defaults.tokenizer_dir.is_none());
+    assert!(defaults.embedding_tokenizer.is_none());
+    assert!(defaults.rerank_tokenizer.is_none());
     assert_eq!(defaults.mode, Some(Mode::Smart));
     assert_eq!(defaults.default_format.as_deref(), Some("yaml"));
     assert_eq!(defaults.default_retrieval_strategy.as_deref(), Some("hybrid"));

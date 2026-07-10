@@ -12,19 +12,22 @@ pub const DEFAULT_RERANKER_ONNX: &str =
 pub struct ModelPaths {
     pub embedding_onnx: PathBuf,
     pub reranker_onnx: Option<PathBuf>,
-    pub tokenizer_dir: PathBuf,
+    pub embedding_tokenizer: PathBuf,
+    pub rerank_tokenizer: Option<PathBuf>,
 }
 
 impl ModelPaths {
     pub fn new(
         embedding_onnx: impl Into<PathBuf>,
         reranker_onnx: Option<PathBuf>,
-        tokenizer_dir: impl Into<PathBuf>,
+        embedding_tokenizer: impl Into<PathBuf>,
+        rerank_tokenizer: Option<PathBuf>,
     ) -> Self {
         Self {
             embedding_onnx: embedding_onnx.into(),
             reranker_onnx,
-            tokenizer_dir: tokenizer_dir.into(),
+            embedding_tokenizer: embedding_tokenizer.into(),
+            rerank_tokenizer,
         }
     }
 
@@ -38,15 +41,19 @@ impl ModelPaths {
                 None
             }
         };
-        let tokenizer_dir = embedding_onnx
+        let embedding_tokenizer = embedding_onnx
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| embedding_onnx.clone());
+        let rerank_tokenizer = reranker_onnx
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf));
 
         Self {
             embedding_onnx,
             reranker_onnx,
-            tokenizer_dir,
+            embedding_tokenizer,
+            rerank_tokenizer,
         }
     }
 }

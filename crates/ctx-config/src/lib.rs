@@ -25,7 +25,10 @@ pub struct Config {
     // Hybrid search / ONNX models
     pub embedding_model: Option<String>,
     pub reranker_model: Option<String>,
-    pub tokenizer_dir: Option<String>,
+    /// Directory with `tokenizer.json` for the embedding ONNX model.
+    pub embedding_tokenizer: Option<String>,
+    /// Directory with `tokenizer.json` for the reranker ONNX model.
+    pub rerank_tokenizer: Option<String>,
     pub rrf_k: Option<usize>,
     pub bm25_top_k: Option<usize>,
     pub dense_top_k: Option<usize>,
@@ -70,7 +73,8 @@ impl Config {
             default_token_budget: Some(12000),
             embedding_model: None,
             reranker_model: None,
-            tokenizer_dir: None,
+            embedding_tokenizer: None,
+            rerank_tokenizer: None,
             rrf_k: Some(60),
             bm25_top_k: Some(50),
             dense_top_k: Some(50),
@@ -97,7 +101,8 @@ impl Config {
             default_token_budget: self.default_token_budget.or(d.default_token_budget),
             embedding_model: self.embedding_model,
             reranker_model: self.reranker_model,
-            tokenizer_dir: self.tokenizer_dir,
+            embedding_tokenizer: self.embedding_tokenizer,
+            rerank_tokenizer: self.rerank_tokenizer,
             rrf_k: self.rrf_k.or(d.rrf_k),
             bm25_top_k: self.bm25_top_k.or(d.bm25_top_k),
             dense_top_k: self.dense_top_k.or(d.dense_top_k),
@@ -137,11 +142,18 @@ impl Config {
         PathBuf::from(DEFAULT_RERANKER_MODEL)
     }
 
-    pub fn resolved_tokenizer_dir(&self, embedding_model: &Path) -> PathBuf {
-        self.tokenizer_dir
+    pub fn resolved_embedding_tokenizer(&self, embedding_model: &Path) -> PathBuf {
+        self.embedding_tokenizer
             .as_ref()
             .map(PathBuf::from)
             .unwrap_or_else(|| embedding_model.parent().unwrap_or(embedding_model).to_path_buf())
+    }
+
+    pub fn resolved_rerank_tokenizer(&self, reranker_model: &Path) -> PathBuf {
+        self.rerank_tokenizer
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| reranker_model.parent().unwrap_or(reranker_model).to_path_buf())
     }
 
     pub fn search_auto_enabled(&self) -> bool {
@@ -264,9 +276,20 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     config.reranker_model = Some(value.to_string());
                 }
             }
-            "tokenizer_dir" => {
+            "embedding_tokenizer" | "embedding_tokenizer_dir" => {
                 if !value.is_empty() {
-                    config.tokenizer_dir = Some(value.to_string());
+                    config.embedding_tokenizer = Some(value.to_string());
+                }
+            }
+            "rerank_tokenizer" | "rerank_tokenizer_dir" => {
+                if !value.is_empty() {
+                    config.rerank_tokenizer = Some(value.to_string());
+                }
+            }
+            // Legacy alias: single tokenizer_dir applied to embedding only.
+            "tokenizer_dir" => {
+                if !value.is_empty() && config.embedding_tokenizer.is_none() {
+                    config.embedding_tokenizer = Some(value.to_string());
                 }
             }
             "rrf_k" => {
@@ -374,7 +397,8 @@ pub fn merge_configs(base: Config, overlay: Config) -> Config {
         default_token_budget: overlay.default_token_budget.or(base.default_token_budget),
         embedding_model: overlay.embedding_model.or(base.embedding_model),
         reranker_model: overlay.reranker_model.or(base.reranker_model),
-        tokenizer_dir: overlay.tokenizer_dir.or(base.tokenizer_dir),
+        embedding_tokenizer: overlay.embedding_tokenizer.or(base.embedding_tokenizer),
+        rerank_tokenizer: overlay.rerank_tokenizer.or(base.rerank_tokenizer),
         rrf_k: overlay.rrf_k.or(base.rrf_k),
         bm25_top_k: overlay.bm25_top_k.or(base.bm25_top_k),
         dense_top_k: overlay.dense_top_k.or(base.dense_top_k),
@@ -512,10 +536,16 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
         Some(p) => lines.push(format!("reranker_model = {}", p)),
         None => lines.push("# reranker_model =        # optional cross-encoder reranker ONNX path".to_string()),
     }
-    match &config.tokenizer_dir {
-        Some(p) => lines.push(format!("tokenizer_dir = {}", p)),
+    match &config.embedding_tokenizer {
+        Some(p) => lines.push(format!("embedding_tokenizer = {}", p)),
         None => lines.push(
-            "# tokenizer_dir =         # dir with tokenizer.json (HuggingFace); for embedding + reranker ONNX".to_string(),
+            "# embedding_tokenizer =   # dir with tokenizer.json for embedding ONNX; defaults to model parent".to_string(),
+        ),
+    }
+    match &config.rerank_tokenizer {
+        Some(p) => lines.push(format!("rerank_tokenizer = {}", p)),
+        None => lines.push(
+            "# rerank_tokenizer =      # dir with tokenizer.json for reranker ONNX; defaults to model parent".to_string(),
         ),
     }
     if let Some(v) = config.rrf_k {

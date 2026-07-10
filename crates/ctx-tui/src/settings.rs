@@ -35,12 +35,13 @@ struct SettingsState {
     exclude_preset: usize,
 }
 
-const N_FIELDS: usize = 20;
+const N_FIELDS: usize = 21;
 const EXCLUDE_IDX: usize = 3;
 const ENABLE_RERANK_IDX: usize = 16;
 const EMBEDDING_MODEL_IDX: usize = 17;
 const RERANKER_MODEL_IDX: usize = 18;
-const TOKENIZER_DIR_IDX: usize = 19;
+const EMBEDDING_TOKENIZER_IDX: usize = 19;
+const RERANK_TOKENIZER_IDX: usize = 20;
 
 // Common exclude patterns for arrow cycling (no free-text input)
 const COMMON_EXCLUDES: &[&str] = &[
@@ -106,7 +107,8 @@ impl SettingsState {
             16 => "enable_rerank (Search)",
             17 => "embedding_model (Search)",
             18 => "reranker_model (Search)",
-            19 => "tokenizer_dir (Search)",
+            19 => "embedding_tokenizer (Search)",
+            20 => "rerank_tokenizer (Search)",
             _ => "",
         }
     }
@@ -133,9 +135,10 @@ impl SettingsState {
             16 => "Re-score top search hits with the reranker ONNX model. Requires reranker_model to be set.",
             17 => "Path to the embedding ONNX model (.onnx). Required to build and query hybrid/dense search indexes.",
             18 => "Path to the reranker ONNX model (.onnx). Optional cross-encoder that improves result ordering.",
-            19 => "Directory with tokenizer.json (HuggingFace format) for the embedding and reranker models. \
-                    Converts text to token IDs the ONNX models expect. If unset, defaults to the embedding \
-                    model's parent folder. Falls back to a simple whitespace tokenizer when tokenizer.json is missing.",
+            19 => "Directory with tokenizer.json (HuggingFace) for the embedding ONNX model. \
+                    Converts text to token IDs before vector embedding. Defaults to embedding model's parent folder.",
+            20 => "Directory with tokenizer.json (HuggingFace) for the reranker ONNX model. \
+                    Tokenizes query+document pairs for cross-encoder scoring. Defaults to reranker model's parent folder.",
             _ => "",
         }
     }
@@ -205,9 +208,14 @@ impl SettingsState {
                 .unwrap_or_else(|| "(not set — edit config file)".into()),
             19 => self
                 .config
-                .tokenizer_dir
+                .embedding_tokenizer
                 .clone()
-                .unwrap_or_else(|| "(not set — edit config file)".into()),
+                .unwrap_or_else(|| "(default: embedding model dir)".into()),
+            20 => self
+                .config
+                .rerank_tokenizer
+                .clone()
+                .unwrap_or_else(|| "(default: reranker model dir)".into()),
             _ => String::new(),
         }
     }
@@ -225,7 +233,13 @@ impl SettingsState {
     }
 
     fn is_path_field(&self, idx: usize) -> bool {
-        matches!(idx, EMBEDDING_MODEL_IDX | RERANKER_MODEL_IDX | TOKENIZER_DIR_IDX)
+        matches!(
+            idx,
+            EMBEDDING_MODEL_IDX
+                | RERANKER_MODEL_IDX
+                | EMBEDDING_TOKENIZER_IDX
+                | RERANK_TOKENIZER_IDX
+        )
     }
 
     fn cycle_value(&mut self, idx: usize, forward: bool) {
@@ -485,7 +499,8 @@ impl SettingsState {
             16 => self.config.enable_rerank = d.enable_rerank,
             EMBEDDING_MODEL_IDX => self.config.embedding_model = None,
             RERANKER_MODEL_IDX => self.config.reranker_model = None,
-            TOKENIZER_DIR_IDX => self.config.tokenizer_dir = None,
+            EMBEDDING_TOKENIZER_IDX => self.config.embedding_tokenizer = None,
+            RERANK_TOKENIZER_IDX => self.config.rerank_tokenizer = None,
             _ => {}
         }
         self.message = Some("reset to default (s to save)".into());
@@ -819,11 +834,18 @@ mod tests {
     }
 
     #[test]
-    fn tokenizer_dir_help_mentions_format_and_models() {
+    fn embedding_tokenizer_help_mentions_format() {
         let s = make_test_state();
-        let help = s.field_help(TOKENIZER_DIR_IDX);
+        let help = s.field_help(EMBEDDING_TOKENIZER_IDX);
         assert!(help.contains("tokenizer.json"));
         assert!(help.contains("embedding"));
+    }
+
+    #[test]
+    fn rerank_tokenizer_help_mentions_reranker() {
+        let s = make_test_state();
+        let help = s.field_help(RERANK_TOKENIZER_IDX);
+        assert!(help.contains("tokenizer.json"));
         assert!(help.contains("reranker"));
     }
 
@@ -975,6 +997,7 @@ mod tests {
 
             let content = fs::read_to_string(&path).unwrap();
             assert!(content.contains("default_format = yaml"));
+            assert!(content.contains("# embedding_tokenizer ="));
             assert!(content.contains("# embedding_model ="));
         });
     }
@@ -991,6 +1014,7 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert!(content.contains("mode = code"));
             assert!(content.contains("default_retrieval_strategy = hybrid"));
+            assert!(content.contains("# embedding_tokenizer ="));
             assert!(content.contains("# embedding_model ="));
 
             let (_, _, outcome) = ensure_global_config(empty_project.path()).unwrap();

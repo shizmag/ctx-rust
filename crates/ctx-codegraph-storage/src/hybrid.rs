@@ -41,7 +41,7 @@ impl WorkspaceHybridBackend {
         }
         let mut backend = Self::open(workspace)?;
         if let Some(path) = config.resolved_embedding_model() {
-            let tokenizer_dir = config.resolved_tokenizer_dir(&path);
+            let tokenizer_dir = config.resolved_embedding_tokenizer(&path);
             if let Ok(model) = EmbeddingModel::load(&path, &tokenizer_dir) {
                 backend = backend.with_embedding(model);
             }
