@@ -247,8 +247,10 @@ fn test_cli_graph_help_and_alias() {
     assert!(stdout.contains("calls"));
     assert!(stdout.contains("callers"));
     assert!(stdout.contains("slice"));
+    assert!(stdout.contains("info"));
     assert!(stdout.contains("Examples:"));
     assert!(stdout.contains("ctx g symbols"));
+    assert!(stdout.contains("ctx g info"));
 
     // 2. Test ctx g --help
     let mut cmd_g = assert_cmd::Command::cargo_bin("ctx").unwrap();
@@ -264,8 +266,72 @@ fn test_cli_graph_help_and_alias() {
     assert!(stdout_g.contains("calls"));
     assert!(stdout_g.contains("callers"));
     assert!(stdout_g.contains("slice"));
+    assert!(stdout_g.contains("info"));
     assert!(stdout_g.contains("Examples:"));
     assert!(stdout_g.contains("ctx g symbols"));
+    assert!(stdout_g.contains("ctx g info"));
+}
+
+#[test]
+fn test_cli_graph_info_before_and_after_build() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_missing = cmd
+        .args(["graph", "info", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run ctx graph info");
+    assert!(output_missing.status.success());
+    let stdout_missing = String::from_utf8(output_missing.stdout).unwrap();
+    assert!(stdout_missing.contains("ctx graph info"));
+    assert!(stdout_missing.contains("Workspace"));
+    assert!(stdout_missing.contains("Index"));
+    assert!(
+        stdout_missing.contains("missing") || stdout_missing.contains("needs rebuild")
+    );
+    assert!(stdout_missing.contains("ctx graph build"));
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_build = cmd
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed to run ctx graph build");
+    assert!(output_build.status.success());
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_ready = cmd
+        .args(["g", "info", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run ctx g info");
+    assert!(output_ready.status.success());
+    let stdout_ready = String::from_utf8(output_ready.stdout).unwrap();
+    assert!(stdout_ready.contains("ready") || stdout_ready.contains("stale"));
+    assert!(stdout_ready.contains("symbols:"));
+    assert!(stdout_ready.contains("rust") || stdout_ready.contains("files:"));
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output_json = cmd
+        .args([
+            "graph",
+            "info",
+            root.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run ctx graph info --format json");
+    assert!(output_json.status.success());
+    let stdout_json = String::from_utf8(output_json.stdout).unwrap();
+    assert!(stdout_json.contains("\"workspace_root\""));
+    assert!(stdout_json.contains("\"symbols\""));
+    assert!(stdout_json.contains("\"state\""));
 }
 
 #[test]

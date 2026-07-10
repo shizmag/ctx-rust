@@ -332,7 +332,9 @@ struct InstallCommand {
                   ctx graph calls my_function\n  \
                   ctx graph callers my_function\n  \
                   ctx graph slice my_function\n  \
-                  ctx g symbols"
+                  ctx graph info\n  \
+                  ctx g symbols\n  \
+                  ctx g info"
 )]
 struct GraphCommand {
     #[command(subcommand)]
@@ -385,6 +387,12 @@ pub enum CliGraphContextMode {
 
 #[derive(clap::Subcommand, Debug)]
 enum GraphSubcommand {
+    /// Show codegraph index status and graph-related project overview
+    Info {
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Build or rebuild the codegraph SQLite index database
     Build,
     /// List all indexed symbols grouped by their files, or find a specific symbol
@@ -488,6 +496,9 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
     let use_rust_analyzer = graph_args.with_lsp && !graph_args.no_rust_analyzer;
 
     match graph_args.command {
+        GraphSubcommand::Info { format } => {
+            handle_graph_info(&graph_args.path, use_rust_analyzer, &format)?;
+        }
         GraphSubcommand::Build => {
             let start_time = std::time::Instant::now();
             println!("\x1b[36m\x1b[1mBuilding codegraph index...\x1b[0m");
@@ -994,6 +1005,318 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
     }
 
     Ok(())
+}
+
+fn format_index_state(state: &ctx_codegraph::model::IndexState) -> String {
+    use ctx_codegraph::model::{IndexState, RebuildReason};
+    match state {
+        IndexState::Missing => "missing".to_string(),
+        IndexState::Ready => "ready".to_string(),
+        IndexState::NeedsIncrementalUpdate(diff) => format!(
+            "stale (+{} added, ~{} modified, -{} deleted)",
+            diff.added.len(),
+            diff.modified.len(),
+            diff.deleted.len()
+        ),
+        IndexState::NeedsFullRebuild(reason) => {
+            let label = match reason {
+                RebuildReason::MissingDatabase => "missing database",
+                RebuildReason::CorruptDatabase => "corrupt database",
+                RebuildReason::SchemaVersionChanged => "schema version changed",
+                RebuildReason::IndexerVersionChanged => "indexer version changed",
+                RebuildReason::BackendSetChanged => "backend set changed",
+                RebuildReason::BackendVersionChanged => "backend version changed",
+                RebuildReason::ParserVersionChanged => "parser version changed",
+                RebuildReason::ParserConfigChanged => "parser configuration changed",
+                RebuildReason::ResolverVersionChanged => "resolver version changed",
+                RebuildReason::ResolverConfigChanged => "resolver configuration changed",
+                RebuildReason::DiscoveryConfigChanged => "discovery configuration changed",
+                RebuildReason::ChangeDetectionStrategyChanged => {
+                    "change detection strategy changed"
+                }
+                RebuildReason::PreviousRunIncomplete => "previous run incomplete",
+                RebuildReason::PreviousRunFailed => "previous run failed",
+                RebuildReason::EmbeddingModelChanged => "embedding model changed",
+                RebuildReason::LexicalIndexStale => "lexical index stale",
+                RebuildReason::ChunkSchemaChanged => "chunk schema changed",
+            };
+            format!("needs rebuild ({label})")
+        }
+    }
+}
+
+fn query_count(conn: &rusqlite::Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |row| row.get(0)).unwrap_or(0)
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+fn handle_graph_info(
+    path: &Path,
+    cli_use_lsp: bool,
+    format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ctx_codegraph::index::BuildIndexOptions;
+    use ctx_codegraph::model::IndexState;
+    use ctx_codegraph::storage::{find_workspace_root, get_index_state};
+    use std::fmt::Write as _;
+
+    let config = ctx_config::find_and_load_config(path).unwrap_or_default();
+    let use_lsp = cli_use_lsp || config.use_lsp.unwrap_or(false);
+    let workspace_root = find_workspace_root(path);
+    let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
+    let lexical_path = workspace_root.join(".ctx-codegraph/lexical");
+    let options = BuildIndexOptions {
+        use_lsp,
+        ..Default::default()
+    };
+    let state = get_index_state(&workspace_root, &options).unwrap_or(IndexState::Missing);
+    let state_label = format_index_state(&state);
+
+    let mut languages: Vec<(String, i64)> = Vec::new();
+    let mut edge_confidence: Vec<(String, i64)> = Vec::new();
+    let mut metadata: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut file_count = 0i64;
+    let mut symbol_count = 0i64;
+    let mut edge_count = 0i64;
+    let mut chunk_count = 0i64;
+    let mut embedding_count = 0i64;
+    let mut chunks_table = false;
+    let mut embeddings_table = false;
+    let mut db_size_bytes: Option<u64> = None;
+    let mut db_mtime: Option<String> = None;
+
+    if db_path.exists() {
+        if let Ok(meta) = std::fs::metadata(&db_path) {
+            db_size_bytes = Some(meta.len());
+            if let Ok(mtime) = meta.modified() {
+                db_mtime = Some(format!("{mtime:?}"));
+            }
+        }
+        if let Ok(conn) = ctx_codegraph::open_db(&workspace_root) {
+            file_count = query_count(&conn, "SELECT COUNT(*) FROM files");
+            symbol_count = query_count(&conn, "SELECT COUNT(*) FROM symbols");
+            edge_count = query_count(&conn, "SELECT COUNT(*) FROM edges");
+            chunks_table = table_exists(&conn, "chunks");
+            embeddings_table = table_exists(&conn, "chunk_embeddings");
+            if chunks_table {
+                chunk_count = query_count(&conn, "SELECT COUNT(*) FROM chunks");
+            }
+            if embeddings_table {
+                embedding_count = query_count(&conn, "SELECT COUNT(*) FROM chunk_embeddings");
+            }
+
+            let mut lang_stmt = conn.prepare(
+                "SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC",
+            )?;
+            let lang_rows = lang_stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in lang_rows {
+                languages.push(row?);
+            }
+
+            let mut conf_stmt = conn.prepare(
+                "SELECT confidence, COUNT(*) FROM edges GROUP BY confidence ORDER BY COUNT(*) DESC",
+            )?;
+            let conf_rows = conf_stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in conf_rows {
+                edge_confidence.push(row?);
+            }
+
+            let mut meta_stmt = conn.prepare("SELECT key, value FROM metadata ORDER BY key")?;
+            let meta_rows = meta_stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in meta_rows {
+                let (k, v) = row?;
+                metadata.insert(k, v);
+            }
+        }
+    }
+
+    let search_configured = config.search_auto_enabled();
+    let lexical_present = lexical_path.exists();
+
+    if format == "json" {
+        let mut lang_map = serde_json::Map::new();
+        for (lang, count) in &languages {
+            lang_map.insert(lang.clone(), serde_json::json!(count));
+        }
+        let mut confidence_map = serde_json::Map::new();
+        for (conf, count) in &edge_confidence {
+            confidence_map.insert(conf.clone(), serde_json::json!(count));
+        }
+        let payload = serde_json::json!({
+            "requested_path": path.display().to_string(),
+            "workspace_root": workspace_root.display().to_string(),
+            "index": {
+                "state": state_label,
+                "database": db_path.display().to_string(),
+                "database_exists": db_path.exists(),
+                "database_size_bytes": db_size_bytes,
+                "database_mtime": db_mtime,
+                "files": file_count,
+                "symbols": symbol_count,
+                "edges": edge_count,
+                "chunks": chunk_count,
+                "embeddings": embedding_count,
+                "languages": lang_map,
+                "edge_confidence": confidence_map,
+                "metadata": metadata,
+            },
+            "search": {
+                "configured": search_configured,
+                "embedding_model": config.embedding_model,
+                "reranker_model": config.reranker_model,
+                "lexical_index_present": lexical_present,
+                "default_retrieval_strategy": config.default_retrieval_strategy,
+            },
+            "settings": {
+                "use_lsp": use_lsp,
+                "default_format": config.default_format,
+                "default_ranking": config.default_ranking,
+                "default_packing": config.default_packing,
+                "default_token_budget": config.default_token_budget,
+            },
+            "hints": graph_info_hints(&state, db_path.exists()),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    if format != "text" {
+        return Err(format!("unsupported format: {format} (use text or json)").into());
+    }
+
+    let mut out = String::new();
+    writeln!(out, "ctx graph info")?;
+    writeln!(out)?;
+    writeln!(out, "Workspace")?;
+    writeln!(out, "  path: {}", path.display())?;
+    writeln!(out, "  root: {}", workspace_root.display())?;
+    writeln!(out)?;
+    writeln!(out, "Index")?;
+    writeln!(out, "  state: {state_label}")?;
+    writeln!(out, "  database: {}", db_path.display())?;
+    if let Some(size) = db_size_bytes {
+        writeln!(out, "  size: {} bytes", size)?;
+    }
+    if let Some(mtime) = &db_mtime {
+        writeln!(out, "  modified: {mtime}")?;
+    }
+    if db_path.exists() {
+        writeln!(out, "  files: {file_count}")?;
+        writeln!(out, "  symbols: {symbol_count}")?;
+        writeln!(out, "  edges: {edge_count}")?;
+        if chunks_table {
+            writeln!(out, "  chunks: {chunk_count}")?;
+        }
+        if embeddings_table || search_configured {
+            writeln!(out, "  embeddings: {embedding_count}")?;
+        }
+        if !languages.is_empty() {
+            writeln!(out, "  languages:")?;
+            for (lang, count) in &languages {
+                writeln!(out, "    - {lang}: {count}")?;
+            }
+        }
+        if !edge_confidence.is_empty() {
+            writeln!(out, "  edge confidence:")?;
+            for (conf, count) in &edge_confidence {
+                writeln!(out, "    - {conf}: {count}")?;
+            }
+        }
+        if !metadata.is_empty() {
+            writeln!(out, "  metadata:")?;
+            for (key, value) in &metadata {
+                writeln!(out, "    - {key}: {value}")?;
+            }
+        }
+    } else {
+        writeln!(out, "  (no index yet)")?;
+    }
+    writeln!(out)?;
+    writeln!(out, "Search")?;
+    writeln!(
+        out,
+        "  hybrid enabled: {}",
+        if search_configured { "yes" } else { "no" }
+    )?;
+    if let Some(model) = &config.embedding_model {
+        writeln!(out, "  embedding_model: {model}")?;
+    }
+    if let Some(model) = &config.reranker_model {
+        writeln!(out, "  reranker_model: {model}")?;
+    }
+    writeln!(
+        out,
+        "  lexical index: {}",
+        if lexical_present { "present" } else { "missing" }
+    )?;
+    if let Some(strategy) = &config.default_retrieval_strategy {
+        writeln!(out, "  default strategy: {strategy}")?;
+    }
+    writeln!(out)?;
+    writeln!(out, "Settings")?;
+    writeln!(out, "  use_lsp: {use_lsp}")?;
+    if let Some(fmt) = &config.default_format {
+        writeln!(out, "  default_format: {fmt}")?;
+    }
+    if let Some(ranking) = &config.default_ranking {
+        writeln!(out, "  default_ranking: {ranking}")?;
+    }
+    if let Some(packing) = &config.default_packing {
+        writeln!(out, "  default_packing: {packing}")?;
+    }
+    if let Some(budget) = config.default_token_budget {
+        writeln!(out, "  default_token_budget: {budget}")?;
+    }
+    writeln!(out)?;
+    writeln!(out, "Next steps")?;
+    for hint in graph_info_hints(&state, db_path.exists()) {
+        writeln!(out, "  - {hint}")?;
+    }
+    print!("{out}");
+    Ok(())
+}
+
+fn graph_info_hints(
+    state: &ctx_codegraph::model::IndexState,
+    db_exists: bool,
+) -> Vec<String> {
+    use ctx_codegraph::model::IndexState;
+    let mut hints = Vec::new();
+    match state {
+        IndexState::Missing | IndexState::NeedsFullRebuild(_) if !db_exists => {
+            hints.push("Run `ctx graph build` to create the codegraph index.".into());
+        }
+        IndexState::NeedsFullRebuild(_) => {
+            hints.push("Run `ctx graph build` to rebuild the index.".into());
+        }
+        IndexState::NeedsIncrementalUpdate(_) => {
+            hints.push("Run `ctx graph build` to refresh changed files.".into());
+        }
+        IndexState::Ready => {
+            hints.push("Index is ready. Try `ctx graph symbols` or `ctx graph affect <query>`.".into());
+        }
+        IndexState::Missing => {}
+    }
+    if hints.is_empty() && !db_exists {
+        hints.push("Run `ctx graph build` to create the codegraph index.".into());
+    }
+    hints.push("Run `ctx stats` for scan totals and MCP usage.".into());
+    hints
 }
 
 fn get_connection_or_rebuild(
