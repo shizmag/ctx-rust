@@ -1003,6 +1003,36 @@ mod tests {
     }
 
     #[test]
+    fn settings_state_upgrades_legacy_config_missing_search_settings() {
+        const LEGACY: &str = "mode = smart\nmax_depth = 5\nmax_file_size = 532480\nexclude =\n\
+            default_format = yaml\nuse_lsp = true\nstats_enabled = true\n\
+            default_packing = sandwich\ndefault_ranking = hybrid\n\
+            default_token_budget = 12000\n";
+
+        with_xdg_config_home(|xdg| {
+            let empty_project = tempfile::tempdir().unwrap();
+            let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, LEGACY).unwrap();
+
+            let state = SettingsState::new(empty_project.path().to_path_buf());
+            assert_eq!(state.config.rrf_k, Some(60));
+            assert_eq!(state.config.enable_rerank, Some(false));
+            assert!(
+                state
+                    .message
+                    .as_deref()
+                    .is_some_and(|m| m.contains("upgraded"))
+            );
+
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("enable_rerank = false"));
+            assert!(content.contains("default_retrieval_strategy = hybrid"));
+            assert!(content.contains("# embedding_model ="));
+        });
+    }
+
+    #[test]
     fn settings_save_writes_full_global_config() {
         with_xdg_config_home(|xdg| {
             let empty_project = tempfile::tempdir().unwrap();

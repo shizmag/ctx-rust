@@ -1,7 +1,8 @@
 use ctx_config::{
     ensure_global_config, find_and_load_config, find_config, find_project_config,
-    global_config_path, load_config, load_global_config, merge_configs, save_config,
-    save_global_config, Config, CONFIG_DIR_NAME, CONFIG_FILE_NAME, EnsureOutcome,
+    global_config_path, load_config, load_global_config, merge_configs,
+    missing_config_setting_keys, save_config, save_global_config, Config, CONFIG_DIR_NAME,
+    CONFIG_FILE_NAME, EnsureOutcome, KNOWN_CONFIG_SETTING_KEYS,
 };
 use ctx_models::Mode;
 use std::fs;
@@ -581,6 +582,94 @@ fn ensure_global_config_is_idempotent_when_complete() {
 
         let (_, _, second) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
         assert_eq!(second, EnsureOutcome::Unchanged);
+    });
+}
+
+/// Simulates a user config saved before hybrid-search settings existed.
+const LEGACY_PRE_SEARCH_CONFIG: &str = r#"mode = smart
+max_depth = 5
+max_file_size = 532480
+exclude =
+default_format = yaml
+use_lsp = true
+stats_enabled = true
+default_packing = sandwich
+default_ranking = hybrid
+default_token_budget = 12000
+"#;
+
+#[test]
+fn missing_config_setting_keys_detects_legacy_config_without_search_fields() {
+    let missing = missing_config_setting_keys(LEGACY_PRE_SEARCH_CONFIG);
+    assert!(missing.contains(&"rrf_k"));
+    assert!(missing.contains(&"enable_rerank"));
+    assert!(missing.contains(&"default_retrieval_strategy"));
+    assert!(missing.contains(&"embedding_model"));
+    assert_eq!(
+        missing.len(),
+        KNOWN_CONFIG_SETTING_KEYS.len() - 10,
+        "legacy config should miss all search/model keys"
+    );
+}
+
+#[test]
+fn ensure_global_config_upgrades_legacy_config_missing_new_feature_settings() {
+    with_xdg_config_home(|xdg| {
+        let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, LEGACY_PRE_SEARCH_CONFIG).unwrap();
+
+        let (_, config, outcome) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
+        assert_eq!(outcome, EnsureOutcome::Upgraded);
+        assert_eq!(config.mode, Some(Mode::Smart));
+        assert_eq!(config.max_depth, Some(5));
+        assert_eq!(config.rrf_k, Some(60));
+        assert_eq!(config.enable_rerank, Some(false));
+        assert_eq!(
+            config.default_retrieval_strategy.as_deref(),
+            Some("hybrid")
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        for key in [
+            "rrf_k",
+            "bm25_top_k",
+            "dense_top_k",
+            "rerank_top_k",
+            "enable_rerank",
+            "default_retrieval_strategy",
+            "# embedding_model",
+            "# embedding_tokenizer",
+            "# reranker_model",
+            "# rerank_tokenizer",
+        ] {
+            assert!(content.contains(key), "upgraded config missing {key}");
+        }
+
+        let (_, _, second) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
+        assert_eq!(second, EnsureOutcome::Unchanged);
+    });
+}
+
+#[test]
+fn ensure_global_config_upgrades_when_only_newest_key_missing_on_disk() {
+    with_xdg_config_home(|xdg| {
+        let path = xdg.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        save_config(&path, &Config::default_values()).unwrap();
+        let mut content = fs::read_to_string(&path).unwrap();
+        content = content
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("enable_rerank"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, content).unwrap();
+
+        let (_, config, outcome) = ensure_global_config(PathBuf::from(".").as_path()).unwrap();
+        assert_eq!(outcome, EnsureOutcome::Upgraded);
+        assert_eq!(config.enable_rerank, Some(false));
+
+        let upgraded = fs::read_to_string(&path).unwrap();
+        assert!(upgraded.contains("enable_rerank = false"));
     });
 }
 

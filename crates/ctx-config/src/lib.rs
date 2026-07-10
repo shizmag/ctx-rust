@@ -56,6 +56,34 @@ pub fn resolve_model_onnx_path(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Every setting key persisted by [`save_config`].
+///
+/// When a new feature adds a config field, append its key here so
+/// [`ensure_global_config`] can incrementally upgrade older config files.
+pub const KNOWN_CONFIG_SETTING_KEYS: &[&str] = &[
+    "mode",
+    "max_depth",
+    "max_file_size",
+    "exclude",
+    "default_format",
+    "mcp_target",
+    "use_lsp",
+    "stats_enabled",
+    "default_packing",
+    "default_ranking",
+    "default_token_budget",
+    "embedding_model",
+    "reranker_model",
+    "embedding_tokenizer",
+    "rerank_tokenizer",
+    "rrf_k",
+    "bm25_top_k",
+    "dense_top_k",
+    "rerank_top_k",
+    "enable_rerank",
+    "default_retrieval_strategy",
+];
+
 /// What happened the last time [`ensure_global_config`] ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureOutcome {
@@ -128,6 +156,11 @@ impl Config {
     /// True when [`apply_defaults`] would add at least one missing setting.
     pub fn needs_upgrade(&self) -> bool {
         self.clone().apply_defaults() != *self
+    }
+
+    /// True when the on-disk config file is missing one or more known settings.
+    pub fn file_needs_upgrade(content: &str) -> bool {
+        !missing_config_setting_keys(content).is_empty()
     }
 
     /// True when the config still matches factory defaults (never customized).
@@ -482,8 +515,9 @@ pub fn ensure_global_config(project_dir: &Path) -> Result<(PathBuf, Config, Ensu
         return Ok((path, config, EnsureOutcome::Created));
     }
 
+    let file_content = fs::read_to_string(&path)?;
     let loaded = load_config(&path)?;
-    if loaded.needs_upgrade() {
+    if loaded.needs_upgrade() || Config::file_needs_upgrade(&file_content) {
         let upgraded = loaded.apply_defaults();
         save_config(&path, &upgraded)?;
         return Ok((path, upgraded, EnsureOutcome::Upgraded));
@@ -606,6 +640,37 @@ pub fn save_global_config(config: &Config) -> Result<PathBuf, std::io::Error> {
     })?;
     save_config(&path, config)?;
     Ok(path)
+}
+
+/// Keys from [`KNOWN_CONFIG_SETTING_KEYS`] that are absent from a config file.
+pub fn missing_config_setting_keys(content: &str) -> Vec<&'static str> {
+    KNOWN_CONFIG_SETTING_KEYS
+        .iter()
+        .copied()
+        .filter(|key| !config_file_contains_key(content, key))
+        .collect()
+}
+
+fn config_file_contains_key(content: &str, key: &str) -> bool {
+    for line in content.lines() {
+        let mut trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            trimmed = trimmed.trim_start_matches('#').trim();
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((name, _)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(key) {
+            return true;
+        }
+    }
+    false
 }
 
 fn strip_inline_comment(value: &str) -> &str {
