@@ -7,6 +7,9 @@ edition = "2024"
 serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 ctx-codegraph-storage = { path = "../ctx-codegraph-storage" }
+ctx-codegraph-search = { path = "../ctx-codegraph-search" }
+ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
+ctx-config = { path = "../ctx-config" }
 
 [dev-dependencies]
 tempfile = "3"

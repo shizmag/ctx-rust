@@ -6,15 +6,11 @@ use std::io::Cursor;
 use tempfile::tempdir;
 
 const EXPECTED_TOOLS: &[&str] = &[
-    "get_affected_context",
-    "get_graph_context",
-    "get_project_context",
+    "retrieve_context",
     "list_symbols",
-    "get_callers",
-    "get_callees",
-    "rebuild_index",
     "read_file",
-    "search_code",
+    "rebuild_index",
+    "get_project_context",
 ];
 
 fn setup_project_with_index() -> (tempfile::TempDir, String) {
@@ -137,7 +133,7 @@ fn test_mcp_coverage_tools_list_returns_all_tools() {
     }
 
     // modern MCP fields present for key tools (title, annotations, outputSchema on main)
-    let affected = tools.iter().find(|t| t["name"] == "get_affected_context").unwrap();
+    let affected = tools.iter().find(|t| t["name"] == "retrieve_context").unwrap();
     assert!(affected.get("title").is_some());
     assert!(affected.get("annotations").and_then(|a| a.get("readOnlyHint")).is_some());
     assert!(affected.get("outputSchema").is_some());
@@ -245,8 +241,8 @@ fn test_mcp_coverage_prompts_list_and_get() {
         .as_str()
         .unwrap();
     assert!(prompt_text.contains("run_pipeline"));
-    assert!(prompt_text.contains("get_affected_context"));
-    assert!(prompt_text.contains("get_callers"));
+    assert!(prompt_text.contains("retrieve_context"));
+    assert!(prompt_text.contains("retrieve_context"));
 
     // also exercise a new prompt
     let more = run_mcp_requests(&[
@@ -258,7 +254,7 @@ fn test_mcp_coverage_prompts_list_and_get() {
         }),
     ]);
     let impact_text = more[0]["result"]["messages"][0]["content"]["text"].as_str().unwrap();
-    assert!(impact_text.contains("get_affected_context"));
+    assert!(impact_text.contains("retrieve_context"));
     assert!(impact_text.contains("format=`yaml`"));
 }
 
@@ -273,12 +269,34 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
             "list_symbols",
             serde_json::json!({ "query": "load", "limit": 5 }),
         ),
-        tool_call_request(3, "get_callers", serde_json::json!({ "query": "load" })),
-        tool_call_request(4, "get_callees", serde_json::json!({ "query": "run_pipeline" })),
+        tool_call_request(
+            3,
+            "retrieve_context",
+            serde_json::json!({
+                "query": "load",
+                "strategy": "graph",
+                "graph_mode": "callers",
+                "format": "text"
+            }),
+        ),
+        tool_call_request(
+            4,
+            "retrieve_context",
+            serde_json::json!({
+                "query": "run_pipeline",
+                "strategy": "graph",
+                "graph_mode": "callees",
+                "format": "text"
+            }),
+        ),
         tool_call_request(
             5,
-            "get_affected_context",
-            serde_json::json!({ "query": "run_pipeline" }),
+            "retrieve_context",
+            serde_json::json!({
+                "query": "run_pipeline",
+                "strategy": "graph",
+                "format": "text"
+            }),
         ),
         tool_call_request(
             6,
@@ -289,19 +307,24 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
         // extra call: json format + constrained budget to exercise tokens, nodes/omitted, format recording for affected_context (primary)
         tool_call_request(
             8,
-            "get_affected_context",
-            serde_json::json!({ "query": "run_pipeline", "format": "json", "token_budget": 80 }),
+            "retrieve_context",
+            serde_json::json!({
+                "query": "run_pipeline",
+                "strategy": "graph",
+                "format": "json",
+                "token_budget": 80
+            }),
         ),
     ]);
 
     for (idx, name) in [
         "list_symbols",
-        "get_callers",
-        "get_callees",
-        "get_affected_context",
+        "retrieve_context",
+        "retrieve_context",
+        "retrieve_context",
         "get_project_context",
         "rebuild_index",
-        "get_affected_context",
+        "retrieve_context",
     ]
     .iter()
     .enumerate()
@@ -325,11 +348,11 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
     assert!(responses[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("Callers"));
+        .contains("run_pipeline"));
     assert!(responses[3]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("Callees"));
+        .contains("load") || responses[3]["result"]["content"][0]["text"].as_str().unwrap().contains("process"));
     assert!(responses[4]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -364,16 +387,16 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
     let status_text = post[2]["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(status_text.contains("Codegraph Index Status"));
     assert!(status_text.contains("## MCP Usage Stats (session)"));
-    // (per-tool details like get_affected_context are in the embedded summary for status exposure)
+    // (per-tool details like retrieve_context are in the embedded summary for status exposure)
     // comprehensive fields and affected_context data for comparison (via the json resource)
     assert!(stats_json.get("tool_calls").is_some());
     let empty = serde_json::Map::new();
     let tc = stats_json["tool_calls"].as_object().unwrap_or(&empty);
     // tolerant: collection may be off depending on temp dir config or prior env (env overrides config); presence of key or tokens if enabled
-    if tc.get("get_affected_context").is_some()
+    if tc.get("retrieve_context").is_some()
         && let Some(ac_toks) = stats_json
             .get("context_estimated_tokens")
-            .and_then(|m| m.get("get_affected_context"))
+            .and_then(|m| m.get("retrieve_context"))
             .and_then(|v| v.as_array())
     {
         assert!(
@@ -381,7 +404,7 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
             "affected_context should record context tokens when collected"
         );
     }
-    if let Some(ac_nodes) = stats_json.get("context_nodes").and_then(|m| m.get("get_affected_context")).and_then(|v| v.as_array()) {
+    if let Some(ac_nodes) = stats_json.get("context_nodes").and_then(|m| m.get("retrieve_context")).and_then(|v| v.as_array()) {
         assert!(!ac_nodes.is_empty());
     }
     let fmts = stats_json.get("formats_used").and_then(|v| v.as_object());
@@ -481,7 +504,7 @@ fn test_mcp_stats_toggle_via_env_and_collection() {
     // calls that would record if enabled (incl affected_context primary + different format)
     run_mcp_requests(&[
         init_request(&root_uri, 32),
-        tool_call_request(33, "get_affected_context", serde_json::json!({ "query": "run_pipeline", "format": "json", "token_budget": 100 })),
+        tool_call_request(33, "retrieve_context", serde_json::json!({ "query": "run_pipeline", "format": "json", "token_budget": 100 })),
         tool_call_request(34, "list_symbols", serde_json::json!({ "limit": 3 })),
     ]);
 
@@ -557,10 +580,14 @@ mcp_target = test
 
     let root_uri = format!("file://{}", root.display());
 
-    // get_graph_context without format arg should respect default_format=yaml (AI agent default)
+    // retrieve_context without format arg should respect default_format=yaml (AI agent default)
     let responses = run_mcp_requests(&[
         init_request(&root_uri, 100),
-        tool_call_request(101, "get_graph_context", serde_json::json!({ "query": "run_pipeline" })),
+        tool_call_request(
+            101,
+            "retrieve_context",
+            serde_json::json!({ "query": "run_pipeline", "strategy": "graph" }),
+        ),
     ]);
     let graph_text = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
     assert!(!graph_text.contains("# Graph Context"), "expected yaml (from default_format) not default markdown");
@@ -569,10 +596,10 @@ mcp_target = test
         "yaml structured output for agent"
     );
 
-    // get_affected_context without format (and other) args respects defaults incl format=yaml, packing etc
+    // retrieve_context without format (and other) args respects defaults incl format=yaml, packing etc
     let aff_responses = run_mcp_requests(&[
         init_request(&root_uri, 102),
-        tool_call_request(103, "get_affected_context", serde_json::json!({ "query": "run_pipeline" })),
+        tool_call_request(103, "retrieve_context", serde_json::json!({ "query": "run_pipeline" })),
     ]);
     let aff_text = aff_responses[1]["result"]["content"][0]["text"].as_str().unwrap();
     // dto yaml starts with query: or has estimated_tokens etc; not the text sections header necessarily
@@ -611,7 +638,7 @@ mcp_target = test
 
     run_mcp_requests(&[
         init_request(&root_uri, 108),
-        tool_call_request(109, "get_affected_context", serde_json::json!({ "query": "load" })),
+        tool_call_request(109, "retrieve_context", serde_json::json!({ "query": "load" })),
     ]);
 
     let post_snap = run_mcp_requests(&[

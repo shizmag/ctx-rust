@@ -1,5 +1,5 @@
 use ctx_codegraph::index::BuildIndexOptions;
-use ctx_codegraph::model::{FileChangeDetection, IndexState};
+use ctx_codegraph::model::IndexState;
 use ctx_codegraph::service::GraphContextService;
 use ctx_codegraph::storage::{find_workspace_root, get_index_state};
 use ctx_core::scan;
@@ -51,9 +51,7 @@ fn read_index_status(service: &GraphContextService) -> Result<String, String> {
     let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
     let options = BuildIndexOptions {
         use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
 
     let state = get_index_state(root, &options).unwrap_or(IndexState::Missing);

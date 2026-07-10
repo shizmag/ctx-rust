@@ -27,12 +27,7 @@ fn test_integration_mini_project() {
 
     let (index, _) = rebuild_index_db(
         dir.path(),
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions::default(),
     )
     .unwrap();
 
@@ -71,12 +66,7 @@ fn test_other_languages_preserved() {
     fs::create_dir_all(&src_dir).unwrap();
     fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // 1. Build initial Rust index
     rebuild_index_db(root, options.clone()).unwrap();

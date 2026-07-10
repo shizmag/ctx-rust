@@ -71,13 +71,13 @@ pub fn get_prompt(name: &str, args: &serde_json::Value) -> Result<serde_json::Va
                 "Explore the symbol `{symbol}` in this codebase using ctx MCP tools.\n\n\
                  Suggested workflow:\n\
                  1. Call `list_symbols` with query `{symbol}` if the name may be ambiguous.\n\
-                 2. Call `get_affected_context` with the resolved symbol for budget-aware LLM context.\n\
-                 3. Call `get_callers` and `get_callees` for direct relationships.\n\
-                 4. Call `get_graph_context` with mode `neighborhood` or `impact` for deeper graph traversal.\n\
+                 2. Call `retrieve_context` with the resolved symbol (format=yaml) for budget-aware LLM context.\n\
+                 3. For direct relationships use `retrieve_context` with strategy=graph, graph_mode=callers or graph_mode=callees.\n\
+                 4. For deeper graph traversal use `retrieve_context` with strategy=graph, graph_mode=neighborhood or graph_mode=impact.\n\
                  5. Use `read_file` proactively for exact full/partial file source when packed snippets are not enough.\n\
-                 6. Use `search_code` for text matches in comments/strings/configs/non-symbol content.\n\
+                 6. For text search in comments/strings/configs use `retrieve_context` with strategy=hybrid or strategy=lexical.\n\
                  7. If the index is missing, call `rebuild_index` (or `ctx graph build --with-lsp`).\n\n\
-                 When a tool returns multiple symbol candidates, refine `query` with a qualified path and retry."
+                 When results are ambiguous, refine `query` with a qualified path from list_symbols and retry."
             );
 
             Ok(serde_json::json!({
@@ -103,10 +103,9 @@ pub fn get_prompt(name: &str, args: &serde_json::Value) -> Result<serde_json::Va
                 "Analyze the impact of changes to `{symbol}` using ctx MCP tools.\n\n\
                  Suggested multi-step workflow:\n\
                  1. Use `list_symbols` (query=`{symbol}`) or get precise name.\n\
-                 2. Call `get_affected_context` (query=`{symbol}`, format=`yaml`, mode=`impact` or `neighborhood`) to get ranked packed context + diagnostics.\n\
-                 3. Call `get_graph_context` (query=`{symbol}`, mode=`impact` or `dependents`).\n\
-                 4. Use `get_callers` to list direct users of the symbol.\n\
-                 5. If needed call `get_affected_context` again with broader depth or different ranking.\n\n\
+                 2. Call `retrieve_context` (query=`{symbol}`, format=`yaml`, strategy=`graph`, graph_mode=`impact` or `neighborhood`) for ranked packed context + diagnostics.\n\
+                 3. Call `retrieve_context` (query=`{symbol}`, strategy=`graph`, graph_mode=`dependents` or `callers`) for relationship context.\n\
+                 4. If needed call `retrieve_context` again with broader depth or strategy=`hybrid`.\n\n\
                  Report: roots affected, estimated tokens, key files, potential breakage points. Use yaml for structured results."
             );
 
@@ -133,9 +132,9 @@ pub fn get_prompt(name: &str, args: &serde_json::Value) -> Result<serde_json::Va
                 "Trace callers of `{symbol}` (and usage) using ctx tools.\n\n\
                  Workflow:\n\
                  1. `list_symbols` query=`{symbol}` to disambiguate.\n\
-                 2. `get_callers` query=`{symbol}` for direct callers.\n\
-                 3. For each interesting caller, recurse with `get_callers` or use `get_graph_context` mode=`callers` depth>1.\n\
-                 4. `get_affected_context` query=`{symbol}` mode=`callers` for packed view.\n\
+                 2. `retrieve_context` query=`{symbol}`, strategy=`graph`, graph_mode=`callers` for direct callers.\n\
+                 3. For transitive callers increase depth or repeat retrieve_context on interesting symbols.\n\
+                 4. `retrieve_context` query=`{symbol}`, strategy=`graph`, graph_mode=`callers`, format=`yaml` for packed view.\n\
                  Summarize call chain and entry points."
             );
 
@@ -171,10 +170,11 @@ pub fn get_prompt(name: &str, args: &serde_json::Value) -> Result<serde_json::Va
             let text = format!(
                 "Gather the right context to perform this task: `{task}`.{focus_line}\n\n\
                  Multi-step plan:\n\
-                 1. If focus given, start with `list_symbols` + `get_affected_context` (format=yaml, suitable token_budget).\n\
-                 2. Use `get_graph_context` or `get_callers`/`get_callees` to pull related symbols.\n\
-                 3. If broad change, use `get_affected_context` with mode=`impact`.\n\
-                 4. Call `get_project_context` only if you need surrounding file structure.\n\
+                 1. If focus given, start with `list_symbols` + `retrieve_context` (format=yaml, suitable token_budget).\n\
+                 2. Use `retrieve_context` with strategy=graph and graph_mode=callers/callees/neighborhood to pull related symbols.\n\
+                 3. If broad change, use `retrieve_context` with strategy=graph, graph_mode=`impact`.\n\
+                 4. For text search use `retrieve_context` with strategy=hybrid or lexical.\n\
+                 5. Call `get_project_context` only if you need surrounding file structure.\n\
                  Prefer yaml outputs. Stop when you have sufficient nodes/files under budget for the task."
             );
 

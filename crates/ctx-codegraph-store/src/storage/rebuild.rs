@@ -81,6 +81,9 @@ pub fn rebuild_index_db_with_registry(
                     .iter()
                     .filter(|e| e.confidence == ResolutionConfidence::Unresolved)
                     .count(),
+                chunks_written: 0,
+                embeddings_written: 0,
+                lexical_docs_written: 0,
             };
             Ok((index, report))
         }
@@ -441,7 +444,7 @@ pub fn run_full_rebuild_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "4")?;
+    write_meta(&tx, "schema_version", "5")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -521,6 +524,7 @@ pub fn run_full_rebuild_with_registry(
         &affected.occurrences,
         registry,
     )?;
+    rebuild_contains_edges_in_tx(&tx)?;
 
     if options.use_lsp {
         write_meta(&tx, "lsp_enrichment", "complete")?;
@@ -531,6 +535,20 @@ pub fn run_full_rebuild_with_registry(
     tx.commit()?;
 
     validate_index_invariants(conn)?;
+
+    let config = ctx_config::find_and_load_config(workspace_root).unwrap_or_default();
+    let search_report = match super::search_build::build_search_indexes(
+        conn,
+        workspace_root,
+        &options,
+        &config,
+    ) {
+        Ok(report) => report,
+        Err(err) => {
+            eprintln!("Warning: search index build failed: {}", err);
+            super::search_build::SearchBuildReport::default()
+        }
+    };
 
     let loaded = load_index(conn, workspace_root)?;
 
@@ -571,6 +589,9 @@ pub fn run_full_rebuild_with_registry(
         syntax_edges: syntax_count,
         heuristic_edges: heuristic_count,
         unresolved_edges: unresolved_count,
+        chunks_written: search_report.chunks_written,
+        embeddings_written: search_report.embeddings_written,
+        lexical_docs_written: search_report.lexical_docs_written,
     };
 
     Ok((loaded, report))
@@ -854,7 +875,7 @@ pub fn run_incremental_update_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "4")?;
+    write_meta(&tx, "schema_version", "5")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -899,6 +920,8 @@ pub fn run_incremental_update_with_registry(
     };
     write_meta(&tx, "change_detection_strategy", change_detection)?;
     write_meta(&tx, "base_index_ready", "true")?;
+
+    rebuild_contains_edges_in_tx(&tx)?;
 
     if options.use_lsp {
         write_meta(&tx, "lsp_enrichment", "complete")?;
@@ -949,7 +972,83 @@ pub fn run_incremental_update_with_registry(
         syntax_edges: syntax_count,
         heuristic_edges: heuristic_count,
         unresolved_edges: unresolved_count,
+        chunks_written: 0,
+        embeddings_written: 0,
+        lexical_docs_written: 0,
     };
 
     Ok((final_index, report))
+}
+
+fn rebuild_contains_edges_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), CodeGraphError> {
+    use ctx_codegraph_lang::model::{EdgeKind, ResolutionConfidence, SymbolKind};
+
+    tx.execute("DELETE FROM edges WHERE kind = ?1", [EdgeKind::Contains.as_str()])?;
+
+    fn is_container(kind: &SymbolKind) -> bool {
+        matches!(
+            kind,
+            SymbolKind::Module
+                | SymbolKind::Impl
+                | SymbolKind::Struct
+                | SymbolKind::Class
+                | SymbolKind::Enum
+                | SymbolKind::Trait
+        )
+    }
+
+    let mut file_stmt = tx.prepare("SELECT id FROM files")?;
+    let file_ids: Vec<FileId> = file_stmt
+        .query_map([], |row| row.get::<_, i64>(0).map(FileId))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let conn: &rusqlite::Connection = tx;
+    for file_id in file_ids {
+        let path_str: String = conn.query_row(
+            "SELECT path FROM files WHERE id = ?1",
+            [file_id.0],
+            |row| row.get(0),
+        )?;
+        let symbols =
+            super::query::load_symbols_for_file(conn, Path::new(&path_str))?;
+        if symbols.is_empty() {
+            continue;
+        }
+
+        let mut ordered = symbols.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|s| (s.range.start_line, s.range.end_line));
+
+        let mut stack: Vec<&ctx_codegraph_lang::model::Symbol> = Vec::new();
+        for sym in ordered {
+            while let Some(top) = stack.last() {
+                if sym.range.start_line > top.range.end_line {
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+            if let Some(parent) = stack.last()
+                && parent.id != sym.id
+                && is_container(&parent.kind)
+                && let (Some(from_id), Some(to_id)) = (parent.id, sym.id)
+            {
+                tx.execute(
+                    "INSERT INTO edges (kind, from_file_id, from_symbol_id, to_symbol_id, confidence)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        EdgeKind::Contains.as_str(),
+                        file_id.0,
+                        from_id.0,
+                        to_id.0,
+                        ResolutionConfidence::Syntax.as_str(),
+                    ],
+                )?;
+            }
+            if is_container(&sym.kind) {
+                stack.push(sym);
+            }
+        }
+    }
+
+    Ok(())
 }

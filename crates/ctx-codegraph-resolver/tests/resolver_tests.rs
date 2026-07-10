@@ -1,12 +1,4 @@
-<<<<<<<< HEAD:crates/ctx-lang-python/src/resolver_tests.rs
-use ctx_codegraph_lang::backend::{ResolveInput, ResolverBackend};
-|||||||| parent of f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-storage/src/languages/python/resolver_tests.rs
-use crate::backend::{ResolveInput, ResolverBackend};
-use crate::model::{LanguageId, Occurrence, OccurrenceKind, ResolutionConfidence, Symbol, SymbolKind, TextRange};
-use crate::languages::python::PythonResolver;
-========
 use ctx_codegraph_lang::backend::{BackendId, ResolveInput, ResolverBackend};
->>>>>>>> f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-resolver/tests/resolver_tests.rs
 use ctx_codegraph_lang::model::{
     LanguageId, Occurrence, OccurrenceKind, ResolutionConfidence, Symbol, SymbolKind, TextRange,
 };

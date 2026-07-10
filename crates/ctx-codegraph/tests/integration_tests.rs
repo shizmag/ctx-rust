@@ -174,12 +174,7 @@ fn test_integration_with_rust_analyzer() {
 
     let (index, _) = rebuild_index_db(
         dir.path(),
-        BuildIndexOptions {
-            use_lsp: true,
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions { use_lsp: true, ..Default::default() },
     )
     .unwrap();
 
@@ -640,9 +635,7 @@ while True:
     // Run build index with lsp
     let options = BuildIndexOptions {
         use_lsp: true,
-        max_depth: None,
-        include_tests: true,
-        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
 
     let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();
@@ -744,9 +737,7 @@ while True:
 
     let options = BuildIndexOptions {
         use_lsp: true,
-        max_depth: None,
-        include_tests: true,
-        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
 
     let (index, report) = rebuild_index_db(&proj_dir, options).unwrap();

@@ -15,6 +15,11 @@ pub struct BuildIndexOptions {
     pub max_depth: Option<usize>,
     pub include_tests: bool,
     pub change_detection: crate::model::FileChangeDetection,
+    /// `None` = auto-enable when embedding model path is configured.
+    pub with_embeddings: Option<bool>,
+    /// `None` = auto-enable when embedding model path is configured (unless disabled).
+    pub with_lexical: Option<bool>,
+    pub force_search_rebuild: bool,
 }
 
 impl Default for BuildIndexOptions {
@@ -24,7 +29,24 @@ impl Default for BuildIndexOptions {
             max_depth: None,
             include_tests: true,
             change_detection: crate::model::FileChangeDetection::MtimeAndSize,
+            with_embeddings: None,
+            with_lexical: None,
+            force_search_rebuild: false,
         }
+    }
+}
+
+impl BuildIndexOptions {
+    pub fn builds_embeddings(&self, auto: bool) -> bool {
+        self.with_embeddings.unwrap_or(auto)
+    }
+
+    pub fn builds_lexical(&self, auto: bool) -> bool {
+        self.with_lexical.unwrap_or(auto)
+    }
+
+    pub fn builds_chunks(&self, auto: bool) -> bool {
+        self.builds_embeddings(auto) || self.builds_lexical(auto)
     }
 }
 
@@ -98,6 +120,9 @@ pub fn create_file_snapshot_with_registry(
         max_depth: None,
         include_tests,
         change_detection,
+        with_embeddings: None,
+        with_lexical: None,
+        force_search_rebuild: false,
     });
 
     FileSnapshot {
@@ -318,3 +343,5 @@ pub fn build_index_with_registry(
         call_sites: call_sites_compat,
     })
 }
+
+

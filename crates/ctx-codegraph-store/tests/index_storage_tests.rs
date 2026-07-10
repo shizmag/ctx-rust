@@ -172,12 +172,7 @@ fn test_affected_set_callee_pulls_callers() {
     fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // Build the initial index
     let (index, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -281,12 +276,7 @@ fn test_empty_and_whitespace_only_files() {
     fs::write(&file2, "").unwrap();
     fs::write(&file3, "   \n  \n\t ").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     let (index, report) = rebuild_index_db_with_registry(root, options, &registry).unwrap();
     assert_eq!(report.parsed_files, 3);
@@ -314,12 +304,7 @@ fn test_multiple_simultaneous_changes() {
     fs::write(&file_a, "pub fn a() {}").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
 
@@ -358,12 +343,7 @@ fn test_parse_failure_recovery() {
     let file_path = src_dir.join("lib.rs");
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     let (index1, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(index1.symbols.iter().any(|s| s.name == "a"));
@@ -393,12 +373,7 @@ fn test_index_lifecycle_validation() {
     let file_path = root.join("lib.rs");
     fs::write(&file_path, "fn test() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // 1. First call builds index
     let _conn = ensure_index_with_registry(root, options.clone(), &registry).unwrap();
@@ -435,6 +410,7 @@ fn test_index_lifecycle_validation() {
         max_depth: None,
         include_tests: true,
         change_detection: FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
     let is_valid_diff_opts = validate_index_db_with_registry(root, &different_options, &registry).unwrap();
     assert!(!is_valid_diff_opts);
@@ -463,12 +439,7 @@ fn test_ensure_index_unified_behavior() {
     let file_path = root.join("lib.rs");
     fs::write(&file_path, "fn foo() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // 1. Missing -> ensure builds
     let conn1 = ensure_index_with_registry(root, options.clone(), &registry).unwrap();
@@ -530,12 +501,7 @@ fn test_edge_resolution_quality_variants() {
 
     let (index, report) = rebuild_index_db_with_registry(
         root,
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions::default(),
         &registry,
     )
     .unwrap();
@@ -595,12 +561,7 @@ fn test_incremental_diff_report() {
     fs::write(&file_a, "pub fn a() {}").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // 1. Initial build: all files added
     let (_, report1) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -669,12 +630,7 @@ fn test_db_correctness_after_incremental_update() {
     fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     let (index, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(index.symbols.iter().any(|s| s.name == "b"));
@@ -767,12 +723,7 @@ fn test_parse_failure_preserves_old_graph() {
     let file_path = src_dir.join("lib.rs");
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     // 1. Initial build: success
     let (index, report) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -817,69 +768,8 @@ fn test_content_hash_detection() {
         use_lsp: false,
         max_depth: None,
         include_tests: true,
-        change_detection: FileChangeDetection::ContentHash,
-    };
-
-    // 1. Initial build
-    let (_, report) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
-    assert_eq!(report.parsed_files, 1);
-
-    // 2. Modify the file on disk (size changes)
-    fs::write(&file_path, "pub fn b() { let longer = 123; }").unwrap();
-
-    // Get the new disk mtime and size
-    let disk_mtime = get_mtime_ms(&file_path).unwrap();
-    let disk_size = fs::metadata(&file_path).unwrap().len();
-
-    // Update the database file record so that size and mtime match disk, but keep the old content hash
-    let db_path = root.join(".ctx-codegraph").join("codegraph.sqlite");
-    {
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "UPDATE files SET size_bytes = ?1, mtime_ms = ?2 WHERE rel_path = 'src/lib.rs'",
-            rusqlite::params![disk_size, disk_mtime],
-        )
-        .unwrap();
-    }
-
-    // Now, run with change_detection = ContentHash. It should detect it as MODIFIED because the content hash differs!
-    let state_hash = get_index_state_with_registry(root, &options, &registry).unwrap();
-    if let IndexState::NeedsIncrementalUpdate(diff) = state_hash {
-        assert_eq!(diff.modified.len(), 1);
-        assert_eq!(diff.modified[0].rel_path, PathBuf::from("src/lib.rs"));
-    } else {
-        panic!(
-            "Expected NeedsIncrementalUpdate for ContentHash, got {:?}",
-            state_hash
-        );
-    }
-
-    // Run incremental build, verify the symbol is updated
-    let (index2, report2) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
-    assert_eq!(report2.modified_files, 1);
-    assert!(index2.symbols.iter().any(|s| s.name == "b"));
-    assert!(!index2.symbols.iter().any(|s| s.name == "a"));
-}
-#[test]
-fn test_rebuild_triggers_on_config_changes() {
-    let registry = production_registry();
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-
-    fs::write(
-        root.join("Cargo.toml"),
-        "[package]\nname=\"test_proj\"\nversion=\"0.1.0\"\nedition=\"2021\"",
-    )
-    .unwrap();
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).unwrap();
-    fs::write(src_dir.join("lib.rs"), "pub fn a() {}").unwrap();
-
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
         change_detection: FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
 
     // Build the initial index

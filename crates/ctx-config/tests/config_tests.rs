@@ -275,6 +275,7 @@ fn save_config_roundtrip_and_creates_file() {
         default_packing: Some("sandwich".to_string()),
         default_ranking: Some("hybrid".to_string()),
         default_token_budget: Some(12000),
+        ..Default::default()
     };
 
     save_config(&config_path, &cfg).unwrap();

@@ -1,0 +1,13 @@
+[package]
+name = "ctx-codegraph-dense"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

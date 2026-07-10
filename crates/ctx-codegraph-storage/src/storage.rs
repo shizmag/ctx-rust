@@ -6,9 +6,10 @@ use ctx_codegraph_lang::model::{
 use std::path::{Path, PathBuf};
 
 pub use ctx_codegraph_store::storage::{
-    find_symbols, load_callees, load_callers, load_edges_for_symbol, load_edges_from,
-    load_edges_to, load_file_span, load_index, load_occurrence, load_symbol, load_symbols_by_ids,
-    load_symbols_for_file, resolve_symbol, save_index, validate_index_invariants,
+    find_symbols, load_callees, load_callers, load_chunk, load_chunks_by_ids,
+    load_chunks_for_symbol, load_edges_for_symbol, load_edges_from, load_edges_to, load_file_span,
+    load_index, load_occurrence, load_symbol, load_symbols_by_ids, load_symbols_for_file,
+    resolve_symbol, save_index, validate_index_invariants,
 };
 
 pub use ctx_codegraph_store::storage::{

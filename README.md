@@ -37,7 +37,7 @@ Build a local SQLite semantic index of your Rust and Python codebases.
 ## Model Context Protocol (MCP) Server
 
 - **stdio MCP server**: Integrates with Cursor, Claude Desktop, and other MCP clients.
-- **Full tool catalog**: `get_affected_context`, graph traversal, project context, symbol search, and index rebuild.
+- **Unified retrieval**: `retrieve_context` (hybrid BM25 + embeddings + graph traversal), plus project context, symbol listing, and index rebuild. See [docs/hybrid-search.md](docs/hybrid-search.md).
 - **Resources & prompts**: Index status, project tree summary, and guided symbol exploration.
 
 ## Multiple Output Formats
@@ -375,36 +375,24 @@ Add to Claude Desktop MCP config (see `examples/mcp/claude-desktop-config.json`)
 
 | Tool | Description |
 |------|-------------|
-| `get_affected_context` | **Primary LLM tool.** Budget-aware ranked context (same as `ctx graph affect`). |
-| `get_graph_context` | Graph neighborhood with code snippets. |
-| `get_project_context` | Full project context (same as `ctx -C`). |
+| `retrieve_context` | **Primary LLM tool.** Hybrid/graph/lexical/dense retrieval with token-budget packing. |
 | `list_symbols` | List or search indexed symbols. |
-| `get_callers` | Direct callers of a symbol. |
-| `get_callees` | Direct callees of a symbol. |
-| `rebuild_index` | Rebuild the codegraph index. |
+| `read_file` | Read workspace file contents (works without index). |
+| `rebuild_index` | Rebuild codegraph and optional search indexes. |
+| `get_project_context` | Full project context (same as `ctx -C`). |
 
-### `get_affected_context`
+See [docs/hybrid-search.md](docs/hybrid-search.md) for hybrid search setup, models, and index layout.
 
-- `query` (required): Symbol name or qualified path.
-- `mode` (optional): `neighborhood`, `callers`, `callees`, `dependencies`, `dependents`, `forward`, `reverse`, `forward-slice`, `reverse-slice`, `impact`. Default: `neighborhood`.
+### `retrieve_context`
+
+- `query` (required): Symbol name, qualified path, or free-text search string.
+- `strategy` (optional): `graph`, `hybrid`, `lexical`, `dense`. Default: `hybrid` (falls back to `graph` when search is not configured).
+- `graph_mode` (optional): `neighborhood`, `callers`, `callees`, `dependencies`, `dependents`, `impact`, etc. Default: `neighborhood`.
 - `depth` (optional): Integer or `"auto"`. Default: `auto`.
 - `max_nodes`, `max_files` (optional): Graph limits. Defaults: `200`, `50`.
 - `token_budget` (optional): Default `12000`.
-- `model_context_window` (optional): Default `128000`.
 - `packing` (optional): `sandwich`, `frontloaded`, `balanced`. Default: `sandwich`.
-- `ranking` (optional): `hybrid`, `graph`, `lexical`. Default: `hybrid`.
-- `include_tests`, `include_unresolved`, `no_snippets` (optional booleans).
-- `edge_kind` (optional array): e.g. `Call`, `Import`.
-- `context_lines` (optional): Snippet padding. Default: `3`.
-- `format` (optional): `text` or `json`. Default: `text`.
-
-### `get_graph_context`
-
-- `query` (required): Symbol name or qualified path.
-- `mode` (optional): Same modes as above. Default: `neighborhood`.
-- `depth` (optional): BFS depth. Default: `2`.
-- `max_nodes` (optional): Default `40`.
-- `max_files` (optional): Default `20` (`0` = unlimited).
+- `format` (optional): `yaml`, `json`, `text`. Default: `yaml`.
 
 ### `get_project_context`
 
@@ -418,13 +406,11 @@ Add to Claude Desktop MCP config (see `examples/mcp/claude-desktop-config.json`)
 - `query` (optional): Filter symbols; omit to list.
 - `limit` (optional): Default `50`.
 
-### `get_callers` / `get_callees`
-
-- `query` (required): Symbol name or qualified path.
-
 ### `rebuild_index`
 
 - `use_lsp` (optional): Use LSP resolution. Default: `true`.
+- `with_emb`, `with_lex` (optional): Build dense/lexical search indexes (requires `embedding_model` in `.ctxconfig`).
+- `without_emb`, `without_lex` (optional): Skip search indexes.
 
 When symbol resolution is ambiguous, tools return structured text listing candidate symbols so the agent can refine `query` and retry.
 

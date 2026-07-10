@@ -7,6 +7,12 @@ edition = "2024"
 ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
 ctx-codegraph-store = { path = "../ctx-codegraph-store" }
 ctx-codegraph-resolver = { path = "../ctx-codegraph-resolver" }
+ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
+ctx-codegraph-search = { path = "../ctx-codegraph-search" }
+ctx-codegraph-lexical = { path = "../ctx-codegraph-lexical" }
+ctx-codegraph-dense = { path = "../ctx-codegraph-dense" }
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
+ctx-config = { path = "../ctx-config" }
 ctx-lang-rust = { path = "../ctx-lang-rust" }
 ctx-lang-python = { path = "../ctx-lang-python" }
 rusqlite = { version = "0.32", features = ["bundled"] }

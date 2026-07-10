@@ -17,6 +17,70 @@ pub struct Config {
     pub default_packing: Option<String>,
     pub default_ranking: Option<String>,
     pub default_token_budget: Option<usize>,
+    // Hybrid search / ONNX models
+    pub embedding_model: Option<String>,
+    pub reranker_model: Option<String>,
+    pub tokenizer_dir: Option<String>,
+    pub rrf_k: Option<usize>,
+    pub bm25_top_k: Option<usize>,
+    pub dense_top_k: Option<usize>,
+    pub rerank_top_k: Option<usize>,
+    pub enable_rerank: Option<bool>,
+    pub default_retrieval_strategy: Option<String>,
+}
+
+/// Default embedding ONNX path when not set in `.ctxconfig`.
+pub const DEFAULT_EMBEDDING_MODEL: &str =
+    "/Users/vladimirkasterin/models/embeddings/snowflake-arctic-embed-m-v2.0/model.onnx";
+
+/// Default reranker ONNX path when not set in `.ctxconfig`.
+pub const DEFAULT_RERANKER_MODEL: &str =
+    "/Users/vladimirkasterin/models/reranker/jina-reranker-v2-base-multilingual/model.onnx";
+
+impl Config {
+    pub fn resolved_embedding_model(&self) -> Option<PathBuf> {
+        self.embedding_model.as_ref().map(PathBuf::from)
+    }
+
+    pub fn resolved_reranker_model(&self) -> Option<PathBuf> {
+        self.reranker_model.as_ref().map(PathBuf::from)
+    }
+
+    /// Suggested default embedding path for documentation / CLI hints.
+    pub fn default_embedding_model_path() -> PathBuf {
+        PathBuf::from(DEFAULT_EMBEDDING_MODEL)
+    }
+
+    /// Suggested default reranker path for documentation / CLI hints.
+    pub fn default_reranker_model_path() -> PathBuf {
+        PathBuf::from(DEFAULT_RERANKER_MODEL)
+    }
+
+    pub fn resolved_tokenizer_dir(&self, embedding_model: &Path) -> PathBuf {
+        self.tokenizer_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| embedding_model.parent().unwrap_or(embedding_model).to_path_buf())
+    }
+
+    pub fn search_auto_enabled(&self) -> bool {
+        self.resolved_embedding_model().is_some()
+    }
+
+    pub fn effective_with_embeddings(&self, cli_override: Option<bool>) -> bool {
+        match cli_override {
+            Some(v) => v,
+            None => self.search_auto_enabled(),
+        }
+    }
+
+    pub fn effective_with_lexical(&self, cli_override: Option<bool>) -> bool {
+        match cli_override {
+            Some(false) => false,
+            Some(true) => true,
+            None => self.search_auto_enabled(),
+        }
+    }
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
@@ -107,6 +171,51 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
             "default_token_budget" | "token_budget" => {
                 if let Ok(b) = value.parse::<usize>() {
                     config.default_token_budget = Some(b);
+                }
+            }
+            "embedding_model" | "embedding_model_path" => {
+                if !value.is_empty() {
+                    config.embedding_model = Some(value.to_string());
+                }
+            }
+            "reranker_model" | "reranker_model_path" => {
+                if !value.is_empty() {
+                    config.reranker_model = Some(value.to_string());
+                }
+            }
+            "tokenizer_dir" => {
+                if !value.is_empty() {
+                    config.tokenizer_dir = Some(value.to_string());
+                }
+            }
+            "rrf_k" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    config.rrf_k = Some(v);
+                }
+            }
+            "bm25_top_k" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    config.bm25_top_k = Some(v);
+                }
+            }
+            "dense_top_k" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    config.dense_top_k = Some(v);
+                }
+            }
+            "rerank_top_k" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    config.rerank_top_k = Some(v);
+                }
+            }
+            "enable_rerank" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    config.enable_rerank = Some(b);
+                }
+            }
+            "default_retrieval_strategy" | "retrieval_strategy" => {
+                if !value.is_empty() {
+                    config.default_retrieval_strategy = Some(value.to_string());
                 }
             }
             _ => {}

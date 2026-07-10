@@ -1,3 +1,4 @@
+mod hybrid_retrieval;
 mod packing;
 mod ranking;
 mod retrieval;
@@ -8,6 +9,9 @@ mod types;
 
 pub use ranking::{
     ApproxTokenEstimator, ContextRanker, GraphRanker, HybridRanker, LexicalRanker, TokenEstimator,
+};
+pub use hybrid_retrieval::{
+    retrieve_context_with_options, HybridRetrievalOptions, RetrievalStrategy,
 };
 pub use retrieval::{
     retrieve_graph_context, retrieve_graph_context_with_options, ContextRetrievalOptions,

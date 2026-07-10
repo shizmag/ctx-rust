@@ -31,8 +31,13 @@ pub fn check_db_compatibility_with_registry(
 
     // 1. Schema version
     let schema_version = get_meta("schema_version");
-    if schema_version.as_deref() != Some("4") {
+    if schema_version.as_deref() != Some("5") {
         return Ok(Some(RebuildReason::SchemaVersionChanged));
+    }
+
+    let chunk_builder_version = get_meta("chunk_builder_version");
+    if chunk_builder_version.as_deref() != Some("0.1.0") {
+        return Ok(Some(RebuildReason::ChunkSchemaChanged));
     }
 
     // 2. Indexer version

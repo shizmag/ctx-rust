@@ -1,4 +1,5 @@
 use crate::SearchError;
+use ctx_codegraph_chunk::ChunkId;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -10,6 +11,7 @@ pub struct SearchQuery<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchResult {
+    pub chunk_id: ChunkId,
     pub symbol_id: ctx_codegraph_lang::model::SymbolId,
     pub score: f32,
     pub snippet: Option<String>,

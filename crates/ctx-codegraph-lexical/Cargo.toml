@@ -1,0 +1,10 @@
+[package]
+name = "ctx-codegraph-lexical"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tantivy = "0.24"
+ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
+ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
+thiserror = "2"

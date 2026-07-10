@@ -184,8 +184,8 @@ fn test_mcp_error_unknown_method() {
 fn test_mcp_error_tools_call_before_initialize() {
     let requests = vec![tool_call_request(
         1,
-        "get_graph_context",
-        serde_json::json!({ "query": "run_pipeline" }),
+        "retrieve_context",
+        serde_json::json!({ "query": "run_pipeline", "strategy": "graph" }),
     )];
 
     let responses = run_mcp_requests(&requests);
@@ -234,8 +234,11 @@ fn test_mcp_error_symbol_not_found() {
         init_request(&root_uri, 1),
         tool_call_request(
             2,
-            "get_graph_context",
-            serde_json::json!({ "query": "definitely_not_a_symbol_xyz" }),
+            "retrieve_context",
+            serde_json::json!({
+                "query": "definitely_not_a_symbol_xyz",
+                "strategy": "graph"
+            }),
         ),
     ];
 
@@ -250,7 +253,11 @@ fn test_mcp_error_ambiguous_symbol() {
 
     let requests = vec![
         init_request(&root_uri, 1),
-        tool_call_request(2, "get_graph_context", serde_json::json!({ "query": "foo" })),
+        tool_call_request(
+            2,
+            "retrieve_context",
+            serde_json::json!({ "query": "foo", "strategy": "graph", "format": "text" }),
+        ),
     ];
 
     let responses = run_mcp_requests(&requests);
@@ -258,10 +265,10 @@ fn test_mcp_error_ambiguous_symbol() {
     assert!(!result.get("isError").unwrap().as_bool().unwrap());
 
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Multiple symbols found"));
-    // sig-enhanced disambig now surfaces signatures + loc (dense)
-    assert!(text.contains("foo") && (text.contains("mod_a") || text.contains("mod_a.rs")));
-    assert!(text.contains("foo") && (text.contains("mod_b") || text.contains("mod_b.rs")));
+    // Multiple exact name matches are returned as roots (agent should refine with list_symbols).
+    assert!(text.contains("foo"));
+    assert!(text.contains("mod_a") || text.contains("mod_a.rs"));
+    assert!(text.contains("mod_b") || text.contains("mod_b.rs"));
 }
 
 #[test]
@@ -272,8 +279,12 @@ fn test_mcp_error_get_callers_not_found() {
         init_request(&root_uri, 1),
         tool_call_request(
             2,
-            "get_callers",
-            serde_json::json!({ "query": "definitely_not_a_symbol_xyz" }),
+            "retrieve_context",
+            serde_json::json!({
+                "query": "definitely_not_a_symbol_xyz",
+                "strategy": "graph",
+                "graph_mode": "callers"
+            }),
         ),
     ];
 
@@ -289,9 +300,10 @@ fn test_mcp_error_affected_context_invalid_depth() {
         init_request(&root_uri, 1),
         tool_call_request(
             2,
-            "get_affected_context",
+            "retrieve_context",
             serde_json::json!({
                 "query": "run_pipeline",
+                "strategy": "graph",
                 "depth": "not_a_number"
             }),
         ),
@@ -313,9 +325,10 @@ fn test_mcp_error_affected_context_invalid_format() {
         init_request(&root_uri, 1),
         tool_call_request(
             2,
-            "get_affected_context",
+            "retrieve_context",
             serde_json::json!({
                 "query": "run_pipeline",
+                "strategy": "graph",
                 "format": "xml"
             }),
         ),
@@ -402,7 +415,7 @@ fn test_mcp_initialize_succeeds_without_index_for_file_tools() {
     let root_uri = format!("file://{}", root.display());
 
     let responses = run_mcp_requests(&[init_request(&root_uri, 1)]);
-    // Should succeed (not error) so read_file / search_code work even without graph index.
+    // Should succeed (not error) so read_file works even without graph index.
     assert!(responses[0].get("result").is_some(), "expected successful init for file tools");
     assert!(responses[0].get("error").is_none());
 }
@@ -416,8 +429,8 @@ fn test_mcp_rebuild_index_after_init() {
         tool_call_request(2, "rebuild_index", serde_json::json!({ "use_lsp": false })),
         tool_call_request(
             3,
-            "get_graph_context",
-            serde_json::json!({ "query": "run_pipeline" }),
+            "retrieve_context",
+            serde_json::json!({ "query": "run_pipeline", "strategy": "graph", "format": "text" }),
         ),
     ];
 

@@ -51,12 +51,7 @@ impl GraphContextService {
 
     pub fn load_or_build(repo_root: &Path) -> Result<Self, CodeGraphError> {
         let workspace_root = crate::storage::find_workspace_root(repo_root);
-        let default_options = crate::index::BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: crate::model::FileChangeDetection::MtimeAndSize,
-        };
+        let default_options = crate::index::BuildIndexOptions::default();
 
         let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
         let options = if !db_path.exists() {
@@ -71,7 +66,7 @@ impl GraphContextService {
                     .ok()
                 };
 
-                if get_meta("schema_version").as_deref() == Some("4") {
+                if get_meta("schema_version").as_deref() == Some("5") {
                     if let Some(resolver_id) = get_meta("resolver_id") {
                         options.use_lsp = resolver_id == "lsp";
                     }

@@ -489,6 +489,9 @@ pub enum RebuildReason {
     ChangeDetectionStrategyChanged,
     PreviousRunIncomplete,
     PreviousRunFailed,
+    EmbeddingModelChanged,
+    LexicalIndexStale,
+    ChunkSchemaChanged,
 }
 
 impl RebuildReason {
@@ -508,6 +511,9 @@ impl RebuildReason {
             RebuildReason::ChangeDetectionStrategyChanged => "ChangeDetectionStrategyChanged",
             RebuildReason::PreviousRunIncomplete => "PreviousRunIncomplete",
             RebuildReason::PreviousRunFailed => "PreviousRunFailed",
+            RebuildReason::EmbeddingModelChanged => "EmbeddingModelChanged",
+            RebuildReason::LexicalIndexStale => "LexicalIndexStale",
+            RebuildReason::ChunkSchemaChanged => "ChunkSchemaChanged",
         }
     }
 }
@@ -597,6 +603,9 @@ pub struct BuildReport {
     pub syntax_edges: usize,
     pub heuristic_edges: usize,
     pub unresolved_edges: usize,
+    pub chunks_written: usize,
+    pub embeddings_written: usize,
+    pub lexical_docs_written: usize,
 }
 
 // Generic Occurrence and GraphEdge model types are defined above.

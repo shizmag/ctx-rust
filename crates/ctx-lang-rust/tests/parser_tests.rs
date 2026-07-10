@@ -1,17 +1,7 @@
-<<<<<<<< HEAD:crates/ctx-lang-rust/src/parser_tests.rs
-use crate::parser::{RustParser, parse_rust_file};
-use ctx_codegraph_lang::backend::{ParseInput, ParserBackend};
-use ctx_codegraph_lang::model::{OccurrenceKind, SymbolKind};
-|||||||| parent of f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-storage/src/languages/rust/parser_tests.rs
-use super::parser::{RustParser, parse_rust_file};
-use crate::backend::{ParseInput, ParserBackend};
-use crate::model::{OccurrenceKind, SymbolKind};
-========
 use ctx_lang_rust::parser::{RustParser, parse_rust_file};
 use ctx_codegraph_lang::backend::{ParseInput, ParserBackend};
 use ctx_codegraph_lang::model::{OccurrenceKind, SymbolKind};
 use std::fs;
->>>>>>>> f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-lang-rust/tests/parser_tests.rs
 use std::io::Write;
 use tempfile::NamedTempFile;
 

@@ -504,12 +504,7 @@ mod tests {
     }
 
     fn default_index_options() -> BuildIndexOptions {
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: FileChangeDetection::MtimeAndSize,
-        }
+        BuildIndexOptions::default()
     }
 
     /// `ctx -i` initializes `TuiApp`, which calls `GraphContextService::load_or_build`.
@@ -610,12 +605,7 @@ mod tests {
         .unwrap();
 
         // 2. Build codegraph index so search works
-        let options = ctx_codegraph::BuildIndexOptions {
-            use_lsp: false, // fast tree-sitter fallback
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        };
+        let options = ctx_codegraph::BuildIndexOptions::default();
         ctx_codegraph::rebuild_index_db(&temp_dir, options).unwrap();
 
         // 3. Initialize TuiApp
@@ -707,12 +697,12 @@ mod tests {
                     rel_path: std::path::PathBuf::from("lib.rs"),
                     abs_path: temp_dir.join("lib.rs"),
                     language: ctx_codegraph::Language::rust(),
-                    backend_id: "rust-backend".to_string(),
+                    backend_id: ctx_codegraph::BackendId::new("rust-backend"),
                     size_bytes: 200,
                     mtime_ms: 100,
                     mtime_ns: None,
                     content_hash: Some("hash_test".to_string()),
-                    parser_id: "tree-sitter-rust".to_string(),
+                    parser_id: ctx_codegraph::ParserId::new("tree-sitter-rust"),
                     parser_version: "0.20.0".to_string(),
                     parser_config_hash: "".to_string(),
                     indexed_at_ms: None,
@@ -784,7 +774,7 @@ mod tests {
                             end_col: 8,
                         },
                         language: ctx_codegraph::model::LanguageId::rust(),
-                        backend_id: "rust-backend".to_string(),
+                        backend_id: ctx_codegraph::BackendId::new("rust-backend"),
                     },
                     ctx_codegraph::model::Occurrence {
                         id: Some(ctx_codegraph::model::OccurrenceId(1)),
@@ -801,7 +791,7 @@ mod tests {
                             end_col: 8,
                         },
                         language: ctx_codegraph::model::LanguageId::rust(),
-                        backend_id: "rust-backend".to_string(),
+                        backend_id: ctx_codegraph::BackendId::new("rust-backend"),
                     },
                 ],
                 call_sites: vec![
@@ -820,7 +810,7 @@ mod tests {
                             end_col: 8,
                         },
                         language: ctx_codegraph::model::LanguageId::rust(),
-                        backend_id: "rust-backend".to_string(),
+                        backend_id: ctx_codegraph::BackendId::new("rust-backend"),
                     },
                     ctx_codegraph::model::Occurrence {
                         id: Some(ctx_codegraph::model::OccurrenceId(1)),
@@ -837,7 +827,7 @@ mod tests {
                             end_col: 8,
                         },
                         language: ctx_codegraph::model::LanguageId::rust(),
-                        backend_id: "rust-backend".to_string(),
+                        backend_id: ctx_codegraph::BackendId::new("rust-backend"),
                     },
                 ],
                 edges: vec![

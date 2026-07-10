@@ -1,0 +1,11 @@
+[package]
+name = "ctx-codegraph-models"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+tokenizers = "0.21"
+sha2 = "0.10"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }

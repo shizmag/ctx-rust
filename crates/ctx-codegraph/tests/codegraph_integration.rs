@@ -45,12 +45,7 @@ fn test_integration_builds_simple_project_index_and_slice() {
     // 6.1 Builds simple project index
     let index = build_index(
         root,
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions::default(),
     )
     .unwrap();
 
@@ -134,12 +129,7 @@ fn test_integration_rebuild_sqlite_database() {
     // 6.3 Rebuild SQLite database
     let (_index, _report) = rebuild_index_db(
         root,
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions::default(),
     )
     .unwrap();
 
@@ -200,12 +190,7 @@ fn test_integration_ignores_target_and_ctx_codegraph() {
     // Rebuild index
     let (index, _) = rebuild_index_db(
         root,
-        BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        },
+        BuildIndexOptions::default(),
     )
     .unwrap();
 

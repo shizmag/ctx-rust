@@ -172,9 +172,9 @@ fn handle_initialize(
             )
         }
         Err(CodeGraphError::IndexNotFound(msg)) => {
-            // Allow init without index so read_file / search_code work immediately (even for dev on ctx itself).
+            // Allow init without index so read_file works immediately (even for dev on ctx itself).
             // Graph tools will return clear errors until rebuild_index succeeds.
-            eprintln!("Index not found ({}). File tools (read_file, search_code) and project context available; graph tools and list_symbols require rebuild_index.", msg);
+            eprintln!("Index not found ({}). read_file and get_project_context available; retrieve_context and list_symbols require rebuild_index.", msg);
             *initialized = true;
             // service_opt remains None -> handle_tool_call will receive None + root
             JsonRpcResponse::success(

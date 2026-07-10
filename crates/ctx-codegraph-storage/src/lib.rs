@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod hybrid;
 pub mod index;
 pub mod languages;
 pub mod registry;

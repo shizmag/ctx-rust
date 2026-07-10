@@ -350,6 +350,22 @@ struct GraphCommand {
     #[arg(long, global = true)]
     with_lsp: bool,
 
+    /// Build dense embedding index (auto-enabled when embedding_model is in .ctxconfig)
+    #[arg(long, global = true)]
+    with_emb: bool,
+
+    /// Skip dense embedding index even when configured
+    #[arg(long, global = true)]
+    without_emb: bool,
+
+    /// Build Tantivy BM25 lexical index (auto-enabled when embedding_model is in .ctxconfig)
+    #[arg(long, global = true)]
+    with_lex: bool,
+
+    /// Skip lexical index even when configured
+    #[arg(long, global = true)]
+    without_lex: bool,
+
     /// Show verbose build report and timings
     #[arg(long, short, global = true)]
     verbose: bool,
@@ -475,11 +491,29 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         GraphSubcommand::Build => {
             let start_time = std::time::Instant::now();
             println!("\x1b[36m\x1b[1mBuilding codegraph index...\x1b[0m");
+            let config = ctx_config::find_and_load_config(&graph_args.path).unwrap_or_default();
+            let with_emb = if graph_args.without_emb {
+                Some(false)
+            } else if graph_args.with_emb {
+                Some(true)
+            } else {
+                None
+            };
+            let with_lex = if graph_args.without_lex {
+                Some(false)
+            } else if graph_args.with_lex {
+                Some(true)
+            } else {
+                None
+            };
             let options = BuildIndexOptions {
                 use_lsp: use_rust_analyzer,
                 max_depth: None,
                 include_tests: true,
                 change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+                with_embeddings: with_emb,
+                with_lexical: with_lex,
+                force_search_rebuild: false,
             };
             let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
             let elapsed = start_time.elapsed();
@@ -519,6 +553,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                     report.heuristic_edges,
                     report.unresolved_edges
                 );
+                if report.chunks_written > 0
+                    || report.embeddings_written > 0
+                    || report.lexical_docs_written > 0
+                {
+                    println!(
+                        "Search Index: {} chunks, {} embeddings, {} lexical docs",
+                        report.chunks_written, report.embeddings_written, report.lexical_docs_written
+                    );
+                }
                 println!("Build Time: \x1b[36m{:.2?}\x1b[0m", elapsed);
                 println!("\x1b[35m\x1b[1m-----------------------------\x1b[0m");
             } else {
@@ -566,6 +609,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                             }
                             ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
                                 " (Previous run failed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::EmbeddingModelChanged => {
+                                " (Embedding model changed)"
+                            }
+                            ctx_codegraph::model::RebuildReason::LexicalIndexStale => {
+                                " (Lexical index stale)"
+                            }
+                            ctx_codegraph::model::RebuildReason::ChunkSchemaChanged => {
+                                " (Chunk schema changed)"
                             }
                         }
                     } else {
@@ -952,9 +1004,7 @@ fn get_connection_or_rebuild(
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
     let options = ctx_codegraph::BuildIndexOptions {
         use_lsp: use_rust_analyzer,
-        max_depth: None,
-        include_tests: true,
-        change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
+        ..Default::default()
     };
 
     // Unified "ensure fresh" logic: use smart state check for fast path.
@@ -1058,6 +1108,15 @@ fn get_connection_or_rebuild(
                         }
                         ctx_codegraph::model::RebuildReason::PreviousRunFailed => {
                             println!("Previous index run failed. Rebuilt codegraph index cleanly.");
+                        }
+                        ctx_codegraph::model::RebuildReason::EmbeddingModelChanged => {
+                            println!("Embedding model changed. Rebuilt search indexes.");
+                        }
+                        ctx_codegraph::model::RebuildReason::LexicalIndexStale => {
+                            println!("Lexical index stale. Rebuilt search indexes.");
+                        }
+                        ctx_codegraph::model::RebuildReason::ChunkSchemaChanged => {
+                            println!("Chunk schema changed. Rebuilt search indexes.");
                         }
                     }
                 } else {
@@ -1393,12 +1452,7 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
     if db_path.exists() {
         println!("Codegraph index present at {}", db_path.display());
 
-        let options = ctx_codegraph::index::BuildIndexOptions {
-            use_lsp: false,
-            max_depth: None,
-            include_tests: true,
-            change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
-        };
+        let options = ctx_codegraph::index::BuildIndexOptions::default();
         let state = ctx_codegraph::storage::get_index_state(&workspace_root, &options)
             .unwrap_or(ctx_codegraph::model::IndexState::Missing);
         println!("- State: {:?}", state);

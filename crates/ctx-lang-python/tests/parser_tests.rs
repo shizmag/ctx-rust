@@ -1,11 +1,4 @@
-<<<<<<<< HEAD:crates/ctx-lang-python/src/parser_tests.rs
-use crate::parser::parse_python_file;
-|||||||| parent of f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-storage/src/languages/python/parser_tests.rs
-use super::parser::parse_python_file;
-use crate::model::{OccurrenceKind, SymbolKind};
-========
 use ctx_lang_python::parser::parse_python_file;
->>>>>>>> f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-lang-python/tests/parser_tests.rs
 use ctx_codegraph_lang::model::{OccurrenceKind, SymbolKind};
 use std::io::Write;
 use tempfile::NamedTempFile;

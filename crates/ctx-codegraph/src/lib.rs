@@ -1,4 +1,5 @@
 pub mod context;
+pub mod hybrid_service;
 pub mod slice;
 
 // Reexports from extracted ctx-codegraph-storage crate (to preserve public API and
@@ -18,7 +19,8 @@ pub use context::{
     ContextQuery, ContextRanker, ContextRetrievalOptions, ContextSection, ContextSectionKind,
     ContextSnippet, DepthLimit, GraphRanker, HybridRanker, LexicalRanker, OmittedContext,
     RankingMode, TokenEstimator, extract_snippet, is_subsequence, resolve_roots,
-    retrieve_graph_context, retrieve_graph_context_with_options, tokenize,
+    retrieve_context_with_options, retrieve_graph_context, retrieve_graph_context_with_options,
+    tokenize, HybridRetrievalOptions, RetrievalStrategy,
 };
 
 pub use backend::{
@@ -28,6 +30,8 @@ pub use backend::{
 pub use error::CodeGraphError;
 pub use index::{BuildIndexOptions, build_index};
 pub use model::*;
+pub use ctx_codegraph_storage::hybrid::WorkspaceHybridBackend;
+pub use hybrid_service::retrieve_context_for_service;
 pub use service::GraphContextService;
 pub use slice::{SliceOptions, forward_slice, reverse_slice};
 pub use storage::{

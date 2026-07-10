@@ -55,12 +55,7 @@ fn test_mock_backend_traits_through_registry() {
     assert_eq!(parser.parser_version(), "1.0.0");
     assert!(backend.resolver().is_none());
 
-    let config = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let config = BuildIndexOptions::default();
     let meta = backend.metadata(&config);
     assert_eq!(meta.backend_id, "mock-backend");
     assert_eq!(meta.language, "mock");
@@ -112,12 +107,7 @@ fn test_generic_pipeline_with_mock_backend() {
     ";
     std::fs::write(proj_dir.join("test_file.mock"), mock_code).unwrap();
 
-    let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
-        change_detection: FileChangeDetection::MtimeAndSize,
-    };
+    let options = BuildIndexOptions::default();
 
     let registry = test_registry_with_mock();
     let (index, report) =

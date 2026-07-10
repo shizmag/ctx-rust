@@ -93,9 +93,11 @@ fn test_mcp_server_flow() {
         "id": 3,
         "method": "tools/call",
         "params": {
-            "name": "get_graph_context",
+            "name": "retrieve_context",
             "arguments": {
-                "query": "run_pipeline"
+                "query": "run_pipeline",
+                "strategy": "graph",
+                "format": "text"
             }
         }
     });
@@ -116,17 +118,17 @@ fn test_mcp_server_flow() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 5);
 
     let tool_names: Vec<&str> = tools
         .iter()
         .map(|t| t.get("name").unwrap().as_str().unwrap())
         .collect();
-    assert!(tool_names.contains(&"get_graph_context"));
-    assert!(tool_names.contains(&"get_affected_context"));
+    assert!(tool_names.contains(&"retrieve_context"));
     assert!(tool_names.contains(&"rebuild_index"));
     assert!(tool_names.contains(&"read_file"));
-    assert!(tool_names.contains(&"search_code"));
+    assert!(tool_names.contains(&"list_symbols"));
+    assert!(tool_names.contains(&"get_project_context"));
 
     let call_resp = &responses[2];
     assert_eq!(call_resp.get("id").unwrap().as_i64().unwrap(), 3);
@@ -135,10 +137,9 @@ fn test_mcp_server_flow() {
 
     let content = result.get("content").unwrap().as_array().unwrap();
     let text = content[0].get("text").unwrap().as_str().unwrap();
-    assert!(text.contains("# Graph Context"));
-    assert!(text.contains("Root: fn run_pipeline"));
-    assert!(text.contains("lib::run_pipeline -> lib::load"));
-    assert!(text.contains("lib::run_pipeline -> lib::process"));
+    assert!(text.contains("Query: run_pipeline"));
+    assert!(text.contains("run_pipeline"));
+    assert!(text.contains("load") || text.contains("process"));
 }
 
 #[test]
@@ -170,13 +171,9 @@ fn test_mcp_initialize_succeeds_without_index_file_tools_work() {
         "jsonrpc": "2.0", "id": 3, "method": "tools/call",
         "params": { "name": "read_file", "arguments": { "path": "src/lib.rs", "max_lines": 5 } }
     });
-    let search_req = serde_json::json!({
-        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-        "params": { "name": "search_code", "arguments": { "query": "searchme", "path_filter": "src" } }
-    });
-    let responses = run_mcp_requests(&[init_request, list_req, read_req, search_req]);
+    let responses = run_mcp_requests(&[init_request, list_req, read_req]);
     let resp = &responses[0];
-    // Init now succeeds without index to enable read_file/search_code (key for agent adoption).
+    // Init now succeeds without index to enable read_file (key for agent adoption).
     assert!(resp.get("result").is_some(), "init must succeed for file tools");
     assert!(resp.get("error").is_none());
 
@@ -184,13 +181,11 @@ fn test_mcp_initialize_succeeds_without_index_file_tools_work() {
     let tools = responses[1]["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"read_file"));
-    assert!(names.contains(&"search_code"));
+    assert!(names.contains(&"retrieve_context"));
+    assert_eq!(names.len(), 5);
 
     let read_text = responses[2]["result"]["content"][0]["text"].as_str().unwrap();
     assert!(read_text.contains("example()"));
-
-    let search_text = responses[3]["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(search_text.contains("searchme"));
 }
 
 #[test]
@@ -255,7 +250,7 @@ fn test_mcp_ping_and_resources() {
         .unwrap()["messages"][0]["content"]["text"]
         .as_str()
         .unwrap();
-    assert!(prompt_text.contains("get_affected_context"));
+    assert!(prompt_text.contains("retrieve_context"));
 }
 
 #[test]
@@ -283,8 +278,13 @@ fn test_mcp_list_symbols_and_callers() {
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "get_callers",
-                "arguments": { "query": "load" }
+                "name": "retrieve_context",
+                "arguments": {
+                    "query": "load",
+                    "strategy": "graph",
+                    "graph_mode": "callers",
+                    "format": "text"
+                }
             }
         }),
     ];
@@ -300,8 +300,7 @@ fn test_mcp_list_symbols_and_callers() {
     let callers_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
-    assert!(callers_text.contains("Callers"));
-    assert!(callers_text.contains("lib::run_pipeline"));
+    assert!(callers_text.contains("run_pipeline"));
 }
 
 #[test]

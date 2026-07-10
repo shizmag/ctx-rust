@@ -22,7 +22,7 @@ pub fn init_schema(
                 |row| row.get::<_, String>(0),
             )
             .ok();
-        if schema_version.as_deref() != Some("4") {
+        if schema_version.as_deref() != Some("5") {
             needs_drop = true;
         }
     }
@@ -129,11 +129,35 @@ pub fn init_schema(
         CREATE INDEX IF NOT EXISTS idx_edges_from_symbol ON edges(from_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_to_symbol ON edges(to_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
+
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY,
+            symbol_id INTEGER,
+            parent_chunk_id INTEGER,
+            file_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            token_count INTEGER NOT NULL,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            qualified_name TEXT,
+            FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON DELETE CASCADE,
+            FOREIGN KEY(parent_chunk_id) REFERENCES chunks(id) ON DELETE SET NULL,
+            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chunks_symbol_id ON chunks(symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash);
     ",
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '4')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '5')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('chunk_builder_version', '0.1.0')",
         [],
     )?;
     // Store backends metadata for the provided registry
@@ -231,6 +255,7 @@ mod tests {
         assert!(tables.contains(&"symbols".to_string()));
         assert!(tables.contains(&"occurrences".to_string()));
         assert!(tables.contains(&"edges".to_string()));
+        assert!(tables.contains(&"chunks".to_string()));
     }
 
     #[test]
