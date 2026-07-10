@@ -274,7 +274,7 @@ enum Command {
     /// MCP commands: `ctx mcp` (or `ctx mcp serve`) starts the server; `ctx mcp install` registers ctx with coding agents
     #[command(subcommand)]
     Mcp(McpCommand),
-    /// Open interactive TUI to view/edit project settings in .ctxconfig
+    /// Open interactive TUI to view/edit global settings (~/.config/ctx/config)
     #[command(visible_alias = "config")]
     Setting(SettingCommand),
     /// Show project-level usage stats (files, tokens, lines), codegraph index info if present, and MCP notes
@@ -291,7 +291,7 @@ enum McpCommand {
 
 #[derive(clap::Args, Debug)]
 struct SettingCommand {
-    /// Target project directory (loads .ctxconfig via upward search; writes to nearest or here)
+    /// Project directory for merging legacy project-local .ctxconfig overrides
     #[arg(default_value = ".")]
     path: PathBuf,
 }

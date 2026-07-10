@@ -17,7 +17,7 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 
-use ctx_config::{Config, find_and_load_config, find_config, save_config};
+use ctx_config::{Config, find_and_load_config, save_global_config};
 use ctx_models::Mode;
 
 const GREEN: Color = Color::Rgb(158, 206, 106);
@@ -423,15 +423,7 @@ impl SettingsState {
     }
 
     fn save(&mut self) -> Result<(), String> {
-        let target_path = find_config(&self.dir).unwrap_or_else(|| {
-            // create next to invocation dir (small choice)
-            if let Ok(c) = self.dir.canonicalize() {
-                c.join(".ctxconfig")
-            } else {
-                self.dir.join(".ctxconfig")
-            }
-        });
-        save_config(&target_path, &self.config).map_err(|e| e.to_string())?;
+        let target_path = save_global_config(&self.config).map_err(|e| e.to_string())?;
         self.message = Some(format!("saved to {}", target_path.display()));
         Ok(())
     }
@@ -454,7 +446,7 @@ fn draw(f: &mut ratatui::Frame, state: &SettingsState) {
             Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  —  interactive .ctxconfig editor",
+            "  —  ~/.config/ctx/config",
             Style::default().fg(GRAY),
         ),
     ]))

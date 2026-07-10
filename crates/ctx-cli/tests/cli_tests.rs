@@ -1,4 +1,11 @@
 use std::fs;
+use std::path::PathBuf;
+
+fn isolated_xdg_env(temp_root: &std::path::Path) -> PathBuf {
+    let xdg = temp_root.join("xdg-config");
+    fs::create_dir_all(&xdg).unwrap();
+    xdg
+}
 
 #[test]
 fn test_cli_help() {
@@ -94,12 +101,13 @@ fn test_cli_mode_and_format_parsing() {
 fn test_cli_config_priority() {
     let temp_dir = tempfile::tempdir().unwrap();
     let temp_path = temp_dir.path();
+    let xdg = isolated_xdg_env(temp_path);
 
     // Create a code file and a text doc file
     fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(temp_path.join("doc.txt"), "some documentation\n").unwrap();
 
-    // 1. CLI использует .ctxconfig (mode = docs), если аргументы не переданы
+    // 1. CLI uses project .ctxconfig (mode = docs) when CLI args are not passed
     fs::write(
         temp_path.join(".ctxconfig"),
         "mode = docs\nexclude = excluded.txt\nformat = plain\n",
@@ -108,6 +116,7 @@ fn test_cli_config_priority() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output_config_only = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
         .args([temp_path.to_str().unwrap(), "-C", "--no-stats"])
         .output()
         .expect("failed to run ctx");
@@ -130,6 +139,7 @@ fn test_cli_config_priority() {
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output_alias = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
         .args([temp_path.to_str().unwrap(), "-C", "--no-stats"])
         .output()
         .expect("failed to run ctx");
@@ -139,9 +149,10 @@ fn test_cli_config_priority() {
     assert!(stdout_alias.contains("Project: "));
     assert!(!stdout_alias.contains("# Project:"));
 
-    // 2. CLI arguments переопределяют .ctxconfig (docs -> code)
+    // 2. CLI arguments override .ctxconfig (docs -> code)
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output_override = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
         .args([temp_path.to_str().unwrap(), "-m", "code"])
         .output()
         .expect("failed to run ctx");
@@ -152,11 +163,15 @@ fn test_cli_config_priority() {
     assert!(stdout_override.contains("main.rs"));
     assert!(!stdout_override.contains("doc.txt"));
 
-    // 3. некорректные значения в .ctxconfig обрабатываются предсказуемо (игнорируются, fallback к default = smart)
+    // 3. invalid values in .ctxconfig are ignored with fallback to default = smart
     fs::write(temp_path.join(".ctxconfig"), "mode = invalid_mode_val\n").unwrap();
 
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
-    let output_invalid = cmd.arg(temp_path).output().expect("failed to run ctx");
+    let output_invalid = cmd
+        .env("XDG_CONFIG_HOME", &xdg)
+        .arg(temp_path)
+        .output()
+        .expect("failed to run ctx");
 
     assert!(output_invalid.status.success());
     let stdout_invalid = String::from_utf8(output_invalid.stdout).unwrap();
@@ -173,6 +188,7 @@ fn test_cli_setting_subcommand_help_and_invocation() {
     assert!(output.status.success());
     let out = String::from_utf8(output.stdout).unwrap();
     assert!(out.contains("interactive TUI to view/edit"));
+    assert!(out.contains("~/.config/ctx/config"));
 
     // invocation on temp dir returns error (TUI requires tty) but does not panic and reports via error path
     let temp_dir = tempfile::tempdir().unwrap();
