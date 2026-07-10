@@ -1,8 +1,5 @@
 pub mod parser;
 
-#[cfg(test)]
-mod parser_tests;
-
 pub use parser::{RustParser, parse_rust_file};
 
 use ctx_codegraph_lang::backend::{

@@ -1,17 +1,10 @@
 use ctx_codegraph_lang::backend::BackendRegistry;
 use ctx_lang_python::PythonBackend;
 use ctx_lang_rust::RustBackend;
-use std::sync::OnceLock;
 
-fn production_registry() -> BackendRegistry {
+pub fn production_registry() -> BackendRegistry {
     let mut reg = BackendRegistry::new();
     reg.register(Box::new(RustBackend::new()));
     reg.register(Box::new(PythonBackend::new()));
     reg
 }
-
-pub fn global_registry() -> &'static BackendRegistry {
-    static REGISTRY: OnceLock<BackendRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(production_registry)
-}
-

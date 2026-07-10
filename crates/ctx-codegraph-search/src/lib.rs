@@ -1,6 +1,3 @@
-use ctx_codegraph_lang::model::SymbolId;
-use std::path::Path;
-
 pub mod traits;
 
 pub use traits::{DenseSearchBackend, EmbeddingIndex, SearchQuery, SearchResult};

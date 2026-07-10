@@ -1,4 +1,4 @@
-use ctx_codegraph_lang::backend::{ParseInput, ParsedFile, ParserBackend, ParserId};
+use ctx_codegraph_lang::backend::{BackendId, ParseInput, ParsedFile, ParserBackend, ParserId};
 use ctx_codegraph_lang::error::CodeGraphError;
 use ctx_codegraph_lang::model::{
     Language, Occurrence, OccurrenceKind, Symbol, SymbolKind, TextRange,
@@ -288,7 +288,7 @@ impl<'a> ParserState<'a> {
                         file: self.file_path.clone(),
                         range,
                         language: ctx_codegraph_lang::model::LanguageId::rust(),
-                        backend_id: "rust".to_string(),
+                        backend_id: BackendId::new("rust"),
                     };
                     self.occurrences.push(occurrence);
                 }

@@ -5,6 +5,3 @@ pub use ctx_codegraph_lang::backend::{
 };
 
 pub use crate::registry::global_registry;
-
-#[cfg(test)]
-pub use crate::registry::test_registry_with_mock;

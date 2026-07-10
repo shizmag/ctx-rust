@@ -1,4 +1,4 @@
-use ctx_codegraph_lang::backend::BackendRegistry;
+use ctx_codegraph_lang::backend::{BackendId, BackendRegistry, ParserId};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{
@@ -118,12 +118,12 @@ pub fn compute_index_diff_with_registry(
                 rel_path: rel_path.clone(),
                 abs_path: path.clone(),
                 language: Language(db_lang.clone()),
-                backend_id: db_backend_id.clone(),
+                backend_id: BackendId::new(db_backend_id.clone()),
                 size_bytes: disk_size,
                 mtime_ms: disk_mtime,
                 mtime_ns: None,
                 content_hash: disk_hash.or_else(|| db_hash.clone()),
-                parser_id: db_parser_id.clone(),
+                parser_id: ParserId::new(db_parser_id.clone()),
                 parser_version: db_parser_version.clone(),
                 parser_config_hash: db_parser_config_hash.clone(),
                 indexed_at_ms: None,

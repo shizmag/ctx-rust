@@ -139,9 +139,8 @@ fn assert_json_rpc_error(resp: &serde_json::Value, code: i64, message_contains: 
 
 fn assert_tool_error(resp: &serde_json::Value, message_contains: &str) {
     let result = resp.get("result").expect("expected tool result");
-    assert_eq!(
+    assert!(
         result.get("isError").unwrap().as_bool().unwrap(),
-        true,
         "expected isError=true"
     );
     let text = result["content"][0]["text"].as_str().unwrap();
@@ -256,7 +255,7 @@ fn test_mcp_error_ambiguous_symbol() {
 
     let responses = run_mcp_requests(&requests);
     let result = responses[1].get("result").unwrap();
-    assert_eq!(result.get("isError").unwrap().as_bool().unwrap(), false);
+    assert!(!result.get("isError").unwrap().as_bool().unwrap());
 
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Multiple symbols found"));
@@ -425,18 +424,12 @@ fn test_mcp_rebuild_index_after_init() {
     let responses = run_mcp_requests(&requests);
 
     let rebuild_result = responses[1].get("result").unwrap();
-    assert_eq!(
-        rebuild_result.get("isError").unwrap().as_bool().unwrap(),
-        false
-    );
+    assert!(!rebuild_result.get("isError").unwrap().as_bool().unwrap());
     let rebuild_text = rebuild_result["content"][0]["text"].as_str().unwrap();
     assert!(rebuild_text.contains("Index rebuilt successfully"));
 
     let context_result = responses[2].get("result").unwrap();
-    assert_eq!(
-        context_result.get("isError").unwrap().as_bool().unwrap(),
-        false
-    );
+    assert!(!context_result.get("isError").unwrap().as_bool().unwrap());
     let context_text = context_result["content"][0]["text"].as_str().unwrap();
     assert!(context_text.contains("run_pipeline"));
 }

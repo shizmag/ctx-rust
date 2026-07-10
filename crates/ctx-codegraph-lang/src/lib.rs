@@ -6,8 +6,9 @@ pub mod model;
 pub mod noop;
 
 pub use backend::{
-    BackendMetadata, BackendRegistry, LanguageBackend, ParseInput, ParsedFile, ParserBackend,
-    ResolveInput, ResolveOutput, ResolverBackend, WorkspaceMarker,
+    BackendId, BackendMetadata, BackendRegistry, LanguageBackend, ParseInput, ParsedFile,
+    ParserBackend, ParserId, ResolveInput, ResolveOutput, ResolverBackend, ResolverId,
+    WorkspaceMarker,
 };
 pub use error::CodeGraphError;
 pub use index::{

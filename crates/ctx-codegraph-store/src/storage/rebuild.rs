@@ -1,4 +1,6 @@
-use ctx_codegraph_lang::backend::{BackendRegistry, ParseInput, ParsedFile, ResolveInput};
+use ctx_codegraph_lang::backend::{
+    BackendId, BackendRegistry, ParseInput, ParsedFile, ResolveInput, ResolverId,
+};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{
@@ -143,10 +145,10 @@ pub fn compute_affected_set_with_registry(
 
     // Default edge kind and resolver
     edge_kinds.insert(EdgeKind::Call);
-    resolvers.insert("noop".to_string());
+    resolvers.insert(ResolverId::new("noop"));
     for backend in registry.all() {
         if let Some(res) = backend.resolver() {
-            resolvers.insert(res.resolver_id().0);
+            resolvers.insert(res.resolver_id().clone());
         }
     }
 
@@ -298,7 +300,7 @@ fn load_occurrences_to_resolve(
                 end_col,
             },
             language: LanguageId(language_str),
-            backend_id,
+            backend_id: BackendId::new(backend_id),
         })
     })?;
 
@@ -505,7 +507,7 @@ pub fn run_full_rebuild_with_registry(
         },
         resolvers: {
             let mut s = std::collections::HashSet::new();
-            s.insert(resolver_id.to_string());
+            s.insert(ResolverId::new(resolver_id));
             s
         },
     };

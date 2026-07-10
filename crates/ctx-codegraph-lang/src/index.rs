@@ -105,12 +105,12 @@ pub fn create_file_snapshot_with_registry(
         rel_path,
         abs_path: abs_path.to_path_buf(),
         language: backend.language().clone(),
-        backend_id: backend.id().0.clone(),
+        backend_id: backend.id().clone(),
         size_bytes,
         mtime_ms,
         mtime_ns: None,
         content_hash,
-        parser_id: parser.parser_id().0.clone(),
+        parser_id: parser.parser_id().clone(),
         parser_version: parser.parser_version(),
         parser_config_hash,
         indexed_at_ms: None,
@@ -296,8 +296,8 @@ pub fn build_index_with_registry(
             confidence,
             produced_by: Some(
                 resolver
-                    .map(|r| r.resolver_id().0.clone())
-                    .unwrap_or_else(|| "noop".to_string()),
+                    .map(|r| r.resolver_id().clone())
+                    .unwrap_or_else(|| crate::backend::ResolverId::new("noop")),
             ),
         };
         edges.push(edge);

@@ -1,3 +1,4 @@
+use ctx_codegraph_lang::backend::BackendId;
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lang::model::{FileId, LanguageId, Occurrence, OccurrenceId, OccurrenceKind, SymbolId, TextRange};
 use std::path::PathBuf;
@@ -45,7 +46,7 @@ pub fn load_occurrence(
                 end_col,
             },
             language: LanguageId(language_str),
-            backend_id,
+            backend_id: BackendId::new(backend_id),
         })
     })
     .map_err(|e| match e {
@@ -91,7 +92,7 @@ mod tests {
     use crate::storage::persist::save_index;
     use crate::storage::schema::init_schema;
     use crate::storage::workspace::open_db;
-    use ctx_codegraph_lang::backend::BackendRegistry;
+    use ctx_codegraph_lang::backend::{BackendId, BackendRegistry, ParserId};
     use std::fs;
     use std::path::PathBuf;
 
@@ -115,12 +116,12 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: file_path.clone(),
                 language: Language::rust(),
-                backend_id: "rust-backend".to_string(),
+                backend_id: BackendId::new("rust-backend"),
                 size_bytes: sample_file_content().len() as u64,
                 mtime_ms: 100,
                 mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
-                parser_id: "tree-sitter-rust".to_string(),
+                parser_id: ParserId::new("tree-sitter-rust"),
                 parser_version: "0.20.0".to_string(),
                 parser_config_hash: "".to_string(),
                 indexed_at_ms: None,
@@ -157,7 +158,7 @@ mod tests {
                     end_col: 11,
                 },
                 language: LanguageId::rust(),
-                backend_id: "rust-backend".to_string(),
+                backend_id: BackendId::new("rust-backend"),
             }],
             call_sites: vec![],
             edges: vec![],

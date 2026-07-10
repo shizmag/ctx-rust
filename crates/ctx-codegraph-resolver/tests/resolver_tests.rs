@@ -1,4 +1,12 @@
+<<<<<<<< HEAD:crates/ctx-lang-python/src/resolver_tests.rs
 use ctx_codegraph_lang::backend::{ResolveInput, ResolverBackend};
+|||||||| parent of f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-storage/src/languages/python/resolver_tests.rs
+use crate::backend::{ResolveInput, ResolverBackend};
+use crate::model::{LanguageId, Occurrence, OccurrenceKind, ResolutionConfidence, Symbol, SymbolKind, TextRange};
+use crate::languages::python::PythonResolver;
+========
+use ctx_codegraph_lang::backend::{BackendId, ResolveInput, ResolverBackend};
+>>>>>>>> f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-resolver/tests/resolver_tests.rs
 use ctx_codegraph_lang::model::{
     LanguageId, Occurrence, OccurrenceKind, ResolutionConfidence, Symbol, SymbolKind, TextRange,
 };
@@ -6,9 +14,8 @@ use ctx_codegraph_resolver::LspDefinitionResolver;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use tempfile::tempdir;
-
 use std::sync::Mutex;
+use tempfile::tempdir;
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -91,7 +98,6 @@ except Exception as e:
     perms.set_mode(0o755);
     fs::set_permissions(&script_path, perms).unwrap();
 
-    // Set PATH to include bin_dir
     let old_path = std::env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
     unsafe {
@@ -117,7 +123,7 @@ except Exception as e:
             end_col: 30,
         },
         language: LanguageId::new("python"),
-        backend_id: "python-backend".to_string(),
+        backend_id: BackendId::new("python-backend"),
     };
 
     let symbols = vec![Symbol {
@@ -146,7 +152,6 @@ except Exception as e:
 
     let output = resolver.resolve(input).unwrap();
 
-    // Restore PATH
     unsafe {
         std::env::set_var("PATH", old_path);
     }
@@ -158,7 +163,6 @@ except Exception as e:
 #[test]
 fn test_python_resolver_fallback_noop() {
     let _guard = ENV_MUTEX.lock().unwrap();
-    // Empty path so pyright-langserver is not found
     let old_path = std::env::var("PATH").unwrap_or_default();
     unsafe {
         std::env::set_var("PATH", "");
@@ -184,10 +188,9 @@ fn test_python_resolver_fallback_noop() {
             end_col: 21,
         },
         language: LanguageId::new("python"),
-        backend_id: "python-backend".to_string(),
+        backend_id: BackendId::new("python-backend"),
     };
 
-    // Unique match for name-only resolver (should resolve unique Function/Method)
     let symbols = vec![Symbol {
         id: None,
         file_id: None,
@@ -214,12 +217,10 @@ fn test_python_resolver_fallback_noop() {
 
     let output = resolver.resolve(input).unwrap();
 
-    // Restore PATH
     unsafe {
         std::env::set_var("PATH", old_path);
     }
 
     assert_eq!(output.resolved_symbol_index, Some(0));
-    // Since it's in the same file, fallback noop gives Syntax confidence
     assert_eq!(output.confidence, ResolutionConfidence::Syntax);
 }

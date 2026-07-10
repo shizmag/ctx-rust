@@ -1,10 +1,5 @@
 pub mod parser;
 
-#[cfg(test)]
-mod parser_tests;
-#[cfg(test)]
-mod resolver_tests;
-
 pub use parser::PythonParser;
 
 use ctx_codegraph_lang::backend::{

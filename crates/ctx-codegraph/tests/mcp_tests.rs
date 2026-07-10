@@ -131,7 +131,7 @@ fn test_mcp_server_flow() {
     let call_resp = &responses[2];
     assert_eq!(call_resp.get("id").unwrap().as_i64().unwrap(), 3);
     let result = call_resp.get("result").unwrap();
-    assert_eq!(result.get("isError").unwrap().as_bool().unwrap(), false);
+    assert!(!result.get("isError").unwrap().as_bool().unwrap());
 
     let content = result.get("content").unwrap().as_array().unwrap();
     let text = content[0].get("text").unwrap().as_str().unwrap();

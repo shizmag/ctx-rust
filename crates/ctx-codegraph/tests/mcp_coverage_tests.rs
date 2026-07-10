@@ -307,9 +307,8 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
     .enumerate()
     {
         let result = &responses[idx + 1]["result"];
-        assert_eq!(
-            result["isError"].as_bool().unwrap(),
-            false,
+        assert!(
+            !result["isError"].as_bool().unwrap(),
             "{name} should succeed"
         );
     }
@@ -371,10 +370,16 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
     let empty = serde_json::Map::new();
     let tc = stats_json["tool_calls"].as_object().unwrap_or(&empty);
     // tolerant: collection may be off depending on temp dir config or prior env (env overrides config); presence of key or tokens if enabled
-    if tc.get("get_affected_context").is_some() {
-        if let Some(ac_toks) = stats_json.get("context_estimated_tokens").and_then(|m| m.get("get_affected_context")).and_then(|v| v.as_array()) {
-            assert!(!ac_toks.is_empty() || true, "affected_context should record context tokens when collected");
-        }
+    if tc.get("get_affected_context").is_some()
+        && let Some(ac_toks) = stats_json
+            .get("context_estimated_tokens")
+            .and_then(|m| m.get("get_affected_context"))
+            .and_then(|v| v.as_array())
+    {
+        assert!(
+            !ac_toks.is_empty(),
+            "affected_context should record context tokens when collected"
+        );
     }
     if let Some(ac_nodes) = stats_json.get("context_nodes").and_then(|m| m.get("get_affected_context")).and_then(|v| v.as_array()) {
         assert!(!ac_nodes.is_empty());
@@ -474,7 +479,7 @@ fn test_mcp_stats_toggle_via_env_and_collection() {
         .map_or(0, |o| o.values().filter_map(|v| v.as_u64()).sum());
 
     // calls that would record if enabled (incl affected_context primary + different format)
-    let _ = run_mcp_requests(&[
+    run_mcp_requests(&[
         init_request(&root_uri, 32),
         tool_call_request(33, "get_affected_context", serde_json::json!({ "query": "run_pipeline", "format": "json", "token_budget": 100 })),
         tool_call_request(34, "list_symbols", serde_json::json!({ "limit": 3 })),
@@ -500,7 +505,7 @@ fn test_mcp_stats_toggle_via_env_and_collection() {
         if let Some(v) = prev {
             std::env::set_var("CTX_MCP_COLLECT_STATS", v);
         } else {
-            let _ = std::env::remove_var("CTX_MCP_COLLECT_STATS");
+            std::env::remove_var("CTX_MCP_COLLECT_STATS");
         }
     }
 
@@ -581,7 +586,7 @@ mcp_target = test
         init_request(&root_uri, 104),
         tool_call_request(105, "rebuild_index", serde_json::json!({})),
     ]);
-    let rebuild_ok = rebuild_resp[1]["result"]["isError"].as_bool().unwrap_or(true) == false;
+    let rebuild_ok = !rebuild_resp[1]["result"]["isError"].as_bool().unwrap_or(true);
     assert!(rebuild_ok);
     assert!(rebuild_resp[1]["result"]["content"][0]["text"]
         .as_str()
@@ -604,7 +609,7 @@ mcp_target = test
         .and_then(|o| o.as_object())
         .map_or(0, |o| o.values().filter_map(|v| v.as_u64()).sum());
 
-    let _ = run_mcp_requests(&[
+    run_mcp_requests(&[
         init_request(&root_uri, 108),
         tool_call_request(109, "get_affected_context", serde_json::json!({ "query": "load" })),
     ]);

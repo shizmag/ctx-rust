@@ -33,6 +33,29 @@ impl ResolverId {
     }
 }
 
+macro_rules! impl_string_id_sql {
+    ($id:ty) => {
+        impl rusqlite::types::ToSql for $id {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                self.0.to_sql()
+            }
+        }
+
+        impl rusqlite::types::FromSql for $id {
+            fn column_result(
+                value: rusqlite::types::ValueRef<'_>,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                let s = String::column_result(value)?;
+                Ok(Self(s))
+            }
+        }
+    };
+}
+
+impl_string_id_sql!(BackendId);
+impl_string_id_sql!(ParserId);
+impl_string_id_sql!(ResolverId);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceMarker {
     File(&'static str),

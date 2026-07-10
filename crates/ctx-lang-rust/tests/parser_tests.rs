@@ -1,6 +1,17 @@
+<<<<<<<< HEAD:crates/ctx-lang-rust/src/parser_tests.rs
 use crate::parser::{RustParser, parse_rust_file};
 use ctx_codegraph_lang::backend::{ParseInput, ParserBackend};
 use ctx_codegraph_lang::model::{OccurrenceKind, SymbolKind};
+|||||||| parent of f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-codegraph-storage/src/languages/rust/parser_tests.rs
+use super::parser::{RustParser, parse_rust_file};
+use crate::backend::{ParseInput, ParserBackend};
+use crate::model::{OccurrenceKind, SymbolKind};
+========
+use ctx_lang_rust::parser::{RustParser, parse_rust_file};
+use ctx_codegraph_lang::backend::{ParseInput, ParserBackend};
+use ctx_codegraph_lang::model::{OccurrenceKind, SymbolKind};
+use std::fs;
+>>>>>>>> f9ba449 (Fix clippy warnings and consolidate lang ID types after crate split):crates/ctx-lang-rust/tests/parser_tests.rs
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -8,6 +19,53 @@ fn write_temp_rust(content: &str) -> NamedTempFile {
     let mut temp = NamedTempFile::with_suffix(".rs").unwrap();
     write!(temp, "{}", content).unwrap();
     temp
+}
+
+#[test]
+fn test_parse_rust_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("lib.rs");
+    let code = r#"
+        pub fn run_pipeline() {
+            let x = load();
+            process(x);
+        }
+
+        #[test]
+        fn test_helper() {
+            save(1);
+        }
+
+        impl MyStruct {
+            pub fn new() -> Self {
+                MyStruct
+            }
+        }
+    "#;
+    fs::write(&file_path, code).unwrap();
+
+    let (symbols, call_sites) = parse_rust_file(&file_path).unwrap();
+
+    let run_pipeline = symbols.iter().find(|s| s.name == "run_pipeline").unwrap();
+    assert_eq!(run_pipeline.kind, SymbolKind::Function);
+
+    let test_helper = symbols.iter().find(|s| s.name == "test_helper").unwrap();
+    assert_eq!(test_helper.kind, SymbolKind::Test);
+
+    let new_method = symbols.iter().find(|s| s.name == "new").unwrap();
+    assert_eq!(new_method.kind, SymbolKind::Method);
+    assert_eq!(new_method.qualified_name, "MyStruct::new");
+
+    let load_call = call_sites.iter().find(|c| c.raw_text == "load").unwrap();
+    assert_eq!(
+        load_call.enclosing_temp_index,
+        Some(
+            symbols
+                .iter()
+                .position(|s| s.name == "run_pipeline")
+                .unwrap()
+        )
+    );
 }
 
 #[test]

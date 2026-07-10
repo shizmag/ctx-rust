@@ -1,3 +1,4 @@
+use crate::backend::{BackendId, ParserId, ResolverId};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -377,9 +378,8 @@ pub fn extract_signature(file: &Path, range: &TextRange, kind: SymbolKind) -> Op
     }
     // Capture up to 3 lines or until we hit body opener
     let mut sig_lines = Vec::new();
-    for i in start_idx..(start_idx + 3).min(lines.len()) {
-        let l = lines[i];
-        sig_lines.push(l);
+    for l in lines.iter().skip(start_idx).take(3) {
+        sig_lines.push(*l);
         if l.contains('{') || l.trim_end().ends_with(';') || l.trim_end().ends_with("->") {
             break;
         }
@@ -511,10 +511,6 @@ impl RebuildReason {
         }
     }
 }
-
-pub type BackendId = String;
-pub type ParserId = String;
-pub type ResolverId = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FileParseStatus {
@@ -813,7 +809,7 @@ mod tests {
         for reason in reasons {
             let s = reason.as_str();
             assert!(!s.is_empty());
-            assert_eq!(s.chars().next().unwrap().is_uppercase(), true);
+            assert!(s.chars().next().unwrap().is_uppercase());
         }
         assert_eq!(RebuildReason::MissingDatabase.as_str(), "MissingDatabase");
         assert_eq!(

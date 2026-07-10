@@ -1,4 +1,4 @@
-use ctx_codegraph_lang::backend::BackendRegistry;
+use ctx_codegraph_lang::backend::{BackendId, BackendRegistry, ParserId, ResolverId};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lang::model::{
     CodeIndex, EdgeId, EdgeKind, FileId, FileParseStatus, FileSnapshot, GraphEdge, Language,
@@ -307,12 +307,12 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             abs_path: PathBuf::from(path_str),
             rel_path: PathBuf::from(rel_path_str),
             language,
-            backend_id,
+            backend_id: BackendId::new(backend_id),
             size_bytes,
             mtime_ms,
             mtime_ns: None,
             content_hash,
-            parser_id,
+            parser_id: ParserId::new(parser_id),
             parser_version,
             parser_config_hash,
             indexed_at_ms,
@@ -426,7 +426,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
                 end_col,
             },
             language: LanguageId(language_str),
-            backend_id,
+            backend_id: BackendId::new(backend_id),
         });
     }
 
@@ -481,7 +481,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             range,
             confidence: ResolutionConfidence::from_str(&confidence_str)
                 .unwrap_or(ResolutionConfidence::Unresolved),
-            produced_by,
+            produced_by: produced_by.map(ResolverId::new),
         });
     }
 
@@ -615,12 +615,12 @@ mod tests {
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
                 language: Language::rust(),
-                backend_id: "rust-backend".to_string(),
+                backend_id: BackendId::new("rust-backend"),
                 size_bytes: 200,
                 mtime_ms: 100,
                 mtime_ns: None,
                 content_hash: Some("hash1".to_string()),
-                parser_id: "tree-sitter-rust".to_string(),
+                parser_id: ParserId::new("tree-sitter-rust"),
                 parser_version: "0.20.0".to_string(),
                 parser_config_hash: "".to_string(),
                 indexed_at_ms: None,
@@ -675,7 +675,7 @@ mod tests {
                     end_col: 10,
                 },
                 language: LanguageId::rust(),
-                backend_id: "rust-backend".to_string(),
+                backend_id: BackendId::new("rust-backend"),
             }],
             call_sites: vec![Occurrence {
                 id: None,
@@ -692,7 +692,7 @@ mod tests {
                     end_col: 10,
                 },
                 language: LanguageId::rust(),
-                backend_id: "rust-backend".to_string(),
+                backend_id: BackendId::new("rust-backend"),
             }],
             edges: vec![CallEdge {
                 id: None,

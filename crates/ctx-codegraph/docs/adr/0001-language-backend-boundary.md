@@ -15,9 +15,11 @@ Introduce a backend boundary with:
 * `ParserBackend`
 * `ResolverBackend`
 * `BackendRegistry`
-* A generic LSP transport in `src/resolver/lsp_transport.rs`.
+* A generic LSP transport in `ctx-codegraph-resolver`.
+* Language backends in dedicated crates (`ctx-lang-rust`, `ctx-lang-python`, …).
+* Storage and query logic in `ctx-codegraph-store`.
 
-Move all Rust-specific parser, resolver, and workspace configuration markers into `src/languages/rust/*`. Provide registry injection options (`build_index_with_registry`, `rebuild_index_db_with_registry`) to allow test-only mock registry execution.
+Move all Rust-specific parser, resolver, and workspace configuration markers into `ctx-lang-rust`. Provide registry injection options (`build_index_with_registry`, `rebuild_index_db_with_registry`) to allow test-only mock registry execution.
 
 ## Consequences
 

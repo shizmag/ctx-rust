@@ -22,8 +22,8 @@ pub use context::{
 };
 
 pub use backend::{
-    BackendMetadata, LanguageBackend, ParserBackend, ResolverBackend, WorkspaceMarker,
-    global_registry,
+    BackendId, BackendMetadata, LanguageBackend, ParserBackend, ParserId, ResolverBackend,
+    ResolverId, WorkspaceMarker, global_registry,
 };
 pub use error::CodeGraphError;
 pub use index::{BuildIndexOptions, build_index};

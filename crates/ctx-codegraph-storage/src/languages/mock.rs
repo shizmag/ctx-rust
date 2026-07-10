@@ -11,6 +11,12 @@ pub struct MockBackend {
     parser: MockParser,
 }
 
+impl Default for MockBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockBackend {
     pub fn new() -> Self {
         Self { parser: MockParser }

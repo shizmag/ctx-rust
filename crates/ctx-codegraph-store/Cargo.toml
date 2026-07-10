@@ -13,4 +13,6 @@ sha2 = "0.10"
 walkdir = "2"
 
 [dev-dependencies]
+ctx-lang-python = { path = "../ctx-lang-python" }
+ctx-lang-rust = { path = "../ctx-lang-rust" }
 tempfile = "3"

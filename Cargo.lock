@@ -385,6 +385,8 @@ version = "0.1.0"
 dependencies = [
  "ctx-codegraph-lang",
  "ctx-codegraph-resolver",
+ "ctx-lang-python",
+ "ctx-lang-rust",
  "rusqlite",
  "serde",
  "serde_json",

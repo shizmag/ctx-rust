@@ -20,7 +20,7 @@ The project is split into:
 
 ### Core Traits & Types
 
-All backends implement the traits defined in [src/backend/traits.rs](file:///Users/vladimirkasterin/python/ctx-rust/crates/ctx-codegraph/src/backend/traits.rs):
+All backends implement the traits defined in [`ctx-codegraph-lang/src/backend/traits.rs`](../../ctx-codegraph-lang/src/backend/traits.rs):
 
 ```rust
 pub trait LanguageBackend: Send + Sync {
@@ -78,17 +78,17 @@ graph TD
 
 ## 📂 Where Language-Specific Code Lives
 
-* **Rust Backend**: Exclusively located under [src/languages/rust/](file:///Users/vladimirkasterin/python/ctx-rust/crates/ctx-codegraph/src/languages/rust/).
-  * `parser.rs`: Contains the tree-sitter AST queries.
-  * `resolver.rs`: Implements the `rust-analyzer` JSON-RPC initialization and definition requests.
-  * `mod.rs`: Ties the parser and resolver into the `RustBackend`.
-* **Mock Backend**: Located under [src/languages/mock.rs](file:///Users/vladimirkasterin/python/ctx-rust/crates/ctx-codegraph/src/languages/mock.rs) and gated under `#[cfg(test)]` to verify pipeline modularity.
+* **Rust Backend**: [`ctx-lang-rust`](../../ctx-lang-rust/) — parser, workspace markers, and backend wiring.
+* **Python Backend**: [`ctx-lang-python`](../../ctx-lang-python/) — parser, workspace markers, and backend wiring.
+* **Resolver (LSP)**: [`ctx-codegraph-resolver`](../../ctx-codegraph-resolver/) — generic LSP transport and definition resolution.
+* **Storage / queries**: [`ctx-codegraph-store`](../../ctx-codegraph-store/) — persistence, diff, and SQL query layer.
+* **Mock Backend**: [`ctx-codegraph-storage/src/languages/mock.rs`](../../ctx-codegraph-storage/src/languages/mock.rs), gated under `#[cfg(test)]` to verify pipeline modularity.
 
 ---
 
 ## 🚫 What Should Never Leak to Generic Core
 
-To maintain a clean separation of concerns, the generic core (`index.rs`, `storage.rs`, `service.rs`, `slice.rs`, `lib.rs`) must **never**:
-* Import anything from `crates/ctx-codegraph/src/languages/rust/*`.
+To maintain a clean separation of concerns, the generic core (`ctx-codegraph-lang`, `ctx-codegraph-store`, `ctx-codegraph` service/slice layers) must **never**:
+* Import anything from `ctx-lang-rust`, `ctx-lang-python`, or other language crates directly (only via `BackendRegistry` injection).
 * Contain hardcoded string literals like `"Rust"`, `"rust"`, `.rs`, or `Cargo.toml`.
 * Reference LSP client implementations directly (e.g. `GenericLspClient` should only be instantiated by specific `ResolverBackend` implementations).
