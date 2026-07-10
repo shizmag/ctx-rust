@@ -118,8 +118,15 @@ impl EmbeddingModel {
 }
 
 fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelError> {
-    let names: Vec<String> = session.inputs().iter().map(|input| input.name().to_string()).collect();
+    let names: Vec<String> = session
+        .inputs()
+        .iter()
+        .map(|input| input.name().to_string())
+        .collect();
+    discover_text_input_names(&names)
+}
 
+fn discover_text_input_names(names: &[String]) -> Result<(String, String), ModelError> {
     let input_ids = names
         .iter()
         .find(|name| name.contains("input_ids"))
@@ -142,5 +149,95 @@ pub fn l2_normalize(vector: &mut [f32]) {
         for value in vector.iter_mut() {
             *value /= norm;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn l2_normalize_scales_to_unit_length() {
+        let mut vector = vec![3.0_f32, 4.0];
+        l2_normalize(&mut vector);
+        assert!((vector[0] - 0.6).abs() < 1e-6);
+        assert!((vector[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn l2_normalize_leaves_zero_vector_unchanged() {
+        let mut vector = vec![0.0_f32, 0.0, 0.0];
+        l2_normalize(&mut vector);
+        assert_eq!(vector, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn l2_normalize_leaves_already_normalized_vector_unchanged() {
+        let mut vector = vec![1.0_f32, 0.0];
+        l2_normalize(&mut vector);
+        assert!((vector[0] - 1.0).abs() < 1e-6);
+        assert!(vector[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn discover_text_input_names_finds_standard_inputs() {
+        let names = vec![
+            "token_type_ids".into(),
+            "input_ids".into(),
+            "attention_mask".into(),
+        ];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "input_ids");
+        assert_eq!(attention_mask, "attention_mask");
+    }
+
+    #[test]
+    fn discover_text_input_names_falls_back_to_first_input() {
+        let names = vec!["tokens".into(), "masks".into()];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "tokens");
+        assert_eq!(attention_mask, "tokens");
+    }
+
+    #[test]
+    fn discover_text_input_names_reuses_input_ids_when_mask_missing() {
+        let names = vec!["input_ids".into(), "token_type_ids".into()];
+        let (input_ids, attention_mask) = discover_text_input_names(&names).unwrap();
+        assert_eq!(input_ids, "input_ids");
+        assert_eq!(attention_mask, "input_ids");
+    }
+
+    #[test]
+    fn discover_text_input_names_errors_when_empty() {
+        let names: Vec<String> = vec![];
+        let err = discover_text_input_names(&names).unwrap_err();
+        assert!(matches!(err, ModelError::Inference(msg) if msg == "model has no inputs"));
+    }
+
+    #[test]
+    fn load_returns_model_not_found_for_missing_file() {
+        let missing = Path::new("/nonexistent/ctx-codegraph-models/embedding.onnx");
+        let tokenizer_dir = Path::new("/tmp");
+
+        let err = match EmbeddingModel::load(missing, tokenizer_dir) {
+            Err(err) => err,
+            Ok(_) => panic!("expected ModelNotFound error"),
+        };
+        assert!(matches!(err, ModelError::ModelNotFound(path) if path == missing));
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn embed_texts_empty_batch_returns_empty() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let paths = crate::paths::ModelPaths::default_paths();
+        let mut model =
+            EmbeddingModel::load(&paths.embedding_onnx, &paths.embedding_tokenizer).unwrap();
+        let vectors = model.embed_texts(&[]).unwrap();
+        assert!(vectors.is_empty());
     }
 }

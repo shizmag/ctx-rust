@@ -57,3 +57,59 @@ impl ModelPaths {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_stores_explicit_paths() {
+        let paths = ModelPaths::new(
+            "/tmp/embedding.onnx",
+            Some(PathBuf::from("/tmp/reranker.onnx")),
+            "/tmp/embedding-tokenizer",
+            Some(PathBuf::from("/tmp/rerank-tokenizer")),
+        );
+
+        assert_eq!(paths.embedding_onnx, PathBuf::from("/tmp/embedding.onnx"));
+        assert_eq!(
+            paths.reranker_onnx,
+            Some(PathBuf::from("/tmp/reranker.onnx"))
+        );
+        assert_eq!(
+            paths.embedding_tokenizer,
+            PathBuf::from("/tmp/embedding-tokenizer")
+        );
+        assert_eq!(
+            paths.rerank_tokenizer,
+            Some(PathBuf::from("/tmp/rerank-tokenizer"))
+        );
+    }
+
+    #[test]
+    fn default_paths_uses_embedding_constant_and_parent_tokenizer_dir() {
+        let paths = ModelPaths::default_paths();
+        let expected_embedding = PathBuf::from(DEFAULT_EMBEDDING_ONNX);
+
+        assert_eq!(paths.embedding_onnx, expected_embedding);
+        assert_eq!(
+            paths.embedding_tokenizer,
+            expected_embedding
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| expected_embedding.clone())
+        );
+
+        let reranker_path = PathBuf::from(DEFAULT_RERANKER_ONNX);
+        if reranker_path.exists() {
+            assert_eq!(paths.reranker_onnx, Some(reranker_path.clone()));
+            assert_eq!(
+                paths.rerank_tokenizer,
+                reranker_path.parent().map(Path::to_path_buf)
+            );
+        } else {
+            assert_eq!(paths.reranker_onnx, None);
+            assert_eq!(paths.rerank_tokenizer, None);
+        }
+    }
+}

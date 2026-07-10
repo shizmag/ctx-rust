@@ -173,3 +173,110 @@ impl LexicalIndex {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ctx_codegraph_lang::model::SymbolId;
+    use tempfile::tempdir;
+
+    fn sample_docs() -> Vec<IndexDoc> {
+        vec![
+            IndexDoc {
+                chunk_id: ChunkId(1),
+                symbol_id: Some(SymbolId(10)),
+                path: "src/auth.rs".to_string(),
+                qualified_name: "auth::authenticate".to_string(),
+                text: "pub fn authenticate() -> bool { verify_token() }".to_string(),
+            },
+            IndexDoc {
+                chunk_id: ChunkId(2),
+                symbol_id: Some(SymbolId(20)),
+                path: "src/db.rs".to_string(),
+                qualified_name: "db::connect".to_string(),
+                text: "pub fn connect() -> Connection { Connection::new() }".to_string(),
+            },
+            IndexDoc {
+                chunk_id: ChunkId(3),
+                symbol_id: None,
+                path: "src/lib.rs".to_string(),
+                qualified_name: "root".to_string(),
+                text: "mod auth; mod db;".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn lexical_index_open_creates_directory() {
+        let dir = tempdir().unwrap();
+        let index = LexicalIndex::open(dir.path()).unwrap();
+        assert!(index.index_dir().exists());
+        assert!(index.index_dir().ends_with("lexical"));
+    }
+
+    #[test]
+    fn lexical_index_open_reuses_existing_index() {
+        let dir = tempdir().unwrap();
+        {
+            let mut index = LexicalIndex::open(dir.path()).unwrap();
+            index.build(&sample_docs()).unwrap();
+        }
+        let reopened = LexicalIndex::open(dir.path()).unwrap();
+        let hits = reopened.search("authenticate", 5).unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].chunk_id, ChunkId(1));
+    }
+
+    #[test]
+    fn lexical_index_build_and_search() {
+        let dir = tempdir().unwrap();
+        let mut index = LexicalIndex::open(dir.path()).unwrap();
+        index.build(&sample_docs()).unwrap();
+
+        let auth_hits = index.search("authenticate", 5).unwrap();
+        assert_eq!(auth_hits.len(), 1);
+        assert_eq!(auth_hits[0].chunk_id, ChunkId(1));
+        assert_eq!(auth_hits[0].symbol_id, Some(SymbolId(10)));
+        assert!(auth_hits[0].score > 0.0);
+
+        let db_hits = index.search("connect database", 5).unwrap();
+        assert!(!db_hits.is_empty());
+        assert_eq!(db_hits[0].chunk_id, ChunkId(2));
+
+        // Qualified names are indexed as text; search by symbol fragment (not `::` — query parser syntax).
+        let qualified_hits = index.search("auth authenticate", 5).unwrap();
+        assert!(!qualified_hits.is_empty());
+        assert_eq!(qualified_hits[0].chunk_id, ChunkId(1));
+    }
+
+    #[test]
+    fn lexical_index_search_empty_query_returns_no_hits() {
+        let dir = tempdir().unwrap();
+        let mut index = LexicalIndex::open(dir.path()).unwrap();
+        index.build(&sample_docs()).unwrap();
+
+        assert!(index.search("", 5).unwrap().is_empty());
+        assert!(index.search("   ", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn lexical_index_remove_chunk_ids() {
+        let dir = tempdir().unwrap();
+        let mut index = LexicalIndex::open(dir.path()).unwrap();
+        index.build(&sample_docs()).unwrap();
+
+        assert!(!index.search("authenticate", 5).unwrap().is_empty());
+        index.remove_chunk_ids(&[ChunkId(1)]).unwrap();
+        let hits = index.search("authenticate", 5).unwrap();
+        assert!(hits.is_empty() || hits[0].chunk_id != ChunkId(1));
+    }
+
+    #[test]
+    fn lexical_index_remove_empty_chunk_ids_is_noop() {
+        let dir = tempdir().unwrap();
+        let mut index = LexicalIndex::open(dir.path()).unwrap();
+        index.build(&sample_docs()).unwrap();
+        index.remove_chunk_ids(&[]).unwrap();
+        assert!(!index.search("authenticate", 5).unwrap().is_empty());
+    }
+}

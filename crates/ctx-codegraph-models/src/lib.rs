@@ -15,6 +15,44 @@ pub use tokenizer::CodeTokenizer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn embedding_dim_constant_is_public() {
+        assert_eq!(EMBEDDING_DIM, 768);
+    }
+
+    #[test]
+    fn l2_normalize_is_reexported() {
+        let mut vector = vec![3.0_f32, 4.0];
+        l2_normalize(&mut vector);
+        assert!((vector[0] - 0.6).abs() < 1e-6);
+        assert!((vector[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn model_paths_round_trips_through_serde() {
+        let paths = ModelPaths::new(
+            "/tmp/embedding.onnx",
+            Some(PathBuf::from("/tmp/reranker.onnx")),
+            "/tmp/embedding-tokenizer",
+            None,
+        );
+
+        let json = serde_json::to_string(&paths).unwrap();
+        let decoded: ModelPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, paths);
+    }
+
+    #[test]
+    fn model_error_display_includes_path_for_missing_model() {
+        let path = PathBuf::from("/tmp/missing-model.onnx");
+        let err = ModelError::ModelNotFound(path.clone());
+        assert_eq!(
+            err.to_string(),
+            format!("model file not found: {}", path.display())
+        );
+    }
 
     #[test]
     #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]

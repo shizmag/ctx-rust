@@ -610,3 +610,102 @@ fn test_cli_graph_queries_no_output_on_fresh_index() {
     let s2 = String::from_utf8(out2.stdout).unwrap();
     assert!(!s2.contains("Incremental update"));
 }
+
+#[test]
+fn test_cli_graph_symbols_query_unique_and_not_found() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "symbols",
+            "run_pipeline",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed unique symbol query");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Unique match:"));
+    assert!(stdout.contains("run_pipeline"));
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "symbols",
+            "definitely_missing_symbol",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed not-found symbol query");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Symbol not found"));
+}
+
+#[test]
+fn test_cli_graph_callees_alias_and_build_verbose() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "callees",
+            "run_pipeline",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed callees alias");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Callees of"));
+    assert!(stdout.contains("run_pipeline"));
+    assert!(stdout.contains("load"));
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+            "--verbose",
+        ])
+        .output()
+        .expect("failed verbose build");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Codegraph Build Report"));
+}
+
+#[test]
+fn test_cli_graph_info_invalid_format() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            "graph",
+            "info",
+            root.to_str().unwrap(),
+            "--format",
+            "yaml",
+        ])
+        .output()
+        .expect("failed graph info invalid format");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unsupported format"));
+}

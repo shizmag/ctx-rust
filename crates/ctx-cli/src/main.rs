@@ -238,12 +238,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ctx_codegraph::model::{IndexState, RebuildReason};
 
-    #[test]
-    fn test_cli_passes_path_to_tui() {
-        let args = Args {
+    fn base_args(path: PathBuf) -> Args {
+        Args {
             command: None,
-            path: PathBuf::from("/mock/path/to/project"),
+            path,
             format: None,
             mode: None,
             max_depth: None,
@@ -253,7 +253,16 @@ mod tests {
             list_hidden: false,
             clipboard: false,
             code: false,
+            interactive: false,
+        }
+    }
+
+    #[test]
+    fn test_cli_passes_path_to_tui() {
+        let args = base_args(PathBuf::from("/mock/path/to/project"));
+        let args = Args {
             interactive: true,
+            ..args
         };
 
         let mut path_called = None;
@@ -265,6 +274,443 @@ mod tests {
         let res = run_with_args(args, mock_run_tui);
         assert!(res.is_ok());
         assert_eq!(path_called, Some(PathBuf::from("/mock/path/to/project")));
+    }
+
+    #[test]
+    fn test_cli_code_mode_renders_markdown_by_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let args = Args {
+            code: true,
+            ..base_args(temp_path)
+        };
+
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_cli_writes_output_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+        let output_path = temp_path.join("out.md");
+
+        let args = Args {
+            code: true,
+            output: Some(output_path.clone()),
+            ..base_args(temp_path)
+        };
+
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
+        let written = fs::read_to_string(output_path).unwrap();
+        assert!(written.contains("main.rs"));
+    }
+
+    #[test]
+    fn test_cli_xml_format_and_list_hidden() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(temp_path.join("target")).unwrap();
+        fs::write(temp_path.join("target/ignored.rs"), "fn ignored() {}\n").unwrap();
+
+        let args = Args {
+            code: true,
+            format: Some(CliFormat::Xml),
+            list_hidden: true,
+            ..base_args(temp_path)
+        };
+
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_format_index_state_labels() {
+        assert_eq!(format_index_state(&IndexState::Missing), "missing");
+        assert_eq!(format_index_state(&IndexState::Ready), "ready");
+        assert!(format_index_state(&IndexState::NeedsIncrementalUpdate(
+            ctx_codegraph::model::IndexDiff {
+                added: vec![ctx_codegraph::model::FileSnapshot {
+                    file_id: None,
+                    rel_path: PathBuf::from("a.rs"),
+                    abs_path: PathBuf::from("/tmp/a.rs"),
+                    language: ctx_codegraph::LanguageId::rust(),
+                    backend_id: ctx_codegraph::BackendId::new("rust-backend"),
+                    size_bytes: 1,
+                    mtime_ms: 1,
+                    mtime_ns: None,
+                    content_hash: None,
+                    parser_id: ctx_codegraph::ParserId::new("rust-parser"),
+                    parser_version: "1".to_string(),
+                    parser_config_hash: "x".to_string(),
+                    indexed_at_ms: None,
+                    parse_status: ctx_codegraph::model::FileParseStatus::Success,
+                }],
+                modified: vec![],
+                deleted: vec![],
+                unchanged: vec![],
+            }
+        ))
+        .contains("stale"));
+        assert!(format_index_state(&IndexState::NeedsFullRebuild(
+            RebuildReason::SchemaVersionChanged
+        ))
+        .contains("schema version changed"));
+    }
+
+    #[test]
+    fn test_graph_info_hints_for_ready_and_missing() {
+        let ready = graph_info_hints(&IndexState::Ready, true);
+        assert!(ready.iter().any(|h| h.contains("symbols")));
+
+        let missing = graph_info_hints(&IndexState::Missing, false);
+        assert!(missing.iter().any(|h| h.contains("graph build")));
+    }
+
+    #[test]
+    fn test_get_markdown_lang_and_kind_to_str() {
+        assert_eq!(get_markdown_lang(Path::new("foo.rs")), "rust");
+        assert_eq!(get_markdown_lang(Path::new("foo.unknown")), "");
+        assert_eq!(
+            kind_to_str(ctx_codegraph::LanguageObjectKind::Function),
+            "fn"
+        );
+        assert_eq!(
+            kind_to_str(ctx_codegraph::LanguageObjectKind::Unknown),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn test_get_file_span_content_bounds() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("sample.txt");
+        fs::write(&file, "line1\nline2\nline3\n").unwrap();
+
+        let content = get_file_span_content(&file, 1, 2).unwrap();
+        assert!(content.contains("line1"));
+        assert!(content.contains("line2"));
+        assert!(!content.contains("line3"));
+
+        assert_eq!(get_file_span_content(&file, 0, 1).unwrap(), "");
+        assert_eq!(get_file_span_content(&file, 10, 12).unwrap(), "");
+    }
+
+    #[test]
+    fn test_cli_mode_and_format_conversions() {
+        assert_eq!(Mode::from(CliMode::Smart), Mode::Smart);
+        assert_eq!(Mode::from(CliMode::All), Mode::All);
+        assert_eq!(Mode::from(CliMode::Code), Mode::Code);
+        assert_eq!(Mode::from(CliMode::Docs), Mode::Docs);
+        assert_eq!(Mode::from(CliMode::Llm), Mode::Llm);
+
+        assert_eq!(Format::from(CliFormat::Markdown), Format::Markdown);
+        assert_eq!(Format::from(CliFormat::Xml), Format::Xml);
+        assert_eq!(Format::from(CliFormat::Plain), Format::Plain);
+    }
+
+    #[test]
+    fn test_cli_graph_context_mode_conversion() {
+        use ctx_codegraph::GraphContextMode;
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::Callers),
+            GraphContextMode::Callers
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::Callees),
+            GraphContextMode::Callees
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::Dependencies),
+            GraphContextMode::Dependencies
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::Dependents),
+            GraphContextMode::Dependents
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::ForwardSlice),
+            GraphContextMode::ForwardSlice
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::ReverseSlice),
+            GraphContextMode::ReverseSlice
+        );
+        assert_eq!(
+            GraphContextMode::from(CliGraphContextMode::Neighborhood),
+            GraphContextMode::Neighborhood
+        );
+    }
+
+    #[test]
+    fn test_format_index_state_all_rebuild_reason_labels() {
+        use ctx_codegraph::model::{IndexState, RebuildReason};
+        let reasons = [
+            RebuildReason::MissingDatabase,
+            RebuildReason::CorruptDatabase,
+            RebuildReason::IndexerVersionChanged,
+            RebuildReason::BackendSetChanged,
+            RebuildReason::BackendVersionChanged,
+            RebuildReason::ParserVersionChanged,
+            RebuildReason::ParserConfigChanged,
+            RebuildReason::ResolverVersionChanged,
+            RebuildReason::ResolverConfigChanged,
+            RebuildReason::DiscoveryConfigChanged,
+            RebuildReason::ChangeDetectionStrategyChanged,
+            RebuildReason::PreviousRunIncomplete,
+            RebuildReason::PreviousRunFailed,
+            RebuildReason::EmbeddingModelChanged,
+            RebuildReason::LexicalIndexStale,
+            RebuildReason::ChunkSchemaChanged,
+        ];
+        for reason in reasons {
+            let label = format_index_state(&IndexState::NeedsFullRebuild(reason));
+            assert!(label.contains("needs rebuild"));
+        }
+    }
+
+    #[test]
+    fn test_graph_info_hints_incremental_and_missing_db_paths() {
+        let incremental = graph_info_hints(
+            &ctx_codegraph::model::IndexState::NeedsIncrementalUpdate(
+                ctx_codegraph::model::IndexDiff {
+                    added: vec![],
+                    modified: vec![ctx_codegraph::model::FileSnapshot {
+                        file_id: None,
+                        rel_path: PathBuf::from("a.rs"),
+                        abs_path: PathBuf::from("/tmp/a.rs"),
+                        language: ctx_codegraph::LanguageId::rust(),
+                        backend_id: ctx_codegraph::BackendId::new("rust-backend"),
+                        size_bytes: 1,
+                        mtime_ms: 1,
+                        mtime_ns: None,
+                        content_hash: None,
+                        parser_id: ctx_codegraph::ParserId::new("rust-parser"),
+                        parser_version: "1".to_string(),
+                        parser_config_hash: "x".to_string(),
+                        indexed_at_ms: None,
+                        parse_status: ctx_codegraph::model::FileParseStatus::Success,
+                    }],
+                    deleted: vec![],
+                    unchanged: vec![],
+                },
+            ),
+            true,
+        );
+        assert!(incremental.iter().any(|h| h.contains("refresh changed files")));
+
+        use ctx_codegraph::model::IndexState;
+        let missing_no_db = graph_info_hints(&IndexState::Missing, false);
+        assert!(missing_no_db.iter().any(|h| h.contains("graph build")));
+    }
+
+    #[test]
+    fn test_kind_to_str_all_variants() {
+        use ctx_codegraph::LanguageObjectKind;
+        assert_eq!(kind_to_str(LanguageObjectKind::Method), "fn");
+        assert_eq!(kind_to_str(LanguageObjectKind::Struct), "struct");
+        assert_eq!(kind_to_str(LanguageObjectKind::Enum), "enum");
+        assert_eq!(kind_to_str(LanguageObjectKind::Trait), "trait");
+        assert_eq!(kind_to_str(LanguageObjectKind::Impl), "impl");
+        assert_eq!(kind_to_str(LanguageObjectKind::Module), "mod");
+        assert_eq!(kind_to_str(LanguageObjectKind::Class), "class");
+        assert_eq!(kind_to_str(LanguageObjectKind::Interface), "interface");
+        assert_eq!(kind_to_str(LanguageObjectKind::TypeAlias), "type");
+        assert_eq!(kind_to_str(LanguageObjectKind::Constant), "const");
+        assert_eq!(kind_to_str(LanguageObjectKind::Variable), "var");
+    }
+
+    #[test]
+    fn test_get_markdown_lang_common_extensions() {
+        assert_eq!(get_markdown_lang(Path::new("app.py")), "python");
+        assert_eq!(get_markdown_lang(Path::new("app.js")), "javascript");
+        assert_eq!(get_markdown_lang(Path::new("app.ts")), "typescript");
+        assert_eq!(get_markdown_lang(Path::new("app.go")), "go");
+        assert_eq!(get_markdown_lang(Path::new("app.java")), "java");
+        assert_eq!(get_markdown_lang(Path::new("README.md")), "markdown");
+        assert_eq!(get_markdown_lang(Path::new("config.yaml")), "yaml");
+    }
+
+    #[test]
+    fn test_query_count_and_table_exists_helpers() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE sample (id INTEGER)", []).unwrap();
+        conn.execute("INSERT INTO sample (id) VALUES (1), (2), (3)", [])
+            .unwrap();
+
+        assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM sample"), 3);
+        assert!(table_exists(&conn, "sample"));
+        assert!(!table_exists(&conn, "missing_table"));
+    }
+
+    #[test]
+    fn test_print_slice_tree_helper_cycle_and_truncation() {
+        use ctx_codegraph::model::{
+            CodeIndex, EdgeKind, GraphEdge, Language, ResolutionConfidence, Symbol, SymbolId,
+            SymbolKind, TextRange,
+        };
+
+        let root = PathBuf::from("/proj");
+        let file = root.join("lib.rs");
+        let sym_a = Symbol {
+            id: Some(SymbolId(1)),
+            file_id: None,
+            name: "a".to_string(),
+            qualified_name: "a".to_string(),
+            kind: SymbolKind::Function,
+            language: Language::rust(),
+            file: file.clone(),
+            range: TextRange {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 1,
+            },
+            body_range: None,
+        };
+        let sym_b = Symbol {
+            id: Some(SymbolId(2)),
+            file_id: None,
+            name: "b".to_string(),
+            qualified_name: "b".to_string(),
+            kind: SymbolKind::Function,
+            language: Language::rust(),
+            file: file.clone(),
+            range: TextRange {
+                start_line: 2,
+                start_col: 1,
+                end_line: 2,
+                end_col: 1,
+            },
+            body_range: None,
+        };
+        let index = CodeIndex {
+            root,
+            files: vec![],
+            symbols: vec![sym_a, sym_b],
+            occurrences: vec![],
+            call_sites: vec![],
+            edges: vec![
+                GraphEdge {
+                    id: None,
+                    kind: EdgeKind::Call,
+                    from_file_id: None,
+                    from_symbol_id: Some(SymbolId(1)),
+                    to_symbol_id: Some(SymbolId(2)),
+                    to_external: None,
+                    occurrence_id: None,
+                    raw_text: None,
+                    range: None,
+                    confidence: ResolutionConfidence::Syntax,
+                    produced_by: None,
+                },
+                GraphEdge {
+                    id: None,
+                    kind: EdgeKind::Call,
+                    from_file_id: None,
+                    from_symbol_id: Some(SymbolId(2)),
+                    to_symbol_id: Some(SymbolId(1)),
+                    to_external: None,
+                    occurrence_id: None,
+                    raw_text: None,
+                    range: None,
+                    confidence: ResolutionConfidence::Syntax,
+                    produced_by: None,
+                },
+            ],
+        };
+
+        let mut visited = HashSet::new();
+        visited.insert(SymbolId(1));
+        let mut printed_count = 0;
+        print_slice_tree_helper(&index, SymbolId(1), 0, 5, &mut visited, &mut printed_count);
+        assert!(printed_count >= 2);
+    }
+
+    #[test]
+    fn test_write_mcp_entry_dry_run_and_unchanged() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("mcp.json");
+
+        let changed = write_mcp_entry(
+            &target,
+            "/usr/local/bin/ctx",
+            true,
+            "Test Client",
+            "mcpServers",
+            false,
+        )
+        .unwrap();
+        assert!(changed);
+        assert!(!target.exists(), "dry-run must not write files");
+
+        let changed = write_mcp_entry(
+            &target,
+            "/usr/local/bin/ctx",
+            false,
+            "Test Client",
+            "mcpServers",
+            false,
+        )
+        .unwrap();
+        assert!(changed);
+        assert!(target.exists());
+
+        let unchanged = write_mcp_entry(
+            &target,
+            "/usr/local/bin/ctx",
+            false,
+            "Test Client",
+            "mcpServers",
+            false,
+        )
+        .unwrap();
+        assert!(!unchanged);
+    }
+
+    #[test]
+    fn test_run_with_args_plain_format_from_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("note.txt"), "hello docs\n").unwrap();
+        fs::write(
+            temp_path.join(".ctxconfig"),
+            "mode = docs\nformat = plain\n",
+        )
+        .unwrap();
+
+        let args = Args {
+            code: true,
+            ..base_args(temp_path)
+        };
+
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_args_yaml_format_in_config_is_ignored() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().to_path_buf();
+        fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            temp_path.join(".ctxconfig"),
+            "default_format = yaml\n",
+        )
+        .unwrap();
+
+        let args = Args {
+            code: true,
+            ..base_args(temp_path)
+        };
+
+        let res = run_with_args(args, |_| Ok::<(), Box<dyn std::error::Error>>(()));
+        assert!(res.is_ok());
     }
 }
 

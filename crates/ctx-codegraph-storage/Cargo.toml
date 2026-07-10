@@ -19,4 +19,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 
 [dev-dependencies]
+ctx-codegraph-store = { path = "../ctx-codegraph-store" }
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
 tempfile = "3"

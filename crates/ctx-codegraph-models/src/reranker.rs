@@ -120,3 +120,43 @@ fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelErro
 
     Ok((input_ids, attention_mask))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn load_returns_model_not_found_for_missing_file() {
+        let missing = Path::new("/nonexistent/ctx-codegraph-models/reranker.onnx");
+        let tokenizer_dir = Path::new("/tmp");
+
+        let err = match RerankerModel::load(missing, tokenizer_dir) {
+            Err(err) => err,
+            Ok(_) => panic!("expected ModelNotFound error"),
+        };
+        assert!(matches!(err, ModelError::ModelNotFound(path) if path == missing));
+    }
+
+    #[test]
+    #[ignore = "requires local ONNX models; set CTX_TEST_MODELS=1 to run"]
+    fn score_pairs_empty_docs_returns_empty() {
+        if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let paths = crate::paths::ModelPaths::default_paths();
+        let reranker_path = paths
+            .reranker_onnx
+            .as_ref()
+            .expect("reranker model path");
+        let rerank_tokenizer = paths
+            .rerank_tokenizer
+            .as_ref()
+            .expect("rerank tokenizer dir");
+
+        let mut model = RerankerModel::load(reranker_path, rerank_tokenizer).unwrap();
+        let scores = model.score_pairs("query", &[]).unwrap();
+        assert!(scores.is_empty());
+    }
+}

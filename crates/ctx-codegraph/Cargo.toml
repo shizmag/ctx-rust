@@ -15,3 +15,8 @@ ctx-config = { path = "../ctx-config" }
 tempfile = "3"
 ctx-mcp = { path = "../ctx-mcp" }
 serde_json = "1"
+ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
+ctx-codegraph-lexical = { path = "../ctx-codegraph-lexical" }
+ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
+rusqlite = { version = "0.32", features = ["bundled"] }

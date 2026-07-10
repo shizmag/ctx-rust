@@ -12,7 +12,7 @@ pub struct GenericLspClient {
     next_id: usize,
 }
 
-fn reader_thread(mut reader: BufReader<std::process::ChildStdout>, tx: Sender<serde_json::Value>) {
+fn reader_thread<R: Read>(mut reader: BufReader<R>, tx: Sender<serde_json::Value>) {
     loop {
         let mut line = String::new();
         let mut content_length = None;
@@ -168,5 +168,33 @@ impl GenericLspClient {
 impl Drop for GenericLspClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::sync::mpsc::channel;
+    use std::thread;
+
+    #[test]
+    fn reader_thread_parses_content_length_messages() {
+        let payload = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
+        let raw = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let reader = BufReader::new(Cursor::new(raw.into_bytes()));
+            reader_thread(reader, tx);
+        });
+
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg.get("id").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            msg.get("result")
+                .and_then(|v| v.get("ok"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 }

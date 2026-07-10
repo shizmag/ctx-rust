@@ -199,6 +199,14 @@ mod tests {
     }
 
     #[test]
+    fn dense_index_open_creates_db() {
+        let dir = tempdir().unwrap();
+        let index = DenseIndex::open(dir.path()).unwrap();
+        assert!(index.db_path().exists());
+        assert!(index.db_path().ends_with("dense.sqlite"));
+    }
+
+    #[test]
     fn upsert_and_search_knn() {
         let dir = tempdir().unwrap();
         let mut index = DenseIndex::open(dir.path()).unwrap();
@@ -220,5 +228,119 @@ mod tests {
         let hits = index.search_knn(&query, 2).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].chunk_id, ChunkId(1));
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn upsert_rejects_wrong_embedding_dimension() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        let err = index
+            .upsert_batch(&[EmbeddingRecord {
+                chunk_id: ChunkId(1),
+                embedding: vec![0.1, 0.2, 0.3],
+            }])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected"));
+        assert!(err.contains(&EMBEDDING_DIM.to_string()));
+    }
+
+    #[test]
+    fn search_knn_rejects_wrong_query_dimension() {
+        let dir = tempdir().unwrap();
+        let index = DenseIndex::open(dir.path()).unwrap();
+        let err = index
+            .search_knn(&[0.1, 0.2], 1)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("query embedding has dim"));
+    }
+
+    #[test]
+    fn search_knn_respects_limit() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[
+                EmbeddingRecord {
+                    chunk_id: ChunkId(1),
+                    embedding: sample_embedding(1.0),
+                },
+                EmbeddingRecord {
+                    chunk_id: ChunkId(2),
+                    embedding: sample_embedding(2.0),
+                },
+                EmbeddingRecord {
+                    chunk_id: ChunkId(3),
+                    embedding: sample_embedding(3.0),
+                },
+            ])
+            .unwrap();
+
+        let hits = index.search_knn(&sample_embedding(2.0), 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_id, ChunkId(2));
+    }
+
+    #[test]
+    fn remove_chunk_ids_deletes_embeddings() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[
+                EmbeddingRecord {
+                    chunk_id: ChunkId(1),
+                    embedding: sample_embedding(1.0),
+                },
+                EmbeddingRecord {
+                    chunk_id: ChunkId(2),
+                    embedding: sample_embedding(2.0),
+                },
+            ])
+            .unwrap();
+
+        index.remove_chunk_ids(&[ChunkId(1)]).unwrap();
+        let hits = index.search_knn(&sample_embedding(1.0), 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_id, ChunkId(2));
+    }
+
+    #[test]
+    fn remove_empty_chunk_ids_is_noop() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[EmbeddingRecord {
+                chunk_id: ChunkId(1),
+                embedding: sample_embedding(1.0),
+            }])
+            .unwrap();
+        index.remove_chunk_ids(&[]).unwrap();
+        let hits = index.search_knn(&sample_embedding(1.0), 1).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn upsert_overwrites_existing_chunk() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[EmbeddingRecord {
+                chunk_id: ChunkId(1),
+                embedding: sample_embedding(1.0),
+            }])
+            .unwrap();
+        index
+            .upsert_batch(&[EmbeddingRecord {
+                chunk_id: ChunkId(1),
+                embedding: sample_embedding(99.0),
+            }])
+            .unwrap();
+
+        let hits = index.search_knn(&sample_embedding(99.0), 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_id, ChunkId(1));
+        assert!(hits[0].score > 0.99);
     }
 }

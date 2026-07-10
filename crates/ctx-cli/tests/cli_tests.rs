@@ -276,3 +276,108 @@ fn test_cli_mcp_install_help_and_dry_run() {
     let out = String::from_utf8(output.stdout).unwrap();
     assert!(out.contains("dry-run") || out.contains("Would update"));
 }
+
+#[test]
+fn test_cli_stats_command() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+    fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([temp_path.to_str().unwrap(), "stats"])
+        .output()
+        .expect("failed to run ctx stats");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ctx stats"));
+    assert!(stdout.contains("files="));
+    assert!(stdout.contains("tokens="));
+}
+
+#[test]
+fn test_cli_output_to_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+    fs::write(temp_path.join("lib.rs"), "fn alpha() {}\n").unwrap();
+    let out_file = temp_path.join("context.md");
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            temp_path.to_str().unwrap(),
+            "-C",
+            "--no-stats",
+            "-o",
+            out_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run ctx with -o");
+
+    assert!(output.status.success());
+    assert!(out_file.exists());
+    let written = fs::read_to_string(&out_file).unwrap();
+    assert!(written.contains("alpha"));
+}
+
+#[test]
+fn test_cli_list_hidden_flag() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+    fs::write(temp_path.join("visible.rs"), "fn visible() {}\n").unwrap();
+    fs::create_dir_all(temp_path.join("target")).unwrap();
+    fs::write(temp_path.join("target/hidden.rs"), "fn hidden() {}\n").unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([temp_path.to_str().unwrap(), "--list-hidden"])
+        .output()
+        .expect("failed to run ctx --list-hidden");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Hidden/Skipped items"));
+}
+
+#[test]
+fn test_cli_xml_format_output() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+    fs::write(temp_path.join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            temp_path.to_str().unwrap(),
+            "-C",
+            "-f",
+            "xml",
+            "--no-stats",
+        ])
+        .output()
+        .expect("failed to run ctx xml");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("<") || stdout.contains("xml"));
+}
+
+#[test]
+fn test_cli_healthcheck_invalid_format() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let output = cmd
+        .args([
+            temp_dir.path().to_str().unwrap(),
+            "healthcheck",
+            "--format",
+            "yaml",
+        ])
+        .output()
+        .expect("failed to run healthcheck");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unsupported format"));
+}

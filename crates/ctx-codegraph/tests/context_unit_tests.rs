@@ -1,9 +1,11 @@
 use ctx_codegraph::{
     ApproxTokenEstimator, ContextBudget, ContextCandidate, ContextQuery,
-    ContextRanker, EdgeDirection, GraphContextEdge, GraphRanker, HybridRanker, LanguageObject,
-    LanguageObjectKind, LexicalRanker, SourceRange, Symbol, SymbolId, SymbolKind, TextRange,
-    TokenEstimator, extract_snippet, is_subsequence, resolve_roots, tokenize,
+    ContextRanker, EdgeDirection, GraphContextEdge, GraphRanker, HybridRanker, HybridRetrievalOptions,
+    LanguageObject, LanguageObjectKind, LexicalRanker, RetrievalStrategy, SourceRange, Symbol,
+    SymbolId, SymbolKind, TextRange, TokenEstimator, extract_snippet, is_subsequence, resolve_roots,
+    tokenize,
 };
+use ctx_codegraph::model::GraphContextMode;
 use ctx_codegraph::storage::{init_schema, open_db, save_index};
 use ctx_codegraph::backend::{BackendId, ParserId};
 use ctx_codegraph::model::{
@@ -68,6 +70,40 @@ fn make_query(roots: Vec<LanguageObject>, query_string: &str, include_tests: boo
         roots,
         include_tests,
     }
+}
+
+// --- hybrid_retrieval.rs: RetrievalStrategy::from_str ---
+
+#[test]
+fn retrieval_strategy_from_str_all_variants() {
+    assert_eq!(RetrievalStrategy::from_str("graph"), RetrievalStrategy::Graph);
+    assert_eq!(RetrievalStrategy::from_str("GRAPH"), RetrievalStrategy::Graph);
+    assert_eq!(RetrievalStrategy::from_str("lexical"), RetrievalStrategy::Lexical);
+    assert_eq!(RetrievalStrategy::from_str("Lexical"), RetrievalStrategy::Lexical);
+    assert_eq!(RetrievalStrategy::from_str("dense"), RetrievalStrategy::Dense);
+    assert_eq!(RetrievalStrategy::from_str("DENSE"), RetrievalStrategy::Dense);
+    assert_eq!(RetrievalStrategy::from_str("hybrid"), RetrievalStrategy::Hybrid);
+    assert_eq!(RetrievalStrategy::from_str("unknown"), RetrievalStrategy::Hybrid);
+    assert_eq!(RetrievalStrategy::from_str(""), RetrievalStrategy::Hybrid);
+}
+
+#[test]
+fn hybrid_retrieval_options_default_values() {
+    let opts = HybridRetrievalOptions::default();
+    assert_eq!(opts.strategy, RetrievalStrategy::Hybrid);
+    assert_eq!(opts.graph_options.mode, GraphContextMode::Neighborhood);
+    assert_eq!(opts.hybrid_top_k, 30);
+    assert_eq!(opts.rrf_k, 60);
+    assert_eq!(opts.lexical_top_k, 50);
+    assert_eq!(opts.dense_top_k, 50);
+    assert!(!opts.enable_rerank);
+    assert_eq!(opts.rerank_top_k, 20);
+    assert_eq!(opts.expansion_max_children, 5);
+    assert_eq!(opts.graph_options.max_nodes, 200);
+    assert_eq!(opts.graph_options.max_files, 50);
+    assert!(opts.graph_options.with_snippets);
+    assert_eq!(opts.graph_options.context_lines, 3);
+    assert!(!opts.graph_options.include_tests);
 }
 
 // --- text.rs: tokenize ---

@@ -22,6 +22,13 @@ pub fn retrieve_context_for_service(
         );
     }
 
+    let mut effective_options = options.clone();
+    effective_options.enable_rerank =
+        effective_options.enable_rerank || config.enable_rerank.unwrap_or(false);
+    if let Some(k) = config.rerank_top_k {
+        effective_options.rerank_top_k = k;
+    }
+
     let backend = WorkspaceHybridBackend::try_with_config(service.repo_root(), config)
         .map_err(|e| CodeGraphError::Parse(e.to_string()))?
         .ok_or_else(|| {
@@ -37,6 +44,6 @@ pub fn retrieve_context_for_service(
         &backend,
         query,
         budget,
-        options,
+        &effective_options,
     )
 }

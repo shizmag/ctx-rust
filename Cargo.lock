@@ -504,6 +504,9 @@ name = "ctx-codegraph"
 version = "0.1.0"
 dependencies = [
  "ctx-codegraph-chunk",
+ "ctx-codegraph-lang",
+ "ctx-codegraph-lexical",
+ "ctx-codegraph-models",
  "ctx-codegraph-search",
  "ctx-codegraph-storage",
  "ctx-config",
@@ -542,6 +545,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "sha2",
+ "tempfile",
  "thiserror",
  "walkdir",
 ]
@@ -553,6 +557,7 @@ dependencies = [
  "ctx-codegraph-chunk",
  "ctx-codegraph-lang",
  "tantivy",
+ "tempfile",
  "thiserror",
 ]
 
@@ -562,7 +567,9 @@ version = "0.1.0"
 dependencies = [
  "ort",
  "serde",
+ "serde_json",
  "sha2",
+ "tempfile",
  "thiserror",
  "tokenizers",
 ]

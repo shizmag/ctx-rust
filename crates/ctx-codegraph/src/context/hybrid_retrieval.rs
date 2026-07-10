@@ -6,9 +6,9 @@ use crate::ContextRetrievalOptions;
 use crate::error::CodeGraphError;
 use crate::model::{
     EdgeDirection, GraphContextDiagnostic, GraphContextMode, LanguageObject,
-    LanguageObjectKind, SourceRange, SymbolId, extract_signature,
+    LanguageObjectKind, SourceRange, extract_signature,
 };
-use crate::storage::{load_chunk, load_symbol, load_chunks_by_ids};
+use crate::storage::{load_child_chunks, load_chunk, load_symbol, load_chunks_by_ids};
 use ctx_codegraph_chunk::ChunkId;
 use ctx_codegraph_search::{
     HybridQuery, HybridSearchBackend, HybridSearchOptions, HybridSearcher, SearchResult,
@@ -45,6 +45,7 @@ pub struct HybridRetrievalOptions {
     pub lexical_top_k: usize,
     pub dense_top_k: usize,
     pub enable_rerank: bool,
+    pub rerank_top_k: usize,
     pub expansion_max_children: usize,
 }
 
@@ -71,6 +72,7 @@ impl Default for HybridRetrievalOptions {
             lexical_top_k: 50,
             dense_top_k: 50,
             enable_rerank: false,
+            rerank_top_k: 20,
             expansion_max_children: 5,
         }
     }
@@ -105,12 +107,18 @@ pub fn retrieve_context_with_options(
         limit: options.hybrid_top_k,
     };
 
-    let results = match options.strategy {
+    let mut results = match options.strategy {
         RetrievalStrategy::Lexical => backend.search_lexical(hybrid_query).map_err(map_search_err)?,
         RetrievalStrategy::Dense => backend.search_dense(hybrid_query).map_err(map_search_err)?,
         RetrievalStrategy::Hybrid => searcher.search(hybrid_query).map_err(map_search_err)?,
         RetrievalStrategy::Graph => unreachable!(),
     };
+
+    if options.enable_rerank {
+        backend
+            .rerank_results(conn, query_str, &mut results, options.rerank_top_k)
+            .map_err(map_search_err)?;
+    }
 
     pack_from_search_results(
         conn,
@@ -134,6 +142,7 @@ fn pack_from_search_results(
     options: &HybridRetrievalOptions,
     results: &[SearchResult],
 ) -> Result<ContextPack, CodeGraphError> {
+    let _ = workspace;
     let mut diagnostics = Vec::new();
     let token_budget = budget.effective_budget().max(100);
 
@@ -233,6 +242,57 @@ fn pack_from_search_results(
                 estimated_tokens: parent_chunk.token_count.max(1),
                 reason: "parent chunk expansion".to_string(),
             });
+        }
+
+        if options.expansion_max_children > 0
+            && candidates.len() < options.graph_options.max_nodes
+            && let Some(chunk_id) = chunk.id
+        {
+            let children =
+                load_child_chunks(conn, chunk_id, options.expansion_max_children)?;
+            for child_chunk in children {
+                if candidates.len() >= options.graph_options.max_nodes {
+                    break;
+                }
+                let Some(child_sym_id) = child_chunk.symbol_id else {
+                    continue;
+                };
+                if !seen_symbols.insert(child_sym_id) {
+                    continue;
+                }
+                if let Ok(sym) = load_symbol(conn, child_sym_id) {
+                    let file_path = sym.file.clone();
+                    let range = SourceRange {
+                        start_line: child_chunk.start_line,
+                        start_col: 0,
+                        end_line: child_chunk.end_line,
+                        end_col: 0,
+                    };
+                    let node = LanguageObject {
+                        id: child_sym_id,
+                        name: sym.name.clone(),
+                        qualified_name: sym.qualified_name.clone(),
+                        kind: LanguageObjectKind::from(sym.kind.clone()),
+                        file_path: file_path.clone(),
+                        range,
+                        signature: extract_signature(&sym.file, &sym.range, sym.kind.clone()),
+                        language: Some(sym.language.as_str().to_string()),
+                    };
+                    candidates.push(ContextCandidate {
+                        node,
+                        distance: 1,
+                        direction: EdgeDirection::Outbound,
+                        via_edge: None,
+                        file_path,
+                        range,
+                        graph_score: relevance * 0.7,
+                        lexical_score: relevance * 0.7,
+                        combined_score: relevance * 0.7,
+                        estimated_tokens: child_chunk.token_count.max(1),
+                        reason: "child chunk expansion".to_string(),
+                    });
+                }
+            }
         }
     }
 

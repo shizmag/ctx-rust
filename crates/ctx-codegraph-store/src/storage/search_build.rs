@@ -5,7 +5,7 @@ use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{EdgeKind, FileId, SymbolId};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lexical::{IndexDoc, LexicalIndex};
-use ctx_codegraph_models::{file_fingerprint, EmbeddingModel, ModelPaths};
+use ctx_codegraph_models::{file_fingerprint, EmbeddingModel};
 use ctx_config::Config;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -211,4 +211,174 @@ fn load_occurrences_for_file(
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(CodeGraphError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::schema::init_schema;
+    use ctx_codegraph_lang::backend::BackendRegistry;
+    use ctx_codegraph_lang::model::{OccurrenceKind, ResolutionConfidence};
+    use std::path::PathBuf;
+
+    fn seed_file_with_graph_data(
+        conn: &Connection,
+    ) -> (FileId, SymbolId, SymbolId, PathBuf) {
+        let registry = BackendRegistry::new();
+        init_schema(conn, &registry).unwrap();
+
+        let abs_path = "/tmp/search_build_test/src/lib.rs";
+        let rel_path = "src/lib.rs";
+        conn.execute(
+            "INSERT INTO files (
+                path, rel_path, language, backend_id, mtime_ms, size_bytes,
+                content_hash, parser_id, parser_version, parser_config_hash,
+                indexed_at_ms, parse_status
+            ) VALUES (?1, ?2, 'rust', 'rust-backend', 1, 100, NULL, 'p', '1', '', 1, 'success')",
+            params![abs_path, rel_path],
+        )
+        .unwrap();
+        let file_id = FileId(conn.last_insert_rowid());
+
+        conn.execute(
+            "INSERT INTO symbols (
+                file_id, name, qualified_name, kind, language,
+                start_line, start_col, end_line, end_col,
+                body_start_line, body_start_col, body_end_line, body_end_col
+            ) VALUES (?1, 'mod', 'lib', 'Module', 'rust', 1, 1, 10, 1, NULL, NULL, NULL, NULL)",
+            params![file_id.0],
+        )
+        .unwrap();
+        let parent_id = SymbolId(conn.last_insert_rowid());
+
+        conn.execute(
+            "INSERT INTO symbols (
+                file_id, name, qualified_name, kind, language,
+                start_line, start_col, end_line, end_col,
+                body_start_line, body_start_col, body_end_line, body_end_col
+            ) VALUES (?1, 'greet', 'lib::greet', 'Function', 'rust', 2, 1, 4, 1, 2, 1, 4, 1)",
+            params![file_id.0],
+        )
+        .unwrap();
+        let child_id = SymbolId(conn.last_insert_rowid());
+
+        conn.execute(
+            "INSERT INTO edges (
+                kind, from_file_id, from_symbol_id, to_symbol_id, confidence
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                EdgeKind::Contains.as_str(),
+                file_id.0,
+                parent_id.0,
+                child_id.0,
+                ResolutionConfidence::LspExact.as_str(),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO occurrences (
+                file_id, enclosing_symbol_id, kind, raw_text,
+                start_line, start_col, end_line, end_col, language, backend_id
+            ) VALUES (?1, ?2, ?3, ?4, 3, 5, 3, 11, 'rust', 'rust-backend')",
+            params![file_id.0, child_id.0, OccurrenceKind::Call.as_str(), "helper()"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO occurrences (
+                file_id, enclosing_symbol_id, kind, raw_text,
+                start_line, start_col, end_line, end_col, language, backend_id
+            ) VALUES (?1, NULL, ?2, ?3, 1, 1, 1, 4, 'rust', 'rust-backend')",
+            params![
+                file_id.0,
+                "NotARealKind",
+                "mod",
+            ],
+        )
+        .unwrap();
+
+        (file_id, parent_id, child_id, PathBuf::from(abs_path))
+    }
+
+    #[test]
+    fn load_contains_parents_maps_child_to_parent() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (file_id, parent_id, child_id, _) = seed_file_with_graph_data(&conn);
+
+        let parents = load_contains_parents(&conn, file_id).unwrap();
+        assert_eq!(parents.len(), 1);
+        assert_eq!(parents.get(&child_id), Some(&parent_id));
+    }
+
+    #[test]
+    fn load_contains_parents_returns_empty_for_unknown_file() {
+        let conn = Connection::open_in_memory().unwrap();
+        let registry = BackendRegistry::new();
+        init_schema(&conn, &registry).unwrap();
+
+        let parents = load_contains_parents(&conn, FileId(999)).unwrap();
+        assert!(parents.is_empty());
+    }
+
+    #[test]
+    fn load_occurrences_for_file_loads_rows_and_defaults_unknown_kind() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (file_id, _parent_id, child_id, path) = seed_file_with_graph_data(&conn);
+
+        let occurrences = load_occurrences_for_file(&conn, file_id, &path).unwrap();
+        assert_eq!(occurrences.len(), 2);
+
+        let call = occurrences
+            .iter()
+            .find(|o| o.raw_text == "helper()")
+            .expect("call occurrence");
+        assert_eq!(call.kind, OccurrenceKind::Call);
+        assert_eq!(call.enclosing_symbol, Some(child_id));
+        assert_eq!(call.file, path);
+        assert_eq!(call.range.start_line, 3);
+
+        let unknown = occurrences
+            .iter()
+            .find(|o| o.raw_text == "mod")
+            .expect("unknown-kind occurrence");
+        assert_eq!(unknown.kind, OccurrenceKind::Reference);
+        assert!(unknown.enclosing_symbol.is_none());
+    }
+
+    #[test]
+    fn file_path_for_chunk_returns_rel_path() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (file_id, _, _, _) = seed_file_with_graph_data(&conn);
+
+        let rel_path = file_path_for_chunk(&conn, file_id).unwrap();
+        assert_eq!(rel_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn write_meta_persists_key_value() {
+        let conn = Connection::open_in_memory().unwrap();
+        let registry = BackendRegistry::new();
+        init_schema(&conn, &registry).unwrap();
+
+        write_meta(&conn, "test_key", "test_value").unwrap();
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params!["test_key"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "test_value");
+
+        write_meta(&conn, "test_key", "updated").unwrap();
+        let updated: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params!["test_key"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(updated, "updated");
+    }
 }
