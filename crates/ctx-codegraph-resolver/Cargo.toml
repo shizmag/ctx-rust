@@ -1,0 +1,11 @@
+[package]
+name = "ctx-codegraph-resolver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

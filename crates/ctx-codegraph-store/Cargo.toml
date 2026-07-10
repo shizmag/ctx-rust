@@ -1,16 +1,16 @@
 [package]
-name = "ctx-codegraph-storage"
+name = "ctx-codegraph-store"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
-ctx-codegraph-store = { path = "../ctx-codegraph-store" }
 ctx-codegraph-resolver = { path = "../ctx-codegraph-resolver" }
-ctx-lang-rust = { path = "../ctx-lang-rust" }
-ctx-lang-python = { path = "../ctx-lang-python" }
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
+walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -11,7 +11,13 @@ members = [
     "crates/ctx-models",
     "crates/ctx-test",
     "crates/ctx-dto",
+    "crates/ctx-codegraph-lang",
     "crates/ctx-codegraph-storage",
+    "crates/ctx-codegraph-store",
+    "crates/ctx-codegraph-resolver",
+    "crates/ctx-lang-rust",
+    "crates/ctx-lang-python",
+    "crates/ctx-codegraph-search",
     "crates/ctx-mcp",
     "crates/ctx-codegraph",
 ]

@@ -337,18 +337,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctx-codegraph-lang"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "sha2",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
+name = "ctx-codegraph-resolver"
+version = "0.1.0"
+dependencies = [
+ "ctx-codegraph-lang",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ctx-codegraph-search"
+version = "0.1.0"
+dependencies = [
+ "ctx-codegraph-lang",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "ctx-codegraph-storage"
 version = "0.1.0"
 dependencies = [
+ "ctx-codegraph-lang",
+ "ctx-codegraph-resolver",
+ "ctx-codegraph-store",
+ "ctx-lang-python",
+ "ctx-lang-rust",
+ "rusqlite",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ctx-codegraph-store"
+version = "0.1.0"
+dependencies = [
+ "ctx-codegraph-lang",
+ "ctx-codegraph-resolver",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror",
- "tree-sitter",
- "tree-sitter-python",
- "tree-sitter-rust",
  "walkdir",
 ]
 
@@ -387,6 +428,28 @@ name = "ctx-filter"
 version = "0.1.0"
 dependencies = [
  "ctx-models",
+]
+
+[[package]]
+name = "ctx-lang-python"
+version = "0.1.0"
+dependencies = [
+ "ctx-codegraph-lang",
+ "ctx-codegraph-resolver",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-python",
+]
+
+[[package]]
+name = "ctx-lang-rust"
+version = "0.1.0"
+dependencies = [
+ "ctx-codegraph-lang",
+ "ctx-codegraph-resolver",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-rust",
 ]
 
 [[package]]

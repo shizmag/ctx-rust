@@ -1,10 +1,10 @@
-pub mod registry;
-pub mod traits;
-
-pub use registry::{BackendRegistry, global_registry};
-#[cfg(test)]
-pub use registry::test_registry_with_mock;
-pub use traits::{
-    BackendId, BackendMetadata, LanguageBackend, ParseInput, ParsedFile, ParserBackend, ParserId,
-    ResolveInput, ResolveOutput, ResolverBackend, ResolverId, WorkspaceMarker,
+pub use ctx_codegraph_lang::backend::{
+    BackendId, BackendMetadata, BackendRegistry, LanguageBackend, ParseInput, ParsedFile,
+    ParserBackend, ParserId, ResolveInput, ResolveOutput, ResolverBackend, ResolverId,
+    WorkspaceMarker,
 };
+
+pub use crate::registry::global_registry;
+
+#[cfg(test)]
+pub use crate::registry::test_registry_with_mock;

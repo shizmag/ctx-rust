@@ -1,5 +1,5 @@
-pub mod python;
-pub mod rust;
+pub use ctx_lang_python as python;
+pub use ctx_lang_rust as rust;
 
 #[cfg(test)]
 pub mod mock;
