@@ -137,6 +137,59 @@ impl std::fmt::Display for ResolutionConfidence {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ExtractionTier {
+    Fast = 1,
+    Balanced = 2,
+    Full = 3,
+}
+
+impl ExtractionTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Balanced => "balanced",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "fast" => Some(Self::Fast),
+            "balanced" => Some(Self::Balanced),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ExtractionTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Default for ExtractionTier {
+    fn default() -> Self {
+        Self::Fast
+    }
+}
+
+impl rusqlite::types::ToSql for ExtractionTier {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.as_str().to_sql()
+    }
+}
+
+impl rusqlite::types::FromSql for ExtractionTier {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        Self::from_str(&s).ok_or_else(|| {
+            rusqlite::types::FromSqlError::Other(format!("Invalid ExtractionTier: {}", s).into())
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextRange {
     pub start_line: usize,
@@ -145,7 +198,7 @@ pub struct TextRange {
     pub end_col: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     pub id: Option<SymbolId>,
     pub file_id: Option<FileId>,
@@ -156,7 +209,27 @@ pub struct Symbol {
     pub file: PathBuf,
     pub range: TextRange,
     pub body_range: Option<TextRange>,
+    #[serde(default)]
+    pub nesting_depth: i64,
+    #[serde(default)]
+    pub lines_of_code: i64,
+    #[serde(default)]
+    pub complexity_proxy: i64,
+    #[serde(default)]
+    pub param_count: i64,
+    #[serde(default)]
+    pub parent_symbol_id: Option<SymbolId>,
+    #[serde(default)]
+    pub fan_in: i64,
+    #[serde(default)]
+    pub fan_out: i64,
+    #[serde(default)]
+    pub coupling: f64,
+    #[serde(default)]
+    pub cohesion: f64,
 }
+
+impl Eq for Symbol {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum OccurrenceKind {
@@ -562,6 +635,8 @@ pub struct FileSnapshot {
 
     pub indexed_at_ms: Option<i64>,
     pub parse_status: FileParseStatus,
+    #[serde(default)]
+    pub max_tier: ExtractionTier,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

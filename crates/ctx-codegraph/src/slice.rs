@@ -90,7 +90,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_test_symbol(id: i64, name: &str, kind: SymbolKind) -> Symbol {
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(id)),
             file_id: None,
             name: name.to_string(),

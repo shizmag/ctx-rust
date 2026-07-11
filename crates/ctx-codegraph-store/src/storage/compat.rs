@@ -31,7 +31,7 @@ pub fn check_db_compatibility_with_registry(
 
     // 1. Schema version
     let schema_version = get_meta("schema_version");
-    if schema_version.as_deref() != Some("5") {
+    if schema_version.as_deref() != Some("6") {
         return Ok(Some(RebuildReason::SchemaVersionChanged));
     }
 

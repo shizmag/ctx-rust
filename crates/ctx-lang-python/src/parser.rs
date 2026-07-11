@@ -71,7 +71,7 @@ impl ParserBackend for PythonParser {
             occurrences: Vec::new(),
         };
 
-        state.visit(tree.root_node(), None, None);
+        state.visit(tree.root_node(), None, None, None);
 
         Ok(ParsedFile {
             symbols: state.symbols,
@@ -165,16 +165,104 @@ fn trim_body_range(
     }
 }
 
+fn compute_python_nesting_depth(node: Node, current_depth: i64) -> i64 {
+    let is_nesting_node = match node.kind() {
+        "if_statement" | "elif_clause" | "else_clause" | "for_statement" | "while_statement" | "except_clause" | "with_statement" => true,
+        _ => false,
+    };
+    let next_depth = if is_nesting_node { current_depth + 1 } else { current_depth };
+    let mut max_depth = next_depth;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        max_depth = max_depth.max(compute_python_nesting_depth(child, next_depth));
+    }
+    max_depth
+}
+
+fn compute_python_complexity_proxy(node: Node) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "if_statement" | "elif_clause" | "for_statement" | "while_statement" | "except_clause" | "conditional_expression" => {
+                count += 1;
+            }
+            _ => {}
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn compute_python_param_count(node: Node) -> i64 {
+    if let Some(params_node) = node.child_by_field_name("parameters") {
+        let mut count = 0;
+        let mut cursor = params_node.walk();
+        for child in params_node.children(&mut cursor) {
+            let k = child.kind();
+            if k != "(" && k != ")" && k != "," {
+                count += 1;
+            }
+        }
+        count
+    } else {
+        0
+    }
+}
+
 impl<'a> ParserState<'a> {
+    fn create_symbol(
+        &self,
+        name: String,
+        qualified_name: String,
+        kind: SymbolKind,
+        range: TextRange,
+        body_range: Option<TextRange>,
+        node: Node,
+        current_parent_idx: Option<usize>,
+    ) -> Symbol {
+        let lines_of_code = (range.end_line as i64 - range.start_line as i64 + 1).max(1);
+        let nesting_depth = compute_python_nesting_depth(node, 0);
+        let complexity_proxy = 1 + compute_python_complexity_proxy(node);
+        let param_count = compute_python_param_count(node);
+        let parent_symbol_id = current_parent_idx.map(|idx| ctx_codegraph_lang::model::SymbolId(idx as i64));
+
+        Symbol {
+            id: None,
+            file_id: None,
+            name,
+            qualified_name,
+            kind,
+            language: Language("python".to_string()),
+            file: self.file_path.clone(),
+            range,
+            body_range,
+            nesting_depth,
+            lines_of_code,
+            complexity_proxy,
+            param_count,
+            parent_symbol_id,
+            fan_in: 0,
+            fan_out: 0,
+            coupling: 0.0,
+            cohesion: 0.0,
+        }
+    }
+
     fn visit(
         &mut self,
         node: Node,
         current_class: Option<String>,
         current_function_idx: Option<usize>,
+        current_parent_idx: Option<usize>,
     ) {
         let kind = node.kind();
         let mut next_class = current_class.clone();
         let mut next_function_idx = current_function_idx;
+        let mut next_parent_idx = current_parent_idx;
 
         match kind {
             "class_definition" => {
@@ -191,24 +279,24 @@ impl<'a> ParserState<'a> {
                         .child_by_field_name("body")
                         .map(|b| trim_body_range(self.source, range.clone(), to_text_range(b.range())));
 
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
-                        name: name.clone(),
+                    let symbol = self.create_symbol(
+                        name.clone(),
                         qualified_name,
-                        kind: SymbolKind::Class,
-                        language: Language("python".to_string()),
-                        file: self.file_path.clone(),
+                        SymbolKind::Class,
                         range,
                         body_range,
-                    };
+                        node,
+                        current_parent_idx,
+                    );
 
+                    let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
 
                     next_class = Some(match &current_class {
                         Some(p) => format!("{}::{}", p, name),
                         None => name,
                     });
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "function_definition" => {
@@ -231,21 +319,20 @@ impl<'a> ParserState<'a> {
                         None => format!("{}::{}", self.file_stem, name),
                     };
 
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
+                    let symbol = self.create_symbol(
                         name,
                         qualified_name,
                         kind,
-                        language: Language("python".to_string()),
-                        file: self.file_path.clone(),
                         range,
                         body_range,
-                    };
+                        node,
+                        current_parent_idx,
+                    );
 
                     let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
                     next_function_idx = Some(symbol_idx);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "call" => {
@@ -291,7 +378,7 @@ impl<'a> ParserState<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.visit(child, next_class.clone(), next_function_idx);
+            self.visit(child, next_class.clone(), next_function_idx, next_parent_idx);
         }
     }
 }

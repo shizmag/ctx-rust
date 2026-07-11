@@ -21,6 +21,7 @@ pub struct BuildIndexOptions {
     /// `None` = auto-enable when embedding model path is configured (unless disabled).
     pub with_lexical: Option<bool>,
     pub force_search_rebuild: bool,
+    pub extraction_tier: Option<crate::model::ExtractionTier>,
 }
 
 impl Default for BuildIndexOptions {
@@ -33,6 +34,7 @@ impl Default for BuildIndexOptions {
             with_embeddings: None,
             with_lexical: None,
             force_search_rebuild: false,
+            extraction_tier: None,
         }
     }
 }
@@ -116,7 +118,7 @@ pub fn create_file_snapshot_with_registry(
         .find_by_path(abs_path)
         .expect("No backend registered for path");
     let parser = backend.parser();
-    let parser_config_hash = backend.config_fingerprint(&BuildIndexOptions {
+    let parser_config_hash = backend.config_fingerprint(&BuildIndexOptions { extraction_tier: None,
         use_lsp: false,
         max_depth: None,
         include_tests,
@@ -126,7 +128,7 @@ pub fn create_file_snapshot_with_registry(
         force_search_rebuild: false,
     });
 
-    FileSnapshot {
+    FileSnapshot { max_tier: Default::default(),
         file_id: None,
         rel_path,
         abs_path: abs_path.to_path_buf(),
@@ -202,6 +204,7 @@ pub fn build_index_with_registry(
                 options.include_tests,
                 registry,
             );
+            source_file.max_tier = options.extraction_tier.unwrap_or(crate::model::ExtractionTier::Fast);
 
             let parsed = match backend.parser().parse_file(ParseInput { path: &path }) {
                 Ok(res) => res,
@@ -388,7 +391,7 @@ mod tests {
             }
 
             let path = input.path.to_path_buf();
-            let caller = Symbol {
+            let caller = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "caller".to_string(),
@@ -409,7 +412,7 @@ mod tests {
                     end_col: 20,
                 }),
             };
-            let callee = Symbol {
+            let callee = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "callee".to_string(),
@@ -425,7 +428,7 @@ mod tests {
                 },
                 body_range: None,
             };
-            let test_sym = Symbol {
+            let test_sym = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "test_case".to_string(),
@@ -619,7 +622,7 @@ mod tests {
         assert!(auto.builds_lexical(true));
         assert!(auto.builds_chunks(true));
 
-        let disabled = BuildIndexOptions {
+        let disabled = BuildIndexOptions { extraction_tier: None,
             with_embeddings: Some(false),
             with_lexical: Some(false),
             ..Default::default()
@@ -721,7 +724,7 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("main.idxtest"), "content").unwrap();
 
-        let options = BuildIndexOptions {
+        let options = BuildIndexOptions { extraction_tier: None,
             include_tests: false,
             ..Default::default()
         };
@@ -754,7 +757,7 @@ mod tests {
         let mut registry = BackendRegistry::new();
         registry.register(Box::new(LspIndexTestBackend::new()));
 
-        let options = BuildIndexOptions {
+        let options = BuildIndexOptions { extraction_tier: None,
             use_lsp: true,
             ..Default::default()
         };

@@ -71,7 +71,7 @@ impl ParserBackend for RustParser {
             occurrences: Vec::new(),
         };
 
-        state.visit(tree.root_node(), None, None, None);
+        state.visit(tree.root_node(), None, None, None, None);
 
         Ok(ParsedFile {
             symbols: state.symbols,
@@ -110,18 +110,106 @@ fn clean_type_name(s: &str) -> String {
     clean.to_string()
 }
 
+fn compute_rust_nesting_depth(node: Node, current_depth: i64) -> i64 {
+    let is_nesting_node = match node.kind() {
+        "block" | "match_arm" | "if_expression" | "for_expression" | "while_expression" | "loop_expression" => true,
+        _ => false,
+    };
+    let next_depth = if is_nesting_node { current_depth + 1 } else { current_depth };
+    let mut max_depth = next_depth;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        max_depth = max_depth.max(compute_rust_nesting_depth(child, next_depth));
+    }
+    max_depth
+}
+
+fn compute_rust_complexity_proxy(node: Node) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "if_expression" | "match_arm" | "for_expression" | "while_expression" | "loop_expression" | "question_mark" => {
+                count += 1;
+            }
+            _ => {}
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn compute_rust_param_count(node: Node) -> i64 {
+    if let Some(params_node) = node.child_by_field_name("parameters") {
+        let mut count = 0;
+        let mut cursor = params_node.walk();
+        for child in params_node.children(&mut cursor) {
+            let k = child.kind();
+            if k != "(" && k != ")" && k != "," && k != "|" {
+                count += 1;
+            }
+        }
+        count
+    } else {
+        0
+    }
+}
+
 impl<'a> ParserState<'a> {
+    fn create_symbol(
+        &self,
+        name: String,
+        qualified_name: String,
+        kind: SymbolKind,
+        range: TextRange,
+        body_range: Option<TextRange>,
+        node: Node,
+        current_parent_idx: Option<usize>,
+    ) -> Symbol {
+        let lines_of_code = (range.end_line as i64 - range.start_line as i64 + 1).max(1);
+        let nesting_depth = compute_rust_nesting_depth(node, 0);
+        let complexity_proxy = 1 + compute_rust_complexity_proxy(node);
+        let param_count = compute_rust_param_count(node);
+        let parent_symbol_id = current_parent_idx.map(|idx| ctx_codegraph_lang::model::SymbolId(idx as i64));
+
+        Symbol {
+            id: None,
+            file_id: None,
+            name,
+            qualified_name,
+            kind,
+            language: Language("rust".to_string()),
+            file: self.file_path.clone(),
+            range,
+            body_range,
+            nesting_depth,
+            lines_of_code,
+            complexity_proxy,
+            param_count,
+            parent_symbol_id,
+            fan_in: 0,
+            fan_out: 0,
+            coupling: 0.0,
+            cohesion: 0.0,
+        }
+    }
+
     fn visit(
         &mut self,
         node: Node,
         current_impl: Option<String>,
         current_function_idx: Option<usize>,
         current_modules: Option<String>,
+        current_parent_idx: Option<usize>,
     ) {
         let kind = node.kind();
         let mut next_impl = current_impl.clone();
         let mut next_function_idx = current_function_idx;
         let mut next_modules = current_modules.clone();
+        let mut next_parent_idx = current_parent_idx;
 
         match kind {
             "impl_item" => {
@@ -143,18 +231,18 @@ impl<'a> ParserState<'a> {
                 next_impl = Some(impl_name.clone());
 
                 let range = to_text_range(node.range());
-                let symbol = Symbol {
-                    id: None,
-                    file_id: None,
-                    name: impl_name.clone(),
-                    qualified_name: impl_name.clone(),
-                    kind: SymbolKind::Impl,
-                    language: Language("rust".to_string()),
-                    file: self.file_path.clone(),
+                let symbol = self.create_symbol(
+                    impl_name.clone(),
+                    impl_name.clone(),
+                    SymbolKind::Impl,
                     range,
-                    body_range: None,
-                };
+                    None,
+                    node,
+                    current_parent_idx,
+                );
+                let symbol_idx = self.symbols.len();
                 self.symbols.push(symbol);
+                next_parent_idx = Some(symbol_idx);
             }
             "mod_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
@@ -171,18 +259,18 @@ impl<'a> ParserState<'a> {
                         None => mod_name.clone(),
                     });
 
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
-                        name: mod_name,
-                        qualified_name: qname,
-                        kind: SymbolKind::Module,
-                        language: Language("rust".to_string()),
-                        file: self.file_path.clone(),
+                    let symbol = self.create_symbol(
+                        mod_name,
+                        qname,
+                        SymbolKind::Module,
                         range,
-                        body_range: None,
-                    };
+                        None,
+                        node,
+                        current_parent_idx,
+                    );
+                    let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "struct_item" => {
@@ -193,18 +281,18 @@ impl<'a> ParserState<'a> {
                         Some(ref m) => format!("{}::{}::{}", self.file_stem, m, name),
                         None => format!("{}::{}", self.file_stem, name),
                     };
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
-                        name: name.clone(),
+                    let symbol = self.create_symbol(
+                        name.clone(),
                         qualified_name,
-                        kind: SymbolKind::Struct,
-                        language: Language("rust".to_string()),
-                        file: self.file_path.clone(),
+                        SymbolKind::Struct,
                         range,
-                        body_range: None,
-                    };
+                        None,
+                        node,
+                        current_parent_idx,
+                    );
+                    let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "enum_item" => {
@@ -215,18 +303,18 @@ impl<'a> ParserState<'a> {
                         Some(ref m) => format!("{}::{}::{}", self.file_stem, m, name),
                         None => format!("{}::{}", self.file_stem, name),
                     };
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
-                        name: name.clone(),
+                    let symbol = self.create_symbol(
+                        name.clone(),
                         qualified_name,
-                        kind: SymbolKind::Enum,
-                        language: Language("rust".to_string()),
-                        file: self.file_path.clone(),
+                        SymbolKind::Enum,
                         range,
-                        body_range: None,
-                    };
+                        None,
+                        node,
+                        current_parent_idx,
+                    );
+                    let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "trait_item" => {
@@ -237,18 +325,18 @@ impl<'a> ParserState<'a> {
                         Some(ref m) => format!("{}::{}::{}", self.file_stem, m, name),
                         None => format!("{}::{}", self.file_stem, name),
                     };
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
-                        name: name.clone(),
+                    let symbol = self.create_symbol(
+                        name.clone(),
                         qualified_name,
-                        kind: SymbolKind::Trait,
-                        language: Language("rust".to_string()),
-                        file: self.file_path.clone(),
+                        SymbolKind::Trait,
                         range,
-                        body_range: None,
-                    };
+                        None,
+                        node,
+                        current_parent_idx,
+                    );
+                    let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "function_item" => {
@@ -297,34 +385,20 @@ impl<'a> ParserState<'a> {
                         .child_by_field_name("body")
                         .map(|b| to_text_range(b.range()));
 
-                    // Light extraction of signature using tree-sitter fields (Rust parser).
-                    // Currently surfaced via post-load extract_signature in model for MCP outputs
-                    // (disambig, candidates, context). Future: store in Symbol/LanguageObject + DB.
-                    let _sig = {
-                        let params = node.child_by_field_name("parameters")
-                            .map(|p| get_node_text(p, self.source).to_string())
-                            .unwrap_or_else(|| "()".to_string());
-                        let ret = node.child_by_field_name("return_type")
-                            .map(|r| format!(" {}", get_node_text(r, self.source).trim()))
-                            .unwrap_or_default();
-                        format!("fn {}{}{}", name, params, ret)
-                    };
-
-                    let symbol = Symbol {
-                        id: None,
-                        file_id: None,
+                    let symbol = self.create_symbol(
                         name,
                         qualified_name,
                         kind,
-                        language: Language("rust".to_string()),
-                        file: self.file_path.clone(),
                         range,
                         body_range,
-                    };
+                        node,
+                        current_parent_idx,
+                    );
 
                     let symbol_idx = self.symbols.len();
                     self.symbols.push(symbol);
                     next_function_idx = Some(symbol_idx);
+                    next_parent_idx = Some(symbol_idx);
                 }
             }
             "call_expression" => {
@@ -357,15 +431,13 @@ impl<'a> ParserState<'a> {
                 next_impl.clone(),
                 next_function_idx,
                 next_modules.clone(),
+                next_parent_idx,
             );
         }
     }
 }
 
 pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<Occurrence>), CodeGraphError> {
-    // Delegate to RustParser (which holds the reusable instance) to keep
-    // public API and output identical. Each direct call creates a fresh
-    // instance (init+set once), matching prior behavior.
     let p = RustParser::new();
     let parsed = p.parse_file(ParseInput { path })?;
     Ok((parsed.symbols, parsed.occurrences))

@@ -569,7 +569,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
     let mut index = CodeIndex {
         root: dir.to_path_buf(),
         files: vec![
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(1)),
                 rel_path: PathBuf::from("auth_service.rs"),
                 abs_path: dir.join("auth_service.rs"),
@@ -585,7 +585,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(2)),
                 rel_path: PathBuf::from("vendor/generated.rs"),
                 abs_path: dir.join("vendor/generated.rs"),
@@ -601,7 +601,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(3)),
                 rel_path: PathBuf::from("tests/noisy_test.rs"),
                 abs_path: dir.join("tests/noisy_test.rs"),
@@ -619,7 +619,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
             },
         ],
         symbols: vec![
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(1)),
                 file_id: Some(FileId(1)),
                 name: "AuthService".to_string(),
@@ -635,7 +635,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(2)),
                 file_id: Some(FileId(1)),
                 name: "authenticate".to_string(),
@@ -651,7 +651,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(3)),
                 file_id: Some(FileId(2)),
                 name: "VendorHelper".to_string(),
@@ -667,7 +667,7 @@ fn setup_roots_db(dir: &std::path::Path) -> rusqlite::Connection {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(4)),
                 file_id: Some(FileId(3)),
                 name: "noisy_test".to_string(),

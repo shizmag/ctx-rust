@@ -49,7 +49,7 @@ pub fn read_resource(service: &GraphContextService, uri: &str) -> Result<String,
 fn read_index_status(service: &GraphContextService) -> Result<String, String> {
     let root = service.repo_root();
     let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
-    let options = BuildIndexOptions {
+    let options = BuildIndexOptions { extraction_tier: None,
         use_lsp: false,
         ..Default::default()
     };

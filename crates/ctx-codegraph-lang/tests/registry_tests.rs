@@ -308,7 +308,7 @@ fn should_index_path_respects_registry_and_skip_dirs() {
 #[test]
 fn backend_metadata_includes_config_fingerprint() {
     let backend = StubBackend::new();
-    let config = BuildIndexOptions {
+    let config = BuildIndexOptions { extraction_tier: None,
         include_tests: true,
         ..BuildIndexOptions::default()
     };

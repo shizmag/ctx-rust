@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 #[test]
 fn test_name_only_resolution_and_ambiguity() {
     let symbols = vec![
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: None,
             file_id: None,
             name: "foo".to_string(),
@@ -23,7 +23,7 @@ fn test_name_only_resolution_and_ambiguity() {
             },
             body_range: None,
         },
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: None,
             file_id: None,
             name: "bar".to_string(),
@@ -39,7 +39,7 @@ fn test_name_only_resolution_and_ambiguity() {
             },
             body_range: None,
         },
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: None,
             file_id: None,
             name: "bar".to_string(),

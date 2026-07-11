@@ -37,9 +37,9 @@ pub fn save_index(
             INSERT INTO files (
                 path, rel_path, language, backend_id, mtime_ms, size_bytes,
                 content_hash, parser_id, parser_version, parser_config_hash,
-                indexed_at_ms, parse_status
+                indexed_at_ms, parse_status, max_tier
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
         ",
         )?;
         for file in &mut index.files {
@@ -70,6 +70,7 @@ pub fn save_index(
                     )
                 }),
                 parse_status_str,
+                file.max_tier.as_str(),
             ])?;
             let file_id = FileId(row_id);
             file.file_id = Some(file_id);
@@ -85,8 +86,10 @@ pub fn save_index(
             INSERT INTO symbols (
                 file_id, name, qualified_name, kind, language,
                 start_line, start_col, end_line, end_col,
-                body_start_line, body_start_col, body_end_line, body_end_col
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                body_start_line, body_start_col, body_end_line, body_end_col,
+                nesting_depth, lines_of_code, complexity_proxy, param_count,
+                parent_symbol_id, fan_in, fan_out, coupling, cohesion
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
         ",
         )?;
         for (i, sym) in index.symbols.iter_mut().enumerate() {
@@ -105,6 +108,10 @@ pub fn save_index(
             let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
             let body_end_col = sym.body_range.as_ref().map(|r| r.end_col);
 
+            let parent_id_db = sym.parent_symbol_id.map(|id| {
+                temp_sym_to_db_id.get(&id).copied().unwrap_or(id)
+            });
+
             let row_id = stmt.insert(rusqlite::params![
                 file_id.0,
                 sym.name,
@@ -119,6 +126,15 @@ pub fn save_index(
                 body_start_col,
                 body_end_line,
                 body_end_col,
+                sym.nesting_depth,
+                sym.lines_of_code,
+                sym.complexity_proxy,
+                sym.param_count,
+                parent_id_db.map(|id| id.0),
+                sym.fan_in,
+                sym.fan_out,
+                sym.coupling,
+                sym.cohesion,
             ])?;
 
             let db_id = SymbolId(row_id);
@@ -271,7 +287,7 @@ pub fn save_index(
 
 pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex, CodeGraphError> {
     let mut files = Vec::new();
-    let mut stmt = conn.prepare("SELECT id, path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, indexed_at_ms, parse_status FROM files")?;
+    let mut stmt = conn.prepare("SELECT id, path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, indexed_at_ms, parse_status, max_tier FROM files")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -287,6 +303,9 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let parser_config_hash: String = row.get(10)?;
         let indexed_at_ms: Option<i64> = row.get(11)?;
         let parse_status_str: String = row.get(12)?;
+        let max_tier_str: String = row.get(13)?;
+        let max_tier = ctx_codegraph_lang::model::ExtractionTier::from_str(&max_tier_str)
+            .unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Fast);
 
         files.push(FileSnapshot {
             file_id: Some(FileId(id)),
@@ -304,6 +323,7 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
             indexed_at_ms,
             parse_status: FileParseStatus::from_str(&parse_status_str)
                 .unwrap_or(FileParseStatus::Success),
+            max_tier,
         });
     }
 
@@ -317,7 +337,9 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         "
         SELECT id, file_id, name, qualified_name, kind, language,
                start_line, start_col, end_line, end_col,
-               body_start_line, body_start_col, body_end_line, body_end_col
+               body_start_line, body_start_col, body_end_line, body_end_col,
+               nesting_depth, lines_of_code, complexity_proxy, param_count,
+               parent_symbol_id, fan_in, fan_out, coupling, cohesion
         FROM symbols
     ",
     )?;
@@ -339,6 +361,16 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
         let body_start_col: Option<usize> = row.get(11)?;
         let body_end_line: Option<usize> = row.get(12)?;
         let body_end_col: Option<usize> = row.get(13)?;
+
+        let nesting_depth: i64 = row.get(14)?;
+        let lines_of_code: i64 = row.get(15)?;
+        let complexity_proxy: i64 = row.get(16)?;
+        let param_count: i64 = row.get(17)?;
+        let parent_symbol_id: Option<i64> = row.get(18)?;
+        let fan_in: i64 = row.get(19)?;
+        let fan_out: i64 = row.get(20)?;
+        let coupling: f64 = row.get(21)?;
+        let cohesion: f64 = row.get(22)?;
 
         let body_range = if let (Some(sl), Some(sc), Some(el), Some(ec)) =
             (body_start_line, body_start_col, body_end_line, body_end_col)
@@ -370,6 +402,15 @@ pub fn load_index(conn: &rusqlite::Connection, root: &Path) -> Result<CodeIndex,
                 end_col,
             },
             body_range,
+            nesting_depth,
+            lines_of_code,
+            complexity_proxy,
+            param_count,
+            parent_symbol_id: parent_symbol_id.map(SymbolId),
+            fan_in,
+            fan_out,
+            coupling,
+            cohesion,
         });
     }
 
@@ -596,7 +637,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
@@ -613,7 +654,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "run_pipeline".to_string(),
@@ -629,7 +670,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "load".to_string(),

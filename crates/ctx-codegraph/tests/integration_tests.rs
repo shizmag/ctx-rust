@@ -11,7 +11,7 @@ fn test_slices() {
         root: PathBuf::from("."),
         files: vec![],
         symbols: vec![
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(0)),
                 file_id: None,
                 name: "a".to_string(),
@@ -27,7 +27,7 @@ fn test_slices() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(1)),
                 file_id: None,
                 name: "b".to_string(),
@@ -43,7 +43,7 @@ fn test_slices() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(2)),
                 file_id: None,
                 name: "c".to_string(),
@@ -175,7 +175,7 @@ fn test_integration_with_rust_analyzer() {
 
     let (index, _) = rebuild_index_db(
         dir.path(),
-        BuildIndexOptions { use_lsp: true, ..Default::default() },
+        BuildIndexOptions { extraction_tier: None, use_lsp: true, ..Default::default() },
     )
     .unwrap();
 
@@ -194,7 +194,7 @@ fn test_service_context_selection() {
 
     let mut index = CodeIndex {
         root: dir.path().to_path_buf(),
-        files: vec![FileSnapshot {
+        files: vec![FileSnapshot { max_tier: Default::default(),
             file_id: None,
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: dir.path().join("src/lib.rs"),
@@ -211,7 +211,7 @@ fn test_service_context_selection() {
             parse_status: FileParseStatus::Success,
         }],
         symbols: vec![
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(1)),
                 file_id: None,
                 name: "a".to_string(),
@@ -227,7 +227,7 @@ fn test_service_context_selection() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(2)),
                 file_id: None,
                 name: "b".to_string(),
@@ -243,7 +243,7 @@ fn test_service_context_selection() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(3)),
                 file_id: None,
                 name: "c".to_string(),
@@ -259,7 +259,7 @@ fn test_service_context_selection() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(4)),
                 file_id: None,
                 name: "d".to_string(),
@@ -635,7 +635,7 @@ while True:
     fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
 
     // Run build index with lsp
-    let options = BuildIndexOptions {
+    let options = BuildIndexOptions { extraction_tier: None,
         use_lsp: true,
         ..Default::default()
     };
@@ -738,7 +738,7 @@ while True:
     fs::create_dir_all(&src_dir).unwrap();
     fs::write(src_dir.join("lib.rs"), "fn a() { b(); }\nfn b() {}\n").unwrap();
 
-    let options = BuildIndexOptions {
+    let options = BuildIndexOptions { extraction_tier: None,
         use_lsp: true,
         ..Default::default()
     };

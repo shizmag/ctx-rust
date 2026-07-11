@@ -22,7 +22,7 @@ pub fn init_schema(
                 |row| row.get::<_, String>(0),
             )
             .ok();
-        if schema_version.as_deref() != Some("5") {
+        if schema_version.as_deref() != Some("6") {
             needs_drop = true;
         }
     }
@@ -36,6 +36,8 @@ pub fn init_schema(
             "call_edges",
             "occurrences",
             "edges",
+            "chunks",
+            "module_metrics",
         ];
         for table in tables {
             let _ = conn.execute(&format!("DROP TABLE IF EXISTS {}", table), []);
@@ -62,7 +64,8 @@ pub fn init_schema(
             parser_version TEXT NOT NULL,
             parser_config_hash TEXT NOT NULL,
             indexed_at_ms INTEGER,
-            parse_status TEXT NOT NULL
+            parse_status TEXT NOT NULL,
+            max_tier TEXT NOT NULL DEFAULT 'fast'
         );
 
         CREATE TABLE IF NOT EXISTS symbols (
@@ -80,7 +83,17 @@ pub fn init_schema(
             body_start_col INTEGER,
             body_end_line INTEGER,
             body_end_col INTEGER,
-            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
+            nesting_depth INTEGER DEFAULT 0,
+            lines_of_code INTEGER DEFAULT 0,
+            complexity_proxy INTEGER DEFAULT 0,
+            param_count INTEGER DEFAULT 0,
+            parent_symbol_id INTEGER,
+            fan_in INTEGER DEFAULT 0,
+            fan_out INTEGER DEFAULT 0,
+            coupling REAL DEFAULT 0.0,
+            cohesion REAL DEFAULT 0.0,
+            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
+            FOREIGN KEY(parent_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS occurrences (
@@ -129,6 +142,17 @@ pub fn init_schema(
         CREATE INDEX IF NOT EXISTS idx_edges_from_symbol ON edges(from_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_to_symbol ON edges(to_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence);
+        CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_symbols_metrics ON symbols(lines_of_code, complexity_proxy);
+
+        CREATE TABLE IF NOT EXISTS module_metrics (
+            module_path TEXT PRIMARY KEY,
+            total_loc INTEGER NOT NULL,
+            symbol_count INTEGER NOT NULL,
+            avg_complexity REAL NOT NULL,
+            avg_nesting_depth REAL NOT NULL,
+            call_density REAL NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY,
@@ -153,7 +177,7 @@ pub fn init_schema(
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '5')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '6')",
         [],
     )?;
     conn.execute(

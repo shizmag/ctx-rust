@@ -40,7 +40,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
     let mut index = CodeIndex {
         root: dir_path.to_path_buf(),
         files: vec![
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(1)),
                 rel_path: PathBuf::from("auth_service.rs"),
                 abs_path: dir_path.join("auth_service.rs"),
@@ -56,7 +56,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(2)),
                 rel_path: PathBuf::from("login_handler.rs"),
                 abs_path: dir_path.join("login_handler.rs"),
@@ -72,7 +72,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(3)),
                 rel_path: PathBuf::from("token_store.rs"),
                 abs_path: dir_path.join("token_store.rs"),
@@ -88,7 +88,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(4)),
                 rel_path: PathBuf::from("router.rs"),
                 abs_path: dir_path.join("router.rs"),
@@ -104,7 +104,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(5)),
                 rel_path: PathBuf::from("db_pool.rs"),
                 abs_path: dir_path.join("db_pool.rs"),
@@ -120,7 +120,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             },
-            FileSnapshot {
+            FileSnapshot { max_tier: Default::default(),
                 file_id: Some(FileId(6)),
                 rel_path: PathBuf::from("noisy.rs"),
                 abs_path: dir_path.join("noisy.rs"),
@@ -138,7 +138,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
             },
         ],
         symbols: vec![
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(0)),
                 file_id: Some(FileId(1)),
                 name: "AuthService".to_string(),
@@ -159,7 +159,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                     end_col: 1,
                 }),
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(1)),
                 file_id: Some(FileId(2)),
                 name: "login".to_string(),
@@ -180,7 +180,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                     end_col: 1,
                 }),
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(2)),
                 file_id: Some(FileId(3)),
                 name: "issue".to_string(),
@@ -201,7 +201,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                     end_col: 15,
                 }),
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(3)),
                 file_id: Some(FileId(4)),
                 name: "router".to_string(),
@@ -222,7 +222,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                     end_col: 20,
                 }),
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(4)),
                 file_id: Some(FileId(5)),
                 name: "db_pool".to_string(),
@@ -243,7 +243,7 @@ fn setup_test_index(dir_path: &std::path::Path) -> rusqlite::Connection {
                     end_col: 20,
                 }),
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(5)),
                 file_id: Some(FileId(6)),
                 name: "noisy_test".to_string(),
@@ -625,7 +625,7 @@ fn setup_hybrid_mini_project() -> (tempfile::TempDir, rusqlite::Connection, Work
 
     let (_, report) = rebuild_index_db(
         root,
-        BuildIndexOptions {
+        BuildIndexOptions { extraction_tier: None,
             with_embeddings: Some(false),
             with_lexical: Some(true),
             ..Default::default()
@@ -1018,7 +1018,7 @@ fn test_retrieve_context_dense_with_embedding_when_model_available() {
 
     let (_, report) = rebuild_index_db(
         root,
-        BuildIndexOptions {
+        BuildIndexOptions { extraction_tier: None,
             with_embeddings: Some(true),
             with_lexical: Some(true),
             ..Default::default()

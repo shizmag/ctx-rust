@@ -24,7 +24,7 @@ fn test_sqlite_and_find_symbols() {
 
     let mut index = CodeIndex {
         root: PathBuf::from("."),
-        files: vec![FileSnapshot {
+        files: vec![FileSnapshot { max_tier: Default::default(),
             file_id: None,
             rel_path: PathBuf::from("src/lib.rs"),
             abs_path: PathBuf::from("src/lib.rs"),
@@ -41,7 +41,7 @@ fn test_sqlite_and_find_symbols() {
             parse_status: FileParseStatus::Success,
         }],
         symbols: vec![
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "foo".to_string(),
@@ -57,7 +57,7 @@ fn test_sqlite_and_find_symbols() {
                 },
                 body_range: None,
             },
-            Symbol {
+            Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "bar_func".to_string(),
@@ -209,7 +209,7 @@ fn test_db_transaction_rollback_on_failure() {
 
     let mut index = CodeIndex {
         root: dir.path().to_path_buf(),
-        files: vec![FileSnapshot {
+        files: vec![FileSnapshot { max_tier: Default::default(),
             file_id: None,
             rel_path: PathBuf::from("lib.rs"),
             abs_path: dir.path().join("lib.rs"),
@@ -405,7 +405,7 @@ fn test_index_lifecycle_validation() {
     let _conn3 = ensure_index_with_registry(root, options.clone(), &registry).unwrap();
     assert!(validate_index_db_with_registry(root, &options, &registry).unwrap());
 
-    let different_options = BuildIndexOptions {
+    let different_options = BuildIndexOptions { extraction_tier: None,
         use_lsp: true,
         change_detection: FileChangeDetection::MtimeAndSize,
         ..no_search_options()
@@ -762,7 +762,7 @@ fn test_content_hash_detection() {
     let file_path = src_dir.join("lib.rs");
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions {
+    let options = BuildIndexOptions { extraction_tier: None,
         change_detection: FileChangeDetection::MtimeAndSize,
         ..no_search_options()
     };
@@ -771,7 +771,7 @@ fn test_content_hash_detection() {
     rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
 
     // 1. Change detection strategy changes
-    let options_diff_strat = BuildIndexOptions {
+    let options_diff_strat = BuildIndexOptions { extraction_tier: None,
         change_detection: FileChangeDetection::ContentHash,
         ..options.clone()
     };
@@ -782,7 +782,7 @@ fn test_content_hash_detection() {
     }
 
     // 2. Parser config hash changes (e.g. include_tests changes)
-    let options_diff_parser = BuildIndexOptions {
+    let options_diff_parser = BuildIndexOptions { extraction_tier: None,
         include_tests: false,
         ..options.clone()
     };
@@ -793,7 +793,7 @@ fn test_content_hash_detection() {
     }
 
     // 3. Resolver config changes (e.g. use_lsp changes)
-    let options_diff_resolver = BuildIndexOptions {
+    let options_diff_resolver = BuildIndexOptions { extraction_tier: None,
         use_lsp: true,
         ..options.clone()
     };

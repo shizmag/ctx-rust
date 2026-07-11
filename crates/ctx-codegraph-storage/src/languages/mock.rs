@@ -80,7 +80,7 @@ impl ParserBackend for MockParser {
                 let parts: Vec<&str> = line_trimmed.split_whitespace().collect();
                 if parts.len() >= 2 {
                     let name = parts[1].replace("()", "");
-                    symbols.push(Symbol {
+                    symbols.push(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                         id: None,
                         file_id: None,
                         name: name.clone(),

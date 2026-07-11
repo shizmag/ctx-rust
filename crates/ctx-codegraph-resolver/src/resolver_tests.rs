@@ -119,7 +119,7 @@ except Exception as e:
         backend_id: "python-backend".to_string(),
     };
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),
@@ -184,7 +184,7 @@ fn test_python_resolver_fallback_noop() {
         backend_id: "python-backend".to_string(),
     };
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),

@@ -52,7 +52,7 @@ pub fn find_symbols(
                 None
             };
 
-            results.push(Symbol {
+            results.push(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: Some(SymbolId(id)),
                 file_id: Some(FileId(file_id)),
                 name,
@@ -206,7 +206,7 @@ pub fn load_symbol(
             None
         };
 
-        Ok(Symbol {
+        Ok(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(id)),
             file_id: Some(FileId(file_id)),
             name,
@@ -283,7 +283,7 @@ pub fn load_symbols_by_ids(
             None
         };
 
-        results.push(Symbol {
+        results.push(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(id)),
             file_id: Some(FileId(file_id)),
             name,
@@ -360,7 +360,7 @@ pub fn load_symbols_for_file(
             None
         };
 
-        results.push(Symbol {
+        results.push(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(id)),
             file_id: Some(FileId(file_id)),
             name,
@@ -404,7 +404,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
@@ -420,7 +420,7 @@ mod tests {
                 indexed_at_ms: None,
                 parse_status: FileParseStatus::Success,
             }],
-            symbols: vec![Symbol {
+            symbols: vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                 id: None,
                 file_id: None,
                 name: "run_pipeline".to_string(),
@@ -466,7 +466,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
@@ -483,7 +483,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "run_pipeline".to_string(),
@@ -499,7 +499,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "Pipeline".to_string(),
@@ -515,7 +515,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "duplicate_name".to_string(),
@@ -531,7 +531,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "duplicate_name".to_string(),
@@ -605,7 +605,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: file_path.clone(),
@@ -622,7 +622,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "alpha".to_string(),
@@ -643,7 +643,7 @@ mod tests {
                         end_col: 10,
                     }),
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "beta".to_string(),
@@ -755,7 +755,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/other.rs"),
                 abs_path: dir.path().join("src/other.rs"),
@@ -772,7 +772,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "foo_handler".to_string(),
@@ -788,7 +788,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "bar_handler".to_string(),

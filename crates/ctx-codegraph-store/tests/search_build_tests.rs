@@ -196,7 +196,7 @@ fn test_build_search_indexes_force_rebuild_replaces_chunks() {
         build_search_indexes(&conn, root, &search_options, &Config::default()).unwrap();
     assert!(first.chunks_written > 0);
 
-    let forced = BuildIndexOptions {
+    let forced = BuildIndexOptions { extraction_tier: None,
         force_search_rebuild: true,
         ..search_options.clone()
     };
@@ -219,7 +219,7 @@ fn test_build_search_indexes_embeddings_requires_model_path() {
 
     let (conn, _index, _registry) = indexed_db(root, no_search_options());
 
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(false),
         with_embeddings: Some(true),
         ..Default::default()
@@ -300,7 +300,7 @@ pub fn new_fn() {}
     let (conn2, index2, _registry2) = indexed_db(root, no_search_options());
     assert!(index2.symbols.iter().any(|s| s.name == "new_fn"));
 
-    let forced = BuildIndexOptions {
+    let forced = BuildIndexOptions { extraction_tier: None,
         force_search_rebuild: true,
         ..search_options
     };
@@ -339,7 +339,7 @@ fn test_build_search_indexes_embeddings_only_without_lexical() {
 
     let (conn, _index, _registry) = indexed_db(root, no_search_options());
 
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(false),
         with_embeddings: Some(true),
         ..Default::default()
@@ -399,7 +399,7 @@ fn test_build_search_indexes_embeddings_with_model() {
     let (conn, _index, registry) = indexed_db(root, no_search_options());
     let paths = ctx_codegraph_models::ModelPaths::default_paths();
 
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(false),
         with_embeddings: Some(true),
         ..Default::default()
@@ -474,7 +474,7 @@ fn test_ready_rebuild_builds_dense_index_when_embeddings_requested() {
     rebuild_index_db_with_registry(root, no_search_options(), &registry).unwrap();
     assert_eq!(dense_embedding_count(root), 0);
 
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(true),
         with_embeddings: Some(true),
         ..Default::default()

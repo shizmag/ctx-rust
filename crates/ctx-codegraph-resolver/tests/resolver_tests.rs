@@ -124,7 +124,7 @@ except Exception as e:
         backend_id: BackendId::new("python-backend"),
     };
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),
@@ -189,7 +189,7 @@ fn test_python_resolver_fallback_noop() {
         backend_id: BackendId::new("python-backend"),
     };
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),
@@ -374,7 +374,7 @@ fn sample_occurrence(file: &std::path::Path) -> Occurrence {
 }
 
 fn sample_symbols(file: &std::path::Path) -> Vec<Symbol> {
-    vec![Symbol {
+    vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),
@@ -735,7 +735,7 @@ fn test_lsp_no_matching_symbol_at_location_falls_back() {
     fs::write(&test_file, "# python\n").unwrap();
 
     // Symbol range does not overlap LSP target line 5 / col 5 from mock.
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: None,
         name: "run".to_string(),

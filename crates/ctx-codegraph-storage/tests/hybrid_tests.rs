@@ -251,7 +251,7 @@ fn search_dense_with_embedding_model_returns_hits() {
         embedding_tokenizer: Some(paths.embedding_tokenizer.to_string_lossy().into_owned()),
         ..Config::default_values()
     };
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(true),
         with_embeddings: Some(true),
         ..lexical_search_options()
@@ -304,7 +304,7 @@ fn try_with_config_loads_embedding_when_model_present() {
 
     rebuild_index_db(root, no_search_options()).unwrap();
     let conn = open_db(root).unwrap();
-    let search_options = BuildIndexOptions {
+    let search_options = BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(true),
         with_embeddings: Some(true),
         ..lexical_search_options()
@@ -409,7 +409,7 @@ fn maybe_load_reranker_model() -> Option<RerankerModel> {
 }
 
 fn lexical_only_search_options() -> BuildIndexOptions {
-    BuildIndexOptions {
+    BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(true),
         with_embeddings: Some(false),
         ..lexical_search_options()

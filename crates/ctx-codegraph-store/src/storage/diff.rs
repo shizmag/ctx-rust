@@ -39,7 +39,7 @@ pub fn compute_index_diff_with_registry(
     let mut db_files = std::collections::HashMap::new();
     {
         let mut stmt =
-            conn.prepare("SELECT path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, parse_status FROM files")?;
+            conn.prepare("SELECT path, rel_path, language, backend_id, mtime_ms, size_bytes, content_hash, parser_id, parser_version, parser_config_hash, parse_status, max_tier FROM files")?;
         let db_files_rows = stmt.query_map([], |row| {
             let path_str: String = row.get(0)?;
             let rel_path_str: String = row.get(1)?;
@@ -54,6 +54,9 @@ pub fn compute_index_diff_with_registry(
             let parse_status_str: String = row.get(10)?;
             let parse_status =
                 FileParseStatus::from_str(&parse_status_str).unwrap_or(FileParseStatus::Success);
+            let max_tier_str: String = row.get(11)?;
+            let max_tier = ctx_codegraph_lang::model::ExtractionTier::from_str(&max_tier_str)
+                .unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Fast);
             Ok((
                 PathBuf::from(path_str),
                 (
@@ -67,6 +70,7 @@ pub fn compute_index_diff_with_registry(
                     parser_version,
                     parser_config_hash,
                     parse_status,
+                    max_tier,
                 ),
             ))
         })?;
@@ -97,6 +101,7 @@ pub fn compute_index_diff_with_registry(
             db_parser_version,
             db_parser_config_hash,
             db_parse_status,
+            db_max_tier,
         )) = db_files.get(path)
         {
             let mut disk_hash = None;
@@ -114,6 +119,7 @@ pub fn compute_index_diff_with_registry(
             };
 
             let snapshot = FileSnapshot {
+                max_tier: *db_max_tier,
                 file_id: None,
                 rel_path: rel_path.clone(),
                 abs_path: path.clone(),
@@ -136,13 +142,14 @@ pub fn compute_index_diff_with_registry(
                 unchanged.push(snapshot);
             }
         } else {
-            let snapshot = ctx_codegraph_lang::index::create_file_snapshot_with_registry(
+            let mut snapshot = ctx_codegraph_lang::index::create_file_snapshot_with_registry(
                 workspace_root,
                 path,
                 options.change_detection,
                 options.include_tests,
                 registry,
             );
+            snapshot.max_tier = options.extraction_tier.unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Fast);
             added.push(snapshot);
         }
     }

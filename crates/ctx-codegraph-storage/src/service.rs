@@ -66,7 +66,7 @@ impl GraphContextService {
                     .ok()
                 };
 
-                if get_meta("schema_version").as_deref() == Some("5") {
+                if get_meta("schema_version").as_deref() == Some("6") {
                     if let Some(resolver_id) = get_meta("resolver_id") {
                         options.use_lsp = resolver_id == "lsp";
                     }

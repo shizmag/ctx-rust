@@ -710,7 +710,7 @@ mod tests {
         let root = dir.path();
         let conn = Connection::open_in_memory().unwrap();
         let config = Config::default();
-        let options = BuildIndexOptions {
+        let options = BuildIndexOptions { extraction_tier: None,
             with_embeddings: Some(true),
             with_lexical: Some(false),
             ..Default::default()
@@ -737,7 +737,7 @@ mod tests {
     fn needs_search_index_build_false_when_search_disabled() {
         let dir = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
-        let options = BuildIndexOptions {
+        let options = BuildIndexOptions { extraction_tier: None,
             with_embeddings: Some(false),
             with_lexical: Some(false),
             ..Default::default()

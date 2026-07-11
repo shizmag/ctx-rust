@@ -148,7 +148,7 @@ pub fn run_healthcheck(
     let started = Instant::now();
     let config = ctx_config::find_and_load_config(path).unwrap_or_default();
     let workspace_root = find_workspace_root(path);
-    let build_options = BuildIndexOptions {
+    let build_options = BuildIndexOptions { extraction_tier: None,
         use_lsp: config.use_lsp.unwrap_or(false),
         ..Default::default()
     };
@@ -1166,7 +1166,7 @@ mod tests {
 
         rebuild_index_db(
             root,
-            BuildIndexOptions {
+            BuildIndexOptions { extraction_tier: None,
                 with_lexical: Some(false),
                 with_embeddings: Some(false),
                 ..Default::default()
@@ -1176,7 +1176,7 @@ mod tests {
 
         rebuild_index_db(
             root,
-            BuildIndexOptions {
+            BuildIndexOptions { extraction_tier: None,
                 with_lexical: Some(true),
                 with_embeddings: Some(true),
                 ..Default::default()

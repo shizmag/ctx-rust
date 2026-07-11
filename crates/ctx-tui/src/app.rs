@@ -692,7 +692,7 @@ mod tests {
 
             let mut index = ctx_codegraph::CodeIndex {
                 root: temp_dir.clone(),
-                files: vec![ctx_codegraph::FileSnapshot {
+                files: vec![ctx_codegraph::FileSnapshot { max_tier: Default::default(),
                     file_id: None,
                     rel_path: std::path::PathBuf::from("lib.rs"),
                     abs_path: temp_dir.join("lib.rs"),
@@ -709,7 +709,7 @@ mod tests {
                     parse_status: ctx_codegraph::FileParseStatus::Success,
                 }],
                 symbols: vec![
-                    ctx_codegraph::Symbol {
+                    ctx_codegraph::Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                         id: Some(ctx_codegraph::SymbolId(0)),
                         file_id: None,
                         name: "a".to_string(),
@@ -725,7 +725,7 @@ mod tests {
                         },
                         body_range: None,
                     },
-                    ctx_codegraph::Symbol {
+                    ctx_codegraph::Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                         id: Some(ctx_codegraph::SymbolId(1)),
                         file_id: None,
                         name: "b".to_string(),
@@ -741,7 +741,7 @@ mod tests {
                         },
                         body_range: None,
                     },
-                    ctx_codegraph::Symbol {
+                    ctx_codegraph::Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                         id: Some(ctx_codegraph::SymbolId(2)),
                         file_id: None,
                         name: "c".to_string(),

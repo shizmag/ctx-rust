@@ -564,7 +564,7 @@ fn handle_rebuild_index(
         None
     };
 
-    let options = BuildIndexOptions {
+    let options = BuildIndexOptions { extraction_tier: None,
         use_lsp,
         with_embeddings,
         with_lexical,

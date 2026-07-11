@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(format_index_state(&IndexState::Ready), "ready");
         assert!(format_index_state(&IndexState::NeedsIncrementalUpdate(
             ctx_codegraph::model::IndexDiff {
-                added: vec![ctx_codegraph::model::FileSnapshot {
+                added: vec![ctx_codegraph::model::FileSnapshot { max_tier: Default::default(),
                     file_id: None,
                     rel_path: PathBuf::from("a.rs"),
                     abs_path: PathBuf::from("/tmp/a.rs"),
@@ -480,7 +480,7 @@ mod tests {
             &ctx_codegraph::model::IndexState::NeedsIncrementalUpdate(
                 ctx_codegraph::model::IndexDiff {
                     added: vec![],
-                    modified: vec![ctx_codegraph::model::FileSnapshot {
+                    modified: vec![ctx_codegraph::model::FileSnapshot { max_tier: Default::default(),
                         file_id: None,
                         rel_path: PathBuf::from("a.rs"),
                         abs_path: PathBuf::from("/tmp/a.rs"),
@@ -557,7 +557,7 @@ mod tests {
 
         let root = PathBuf::from("/proj");
         let file = root.join("lib.rs");
-        let sym_a = Symbol {
+        let sym_a = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(1)),
             file_id: None,
             name: "a".to_string(),
@@ -573,7 +573,7 @@ mod tests {
             },
             body_range: None,
         };
-        let sym_b = Symbol {
+        let sym_b = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(2)),
             file_id: None,
             name: "b".to_string(),
@@ -794,7 +794,7 @@ mod tests {
 
         let root = PathBuf::from("/proj");
         let file = root.join("lib.rs");
-        let sym = Symbol {
+        let sym = Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(1)),
             file_id: None,
             name: "only".to_string(),
@@ -1044,6 +1044,10 @@ struct GraphCommand {
     /// Show verbose build report and timings
     #[arg(long, short, global = true)]
     verbose: bool,
+
+    /// Extraction tier limit for feature extraction (fast | balanced | full)
+    #[arg(long, global = true)]
+    tier: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1191,7 +1195,13 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             } else {
                 None
             };
+            let tier_val = graph_args.tier.as_deref()
+                .and_then(ctx_codegraph::model::ExtractionTier::from_str)
+                .or_else(|| {
+                    config.extraction_tier.as_deref().and_then(ctx_codegraph::model::ExtractionTier::from_str)
+                });
             let options = BuildIndexOptions {
+                extraction_tier: tier_val,
                 use_lsp: use_rust_analyzer,
                 max_depth: None,
                 include_tests: true,
@@ -1748,7 +1758,10 @@ fn handle_graph_info(
     let workspace_root = find_workspace_root(path);
     let db_path = workspace_root.join(".ctx-codegraph/codegraph.sqlite");
     let lexical_path = workspace_root.join(".ctx-codegraph/lexical");
+    let tier_val = config.extraction_tier.as_deref()
+        .and_then(ctx_codegraph::model::ExtractionTier::from_str);
     let options = BuildIndexOptions {
+        extraction_tier: tier_val,
         use_lsp,
         ..Default::default()
     };
@@ -1996,7 +2009,11 @@ fn get_connection_or_rebuild(
     verbose: bool,
 ) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
+    let config = ctx_config::find_and_load_config(path).unwrap_or_default();
+    let tier_val = config.extraction_tier.as_deref()
+        .and_then(ctx_codegraph::model::ExtractionTier::from_str);
     let options = ctx_codegraph::BuildIndexOptions {
+        extraction_tier: tier_val,
         use_lsp: use_rust_analyzer,
         ..Default::default()
     };

@@ -225,7 +225,7 @@ fn load_all_symbols(conn: &rusqlite::Connection) -> Result<Vec<Symbol>, CodeGrap
         let end_col: usize = row.get(9)?;
         let file_path: String = row.get(10)?;
 
-        Ok(Symbol {
+        Ok(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(id)),
             file_id: Some(FileId(file_id)),
             name,
@@ -454,7 +454,7 @@ pub fn run_full_rebuild_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "5")?;
+    write_meta(&tx, "schema_version", "6")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -506,6 +506,11 @@ pub fn run_full_rebuild_with_registry(
     // the "contains" edges (they are independent of LSP).
     rebuild_contains_edges_in_tx(&tx)?;
 
+    let target_tier = options.extraction_tier.unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Balanced);
+    if target_tier >= ctx_codegraph_lang::model::ExtractionTier::Balanced {
+        compute_and_save_graph_metrics_in_tx(&tx)?;
+    }
+
     if options.use_lsp {
         write_meta(&tx, "lsp_enrichment", "complete")?;
     } else {
@@ -517,13 +522,21 @@ pub fn run_full_rebuild_with_registry(
     validate_index_invariants(conn)?;
 
     let config = ctx_config::find_and_load_config(workspace_root).unwrap_or_default();
-    let search_report = super::search_build::maybe_build_search_indexes(
-        conn,
-        workspace_root,
-        &options,
-        &config,
-        true,
-    );
+    let target_tier = options.extraction_tier.unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Balanced);
+    let build_search = target_tier >= ctx_codegraph_lang::model::ExtractionTier::Full
+        || options.with_embeddings.unwrap_or(false)
+        || options.with_lexical.unwrap_or(false);
+    let search_report = if build_search {
+        super::search_build::maybe_build_search_indexes(
+            conn,
+            workspace_root,
+            &options,
+            &config,
+            true,
+        )
+    } else {
+        super::search_build::SearchBuildReport::default()
+    };
 
     let loaded = load_index(conn, workspace_root)?;
 
@@ -647,23 +660,25 @@ pub fn run_incremental_update_with_registry(
         "INSERT INTO files (
             path, rel_path, language, backend_id, mtime_ms, size_bytes,
             content_hash, parser_id, parser_version, parser_config_hash,
-            indexed_at_ms, parse_status
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            indexed_at_ms, parse_status, max_tier
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
 
     let mut file_update_meta_stmt = tx.prepare(
         "UPDATE files SET 
             mtime_ms = ?1, size_bytes = ?2, content_hash = ?3,
-            indexed_at_ms = ?4, parse_status = ?5
-         WHERE id = ?6",
+            indexed_at_ms = ?4, parse_status = ?5, max_tier = ?6
+         WHERE id = ?7",
     )?;
 
     let mut sym_stmt = tx.prepare(
         "INSERT INTO symbols (
             file_id, name, qualified_name, kind, language,
             start_line, start_col, end_line, end_col,
-            body_start_line, body_start_col, body_end_line, body_end_col
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            body_start_line, body_start_col, body_end_line, body_end_col,
+            nesting_depth, lines_of_code, complexity_proxy, param_count,
+            parent_symbol_id, fan_in, fan_out, coupling, cohesion
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
     )?;
 
     let mut cs_stmt = tx.prepare(
@@ -689,19 +704,17 @@ pub fn run_incremental_update_with_registry(
 
         match &update.parse_result {
             Ok(parsed) => {
-                if let Some(prev_id) = update.previous_file_id {
+                let file_id = if let Some(prev_id) = update.previous_file_id {
                     file_update_meta_stmt.execute(rusqlite::params![
                         update.snapshot.mtime_ms,
                         update.snapshot.size_bytes,
                         update.snapshot.content_hash,
                         current_time,
                         FileParseStatus::Success.as_str(),
+                        update.snapshot.max_tier.as_str(),
                         prev_id.0,
                     ])?;
                     delete_file_contents_stmt.execute(rusqlite::params![prev_id.0])?;
-                }
-
-                let file_id = if let Some(prev_id) = update.previous_file_id {
                     prev_id.0
                 } else {
                     file_insert_stmt.execute(rusqlite::params![
@@ -717,6 +730,7 @@ pub fn run_incremental_update_with_registry(
                         update.snapshot.parser_config_hash,
                         current_time,
                         FileParseStatus::Success.as_str(),
+                        update.snapshot.max_tier.as_str(),
                     ])?;
                     tx.last_insert_rowid()
                 };
@@ -760,6 +774,13 @@ pub fn run_incremental_update_with_registry(
                     let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
                     let body_end_col = sym.body_range.as_ref().map(|r| r.end_col);
 
+                    let parent_id_db = sym.parent_symbol_id.map(|id| {
+                        if id.0 < sym_ids.len() as i64 {
+                            SymbolId(sym_ids[id.0 as usize])
+                        } else {
+                            id
+                        }
+                    });
                     sym_stmt.execute(rusqlite::params![
                         file_id,
                         sym.name,
@@ -774,6 +795,15 @@ pub fn run_incremental_update_with_registry(
                         body_start_col,
                         body_end_line,
                         body_end_col,
+                        sym.nesting_depth,
+                        sym.lines_of_code,
+                        sym.complexity_proxy,
+                        sym.param_count,
+                        parent_id_db.map(|id| id.0),
+                        sym.fan_in,
+                        sym.fan_out,
+                        sym.coupling,
+                        sym.cohesion,
                     ])?;
                     let sym_db_id = tx.last_insert_rowid();
                     sym_ids.push(sym_db_id);
@@ -805,6 +835,7 @@ pub fn run_incremental_update_with_registry(
                         update.snapshot.content_hash,
                         current_time,
                         FileParseStatus::Failed.as_str(),
+                        update.snapshot.max_tier.as_str(),
                         prev_id.0,
                     ])?;
                 } else {
@@ -821,6 +852,7 @@ pub fn run_incremental_update_with_registry(
                         update.snapshot.parser_config_hash,
                         current_time,
                         FileParseStatus::Failed.as_str(),
+                        update.snapshot.max_tier.as_str(),
                     ])?;
                 }
             }
@@ -850,7 +882,7 @@ pub fn run_incremental_update_with_registry(
             )?;
             Ok(())
         };
-    write_meta(&tx, "schema_version", "5")?;
+    write_meta(&tx, "schema_version", "6")?;
     write_meta(&tx, "indexer_version", "0.1.0")?;
 
     let metas: Vec<_> = registry
@@ -898,6 +930,11 @@ pub fn run_incremental_update_with_registry(
 
     rebuild_contains_edges_in_tx(&tx)?;
 
+    let target_tier = options.extraction_tier.unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Balanced);
+    if target_tier >= ctx_codegraph_lang::model::ExtractionTier::Balanced {
+        compute_and_save_graph_metrics_in_tx(&tx)?;
+    }
+
     if options.use_lsp {
         write_meta(&tx, "lsp_enrichment", "complete")?;
     } else {
@@ -909,13 +946,21 @@ pub fn run_incremental_update_with_registry(
     validate_index_invariants(conn)?;
 
     let config = ctx_config::find_and_load_config(workspace_root).unwrap_or_default();
-    let search_report = super::search_build::maybe_build_search_indexes(
-        conn,
-        workspace_root,
-        &options,
-        &config,
-        false,
-    );
+    let target_tier = options.extraction_tier.unwrap_or(ctx_codegraph_lang::model::ExtractionTier::Balanced);
+    let build_search = target_tier >= ctx_codegraph_lang::model::ExtractionTier::Full
+        || options.with_embeddings.unwrap_or(false)
+        || options.with_lexical.unwrap_or(false);
+    let search_report = if build_search {
+        super::search_build::maybe_build_search_indexes(
+            conn,
+            workspace_root,
+            &options,
+            &config,
+            false,
+        )
+    } else {
+        super::search_build::SearchBuildReport::default()
+    };
 
     let final_index = load_index(conn, workspace_root)?;
 
@@ -968,6 +1013,7 @@ fn rebuild_contains_edges_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), Co
     use ctx_codegraph_lang::model::{EdgeKind, ResolutionConfidence, SymbolKind};
 
     tx.execute("DELETE FROM edges WHERE kind = ?1", [EdgeKind::Contains.as_str()])?;
+    tx.execute("UPDATE symbols SET parent_symbol_id = NULL", [])?;
 
     fn is_container(kind: &SymbolKind) -> bool {
         matches!(
@@ -1027,11 +1073,204 @@ fn rebuild_contains_edges_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), Co
                         ResolutionConfidence::Syntax.as_str(),
                     ],
                 )?;
+                tx.execute(
+                    "UPDATE symbols SET parent_symbol_id = ?1 WHERE id = ?2",
+                    rusqlite::params![from_id.0, to_id.0],
+                )?;
             }
             if is_container(&sym.kind) {
                 stack.push(sym);
             }
         }
+    }
+
+    Ok(())
+}
+
+fn compute_and_save_graph_metrics_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), CodeGraphError> {
+    // 1. Update fan_in and fan_out
+    tx.execute(
+        "UPDATE symbols SET 
+            fan_in = (SELECT COUNT(*) FROM edges WHERE to_symbol_id = symbols.id AND kind = 'Call'),
+            fan_out = (SELECT COUNT(*) FROM edges WHERE from_symbol_id = symbols.id AND kind = 'Call')",
+        [],
+    )?;
+
+    // 2. Update coupling
+    tx.execute(
+        "UPDATE symbols SET coupling = (
+            SELECT COUNT(DISTINCT to_sym.qualified_name)
+            FROM edges
+            JOIN symbols AS to_sym ON edges.to_symbol_id = to_sym.id
+            WHERE edges.from_symbol_id = symbols.id
+              AND to_sym.kind IN ('Class', 'Struct', 'Module', 'Trait', 'Impl')
+              AND to_sym.id != symbols.id
+        )",
+        [],
+    )?;
+
+    // 3. Compute and update LCOM cohesion
+    compute_and_update_lcom(tx)?;
+
+    // 4. Compute module aggregations
+    compute_module_aggregations(tx)?;
+
+    Ok(())
+}
+
+fn compute_and_update_lcom(tx: &rusqlite::Transaction<'_>) -> Result<(), CodeGraphError> {
+    // Load all classes/structs
+    let mut stmt = tx.prepare("SELECT id FROM symbols WHERE kind IN ('Class', 'Struct')")?;
+    let class_ids: Vec<i64> = stmt.query_map([], |row| row.get(0))?.filter_map(|r| r.ok()).collect();
+    drop(stmt);
+
+    let mut update_stmt = tx.prepare("UPDATE symbols SET cohesion = ?1 WHERE id = ?2")?;
+
+    for class_id in class_ids {
+        // Load all methods for this class/struct
+        let mut stmt = tx.prepare("SELECT id FROM symbols WHERE parent_symbol_id = ?1 AND kind = 'Method'")?;
+        let method_ids: Vec<i64> = stmt.query_map([class_id], |row| row.get(0))?.filter_map(|r| r.ok()).collect();
+        drop(stmt);
+
+        if method_ids.len() <= 1 {
+            update_stmt.execute(rusqlite::params![0.0, class_id])?;
+            continue;
+        }
+
+        // Load occurrences/references for each method
+        let mut method_refs = Vec::new();
+        for &method_id in &method_ids {
+            let mut stmt = tx.prepare("SELECT DISTINCT raw_text FROM occurrences WHERE enclosing_symbol_id = ?1")?;
+            let refs: std::collections::HashSet<String> = stmt.query_map([method_id], |row| row.get(0))?.filter_map(|r| r.ok()).collect();
+            method_refs.push(refs);
+        }
+
+        let mut p = 0; // pairs with no overlap
+        let mut q = 0; // pairs with overlap
+        for i in 0..method_ids.len() {
+            for j in i+1..method_ids.len() {
+                let overlap = method_refs[i].intersection(&method_refs[j]).count();
+                if overlap == 0 {
+                    p += 1;
+                } else {
+                    q += 1;
+                }
+            }
+        }
+
+        let lcom = (p - q).max(0) as f64;
+        update_stmt.execute(rusqlite::params![lcom, class_id])?;
+    }
+    Ok(())
+}
+
+fn compute_module_aggregations(tx: &rusqlite::Transaction<'_>) -> Result<(), CodeGraphError> {
+    // Clear old metrics
+    tx.execute("DELETE FROM module_metrics", [])?;
+
+    // Map to aggregate metrics by directory path string
+    struct DirMetrics {
+        total_loc: i64,
+        symbol_count: i64,
+        total_complexity: i64,
+        total_nesting_depth: i64,
+        call_count: i64,
+    }
+
+    let mut dir_map: std::collections::HashMap<String, DirMetrics> = std::collections::HashMap::new();
+
+    // 1. Query symbols and aggregate their metrics into parent directories
+    let mut stmt = tx.prepare(
+        "SELECT files.rel_path, symbols.lines_of_code, symbols.complexity_proxy, symbols.nesting_depth 
+         FROM symbols 
+         JOIN files ON symbols.file_id = files.id"
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let rel_path_str: String = row.get(0)?;
+        let loc: i64 = row.get(1)?;
+        let complexity: i64 = row.get(2)?;
+        let nesting: i64 = row.get(3)?;
+
+        let path = Path::new(&rel_path_str);
+        let mut current_dir = path.parent();
+        while let Some(dir) = current_dir {
+            let dir_str = dir.to_string_lossy().to_string();
+            if dir_str.is_empty() {
+                break;
+            }
+            let entry = dir_map.entry(dir_str).or_insert(DirMetrics {
+                total_loc: 0,
+                symbol_count: 0,
+                total_complexity: 0,
+                total_nesting_depth: 0,
+                call_count: 0,
+            });
+            entry.total_loc += loc;
+            entry.symbol_count += 1;
+            entry.total_complexity += complexity;
+            entry.total_nesting_depth += nesting;
+
+            current_dir = dir.parent();
+        }
+    }
+
+    // 2. Query calls and aggregate call counts into directories
+    let mut stmt = tx.prepare(
+        "SELECT files.rel_path 
+         FROM occurrences 
+         JOIN files ON occurrences.file_id = files.id 
+         WHERE occurrences.kind = 'Call'"
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let rel_path_str: String = row.get(0)?;
+        let path = Path::new(&rel_path_str);
+        let mut current_dir = path.parent();
+        while let Some(dir) = current_dir {
+            let dir_str = dir.to_string_lossy().to_string();
+            if dir_str.is_empty() {
+                break;
+            }
+            if let Some(entry) = dir_map.get_mut(&dir_str) {
+                entry.call_count += 1;
+            }
+            current_dir = dir.parent();
+        }
+    }
+
+    // 3. Save aggregates to module_metrics table
+    let mut insert_stmt = tx.prepare(
+        "INSERT OR REPLACE INTO module_metrics (
+            module_path, total_loc, symbol_count, avg_complexity, avg_nesting_depth, call_density
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+    )?;
+
+    for (dir_str, metrics) in dir_map {
+        let avg_complexity = if metrics.symbol_count > 0 {
+            metrics.total_complexity as f64 / metrics.symbol_count as f64
+        } else {
+            0.0
+        };
+        let avg_nesting_depth = if metrics.symbol_count > 0 {
+            metrics.total_nesting_depth as f64 / metrics.symbol_count as f64
+        } else {
+            0.0
+        };
+        let call_density = if metrics.total_loc > 0 {
+            metrics.call_count as f64 / metrics.total_loc as f64
+        } else {
+            0.0
+        };
+
+        insert_stmt.execute(rusqlite::params![
+            dir_str,
+            metrics.total_loc,
+            metrics.symbol_count,
+            avg_complexity,
+            avg_nesting_depth,
+            call_density,
+        ])?;
     }
 
     Ok(())

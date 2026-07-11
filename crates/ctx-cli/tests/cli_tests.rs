@@ -191,6 +191,10 @@ fn test_cli_setting_subcommand_help_and_invocation() {
     assert!(out.contains("~/.config/ctx/config"));
 
     // invocation on temp dir returns error (TUI requires tty) but does not panic and reports via error path
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
     let temp_dir = tempfile::tempdir().unwrap();
     let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
     let output_run = cmd

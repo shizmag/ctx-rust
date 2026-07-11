@@ -88,7 +88,7 @@ fn parse_joined_symbol(row: &rusqlite::Row<'_>, symbol_id: i64) -> Result<Symbol
         None
     };
 
-    Ok(Symbol {
+    Ok(Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: Some(SymbolId(symbol_id)),
         file_id: Some(FileId(s_file_id)),
         name: s_name,
@@ -288,7 +288,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: dir.path().to_path_buf(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: dir.path().join("src/lib.rs"),
@@ -305,7 +305,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "run_pipeline".to_string(),
@@ -321,7 +321,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "load".to_string(),
@@ -337,7 +337,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "process".to_string(),
@@ -353,7 +353,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "test_run_pipeline".to_string(),

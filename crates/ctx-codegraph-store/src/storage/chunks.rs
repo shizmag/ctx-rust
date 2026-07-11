@@ -135,7 +135,7 @@ mod tests {
 
         let mut index = CodeIndex {
             root: root.clone(),
-            files: vec![FileSnapshot {
+            files: vec![FileSnapshot { max_tier: Default::default(),
                 file_id: None,
                 rel_path: PathBuf::from("src/lib.rs"),
                 abs_path: root.join("src/lib.rs"),
@@ -152,7 +152,7 @@ mod tests {
                 parse_status: FileParseStatus::Success,
             }],
             symbols: vec![
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "greet".to_string(),
@@ -168,7 +168,7 @@ mod tests {
                     },
                     body_range: None,
                 },
-                Symbol {
+                Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
                     id: None,
                     file_id: None,
                     name: "farewell".to_string(),

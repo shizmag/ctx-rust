@@ -100,7 +100,7 @@ fn test_other_languages_preserved() {
     }
 
     // 3. Trigger a full rebuild of the Rust index (e.g. by changing parser config/options)
-    let options_diff = BuildIndexOptions {
+    let options_diff = BuildIndexOptions { extraction_tier: None,
         include_tests: false,
         ..options.clone()
     };

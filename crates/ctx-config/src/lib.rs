@@ -39,6 +39,7 @@ pub struct Config {
     pub build_batch_size: Option<usize>,
     /// Chunks per ONNX embedding inference batch (independent of file batches).
     pub embed_batch_size: Option<usize>,
+    pub extraction_tier: Option<String>,
 }
 
 /// Default number of files processed per build batch.
@@ -94,6 +95,7 @@ pub const KNOWN_CONFIG_SETTING_KEYS: &[&str] = &[
     "default_retrieval_strategy",
     "build_batch_size",
     "embed_batch_size",
+    "extraction_tier",
 ];
 
 /// What happened the last time [`ensure_global_config`] ran.
@@ -134,6 +136,7 @@ impl Config {
             default_retrieval_strategy: Some("hybrid".into()),
             build_batch_size: Some(DEFAULT_BUILD_BATCH_SIZE),
             embed_batch_size: Some(DEFAULT_EMBED_BATCH_SIZE),
+            extraction_tier: Some("balanced".into()),
         }
     }
 
@@ -166,6 +169,7 @@ impl Config {
                 .or(d.default_retrieval_strategy),
             build_batch_size: self.build_batch_size.or(d.build_batch_size),
             embed_batch_size: self.embed_batch_size.or(d.embed_batch_size),
+            extraction_tier: self.extraction_tier.or(d.extraction_tier),
         }
     }
 
@@ -426,6 +430,11 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     }
                 }
             }
+            "extraction_tier" | "tier" => {
+                if !value.is_empty() {
+                    config.extraction_tier = Some(value.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -516,6 +525,7 @@ pub fn merge_configs(base: Config, overlay: Config) -> Config {
             .or(base.default_retrieval_strategy),
         build_batch_size: overlay.build_batch_size.or(base.build_batch_size),
         embed_batch_size: overlay.embed_batch_size.or(base.embed_batch_size),
+        extraction_tier: overlay.extraction_tier.or(base.extraction_tier),
     }
 }
 
@@ -681,6 +691,9 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     }
     if let Some(v) = config.embed_batch_size {
         lines.push(format!("embed_batch_size = {}", v));
+    }
+    if let Some(t) = &config.extraction_tier {
+        lines.push(format!("extraction_tier = {}", t));
     }
 
     let content = lines.join("\n") + "\n";

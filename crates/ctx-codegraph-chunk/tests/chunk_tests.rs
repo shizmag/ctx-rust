@@ -26,7 +26,7 @@ fn parent_child_chunks_for_nested_symbols() {
     .unwrap();
 
     let symbols = vec![
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(0)),
             file_id: Some(FileId(1)),
             name: "Foo".to_string(),
@@ -47,7 +47,7 @@ fn parent_child_chunks_for_nested_symbols() {
                 end_col: 2,
             }),
         },
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(1)),
             file_id: Some(FileId(1)),
             name: "bar".to_string(),
@@ -68,7 +68,7 @@ fn parent_child_chunks_for_nested_symbols() {
                 end_col: 6,
             }),
         },
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(2)),
             file_id: Some(FileId(1)),
             name: "baz".to_string(),
@@ -220,7 +220,7 @@ fn sample_symbol_without_body(
     start_line: usize,
     end_line: usize,
 ) -> Symbol {
-    Symbol {
+    Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: Some(id),
         file_id: Some(FileId(1)),
         name: qualified_name.to_string(),
@@ -297,7 +297,7 @@ fn builder_skips_symbols_without_id() {
     let path = dir.path().join("skip.rs");
     std::fs::write(&path, "fn orphan() {}\n").unwrap();
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: None,
         file_id: Some(FileId(1)),
         name: "orphan".to_string(),
@@ -373,7 +373,7 @@ fn builder_context_lines_affects_extracted_text() {
     )
     .unwrap();
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: Some(SymbolId(1)),
         file_id: Some(FileId(1)),
         name: "middle".to_string(),
@@ -417,7 +417,7 @@ fn occurrence_chunks_use_enclosing_symbol_and_raw_text_fallback() {
     )
     .unwrap();
 
-    let symbols = vec![Symbol {
+    let symbols = vec![Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
         id: Some(SymbolId(1)),
         file_id: Some(FileId(1)),
         name: "helper".to_string(),
@@ -502,7 +502,7 @@ fn parent_summary_without_include_text_has_empty_hash_only_metadata() {
     .unwrap();
 
     let symbols = vec![
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(0)),
             file_id: Some(FileId(1)),
             name: "parent".to_string(),
@@ -523,7 +523,7 @@ fn parent_summary_without_include_text_has_empty_hash_only_metadata() {
                 end_col: 2,
             }),
         },
-        Symbol {
+        Symbol { nesting_depth: 0, lines_of_code: 0, complexity_proxy: 0, param_count: 0, parent_symbol_id: None, fan_in: 0, fan_out: 0, coupling: 0.0, cohesion: 0.0,
             id: Some(SymbolId(1)),
             file_id: Some(FileId(1)),
             name: "child".to_string(),

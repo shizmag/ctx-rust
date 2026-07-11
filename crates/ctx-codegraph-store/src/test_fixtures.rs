@@ -24,7 +24,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
 /// Uses content-hash change detection so incremental tests do not need
 /// `thread::sleep` to bump mtimes.
 pub fn no_search_options() -> BuildIndexOptions {
-    BuildIndexOptions {
+    BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(false),
         with_embeddings: Some(false),
         change_detection: FileChangeDetection::ContentHash,
@@ -110,7 +110,7 @@ pub fn indexed_db(
 }
 
 pub fn lexical_search_options() -> BuildIndexOptions {
-    BuildIndexOptions {
+    BuildIndexOptions { extraction_tier: None,
         with_lexical: Some(true),
         with_embeddings: Some(false),
         change_detection: FileChangeDetection::ContentHash,
