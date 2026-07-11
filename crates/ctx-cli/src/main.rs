@@ -1,9 +1,24 @@
+mod cli;
+mod tier;
+mod ui;
+
 use clap::Parser;
+use cli::help_text::{
+    GRAPH_AFFECT_AFTER_HELP, GRAPH_AFFECT_LONG_ABOUT, GRAPH_AFTER_HELP, GRAPH_BUILD_LONG_ABOUT,
+    GRAPH_CALLERS_ABOUT, GRAPH_CALLS_ABOUT, GRAPH_CONTEXT_LONG_ABOUT, GRAPH_INFO_LONG_ABOUT,
+    GRAPH_SLICE_ABOUT, GRAPH_SYMBOLS_LONG_ABOUT, HEALTHCHECK_LONG_ABOUT, MCP_ABOUT,
+    MCP_INSTALL_AFTER_HELP, MCP_INSTALL_LONG_ABOUT, MCP_SERVE_LONG_ABOUT, ROOT_AFTER_HELP,
+    ROOT_LONG_ABOUT, SETTING_LONG_ABOUT, STATS_LONG_ABOUT,
+};
+use cli::style::{CLAP_STYLING, HELP_TEMPLATE};
 use ctx_models::{Mode, ScanOptions};
 use ctx_render::{Format, RenderOptions};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tier::{CliExtractionTier, resolve_build_path_and_tier};
+use ui::progress::ProgressGuard;
+use ui::theme;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
@@ -51,60 +66,68 @@ impl From<CliFormat> for Format {
 #[command(
     name = "ctx",
     version,
-    about = "✨ ctx: A highly informative, interactive directory tree visualizer and LLM context gatherer.\n\nRuns a beautiful, interactive TUI or outputs detailed markdown/plain/xml context for your files."
+    styles = CLAP_STYLING,
+    help_template = HELP_TEMPLATE,
+    about = "✨ ctx: A highly informative, interactive directory tree visualizer and LLM context gatherer",
+    long_about = ROOT_LONG_ABOUT,
+    after_help = ROOT_AFTER_HELP
 )]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Target directory path to analyze.
-    #[arg(default_value = ".")]
+    /// Target directory path to analyze
+    #[arg(default_value = ".", help_heading = "Target")]
     path: PathBuf,
 
-    /// Format for the full context output. Choose from: 'markdown' (or 'md'), 'xml', 'plain' (or 'text', 'txt').
-    #[arg(short, long)]
+    /// Output format: markdown (md), xml, or plain (text, txt)
+    #[arg(short, long, help_heading = "Output")]
     format: Option<CliFormat>,
 
-    /// Gathering strategy mode: 'smart' (respects gitignore + sensible skips), 'all' (scans all files), 'code' (prioritizes code files), 'docs' (prioritizes docs/markdown), 'llm' (structures with token counts).
-    #[arg(short, long)]
+    /// Gathering mode: smart, all, code, docs, or llm
+    #[arg(short, long, help_heading = "Filtering")]
     mode: Option<CliMode>,
 
-    /// Restrict directory traversal to the specified maximum depth.
-    #[arg(long)]
+    /// Maximum directory traversal depth
+    #[arg(long, help_heading = "Filtering")]
     max_depth: Option<usize>,
 
-    /// Exclude files exceeding this size limit in bytes from the final context contents.
-    #[arg(long)]
+    /// Skip files larger than this many bytes
+    #[arg(long, help_heading = "Filtering")]
     max_file_size: Option<u64>,
 
-    /// Save the compiled context output directly to the specified file path instead of printing to stdout.
-    #[arg(short, long)]
+    /// Write compiled context to a file instead of stdout
+    #[arg(short, long, help_heading = "Output")]
     output: Option<PathBuf>,
 
-    /// Exclude the project summary tables and statistics from the generated context output.
-    #[arg(long)]
+    /// Omit project summary tables from output
+    #[arg(long, help_heading = "Output")]
     no_stats: bool,
 
-    /// Print lists of skipped, gitignored, or hidden files to stderr for transparency.
-    #[arg(long)]
+    /// Print skipped and hidden items to stderr
+    #[arg(long, help_heading = "Filtering")]
     list_hidden: bool,
 
-    /// Copy the fully compiled context output straight to the system clipboard.
-    #[arg(short, long)]
+    /// Copy compiled context to the system clipboard
+    #[arg(short, long, help_heading = "Actions")]
     clipboard: bool,
 
-    /// Output the full code context (file structure and contents) to stdout instead of only showing the colored directory tree.
-    #[arg(short = 'C', long)]
+    /// Output full file contents instead of the colored tree
+    #[arg(short = 'C', long, help_heading = "Output")]
     code: bool,
 
-    /// Launch the interactive, keyboard-driven terminal user interface (TUI) for selecting files.
-    #[arg(short, long)]
+    /// Launch the interactive terminal UI (TUI)
+    #[arg(short, long, help_heading = "Actions")]
     interactive: bool,
 }
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("Error: {}", err);
+        if ui::terminal::use_color() {
+            eprintln!("{} {}", theme::error_label("Error:"), err);
+        } else {
+            eprintln!("Error: {}", err);
+        }
         std::process::exit(1);
     }
 }
@@ -189,6 +212,7 @@ where
         exclude,
     };
 
+    let _scan_progress = ProgressGuard::new("Scanning project files...");
     let scan_result = ctx_core::scan(&args.path, scan_options)?;
 
     let is_ordinary_call = !args.code && !args.clipboard && args.output.is_none();
@@ -209,8 +233,12 @@ where
             let mut ctx_clipboard = arboard::Clipboard::new()?;
             ctx_clipboard.set_text(rendered)?;
             println!(
-                "\x1b[1;38;2;158;206;106m✨ Context successfully copied to clipboard!\x1b[0m \x1b[38;2;86;95;137m({} files, {} tokens)\x1b[0m",
-                scan_result.summary.files, scan_result.summary.tokens
+                "{} {}",
+                theme::success("✨ Context successfully copied to clipboard!"),
+                theme::muted(&format!(
+                    "({} files, {} tokens)",
+                    scan_result.summary.files, scan_result.summary.tokens
+                ))
             );
         } else if let Some(output_path) = args.output {
             fs::write(&output_path, rendered)?;
@@ -911,26 +939,40 @@ mod tests {
 #[allow(clippy::large_enum_variant)]
 enum Command {
     /// Analyze the project and query dependency or symbol relationships
-    #[command(visible_alias = "g")]
+    #[command(visible_alias = "g", styles = CLAP_STYLING, help_template = HELP_TEMPLATE)]
     Graph(GraphCommand),
-    /// MCP commands: `ctx mcp` (or `ctx mcp serve`) starts the server; `ctx mcp install` registers ctx with coding agents
-    #[command(subcommand)]
+    /// MCP server for coding agents (serve) and auto-registration (install)
+    #[command(subcommand, about = MCP_ABOUT, styles = CLAP_STYLING, help_template = HELP_TEMPLATE)]
     Mcp(McpCommand),
     /// Open interactive TUI to view/edit global settings (~/.config/ctx/config)
-    #[command(visible_alias = "config")]
+    #[command(
+        visible_alias = "config",
+        long_about = SETTING_LONG_ABOUT,
+        styles = CLAP_STYLING,
+        help_template = HELP_TEMPLATE
+    )]
     Setting(SettingCommand),
-    /// Show project-level usage stats (files, tokens, lines), codegraph index info if present, and MCP notes
+    /// Show project scan totals, codegraph index metadata, and MCP usage notes
+    #[command(long_about = STATS_LONG_ABOUT, styles = CLAP_STYLING, help_template = HELP_TEMPLATE)]
     Stats(StatsCommand),
-    /// Comprehensive health report for parsers, LSP, hybrid search, and codegraph index
-    #[command(visible_alias = "health", visible_alias = "hc")]
+    /// Health report for parsers, LSP, hybrid search, and codegraph index
+    #[command(
+        visible_alias = "health",
+        visible_alias = "hc",
+        long_about = HEALTHCHECK_LONG_ABOUT,
+        styles = CLAP_STYLING,
+        help_template = HELP_TEMPLATE
+    )]
     Healthcheck(HealthcheckCommand),
 }
 
 #[derive(clap::Subcommand, Debug)]
 enum McpCommand {
-    /// Start the Model Context Protocol (MCP) server over stdio (default when running `ctx mcp`)
+    /// Start the MCP server over stdio (default when running `ctx mcp`)
+    #[command(long_about = MCP_SERVE_LONG_ABOUT)]
     Serve,
-    /// Auto-install / register the ctx MCP server into popular coding agents (Claude Desktop, Cursor, Gemini, Continue, etc.)
+    /// Register ctx MCP with Claude, Cursor, Gemini, Continue, VS Code, etc.
+    #[command(long_about = MCP_INSTALL_LONG_ABOUT, after_help = MCP_INSTALL_AFTER_HELP)]
     Install(InstallCommand),
 }
 
@@ -955,7 +997,9 @@ struct StatsCommand {
                   ctx healthcheck\n  \
                   ctx healthcheck --probe\n  \
                   ctx healthcheck --format json\n  \
-                  ctx hc /path/to/project"
+                  ctx hc /path/to/project",
+    styles = CLAP_STYLING,
+    help_template = HELP_TEMPLATE
 )]
 struct HealthcheckCommand {
     /// Target project directory (uses .ctxconfig if present)
@@ -989,21 +1033,13 @@ struct InstallCommand {
                   modules, symbols, calls, and dependencies. You can build this index and query it to \
                   find all symbols, view callers/callees of a symbol, or compute a call slice tree \
                   to understand how functions are connected.\n\n\
-                  By default, ctx builds a fast tree-sitter based graph. Edges are labeled with \
+                  By default, ctx builds a balanced tree-sitter call graph. Edges are labeled with \
                   their resolution confidence: Syntax, Heuristic, Unresolved. Use --with-lsp to \
                   ask language servers (e.g. rust-analyzer for Rust, pyright-langserver for Python) \
                   to enrich resolvable edges as LspExact. This is slower but more semantically precise.",
-    after_help = "Examples:\n  \
-                  ctx graph build\n  \
-                  ctx graph build --with-lsp\n  \
-                  ctx graph build --all\n  \
-                  ctx graph symbols\n  \
-                  ctx graph calls my_function\n  \
-                  ctx graph callers my_function\n  \
-                  ctx graph slice my_function\n  \
-                  ctx graph info\n  \
-                  ctx g symbols\n  \
-                  ctx g info"
+    after_help = GRAPH_AFTER_HELP,
+    styles = CLAP_STYLING,
+    help_template = HELP_TEMPLATE
 )]
 struct GraphCommand {
     #[command(subcommand)]
@@ -1045,9 +1081,9 @@ struct GraphCommand {
     #[arg(long, short, global = true)]
     verbose: bool,
 
-    /// Extraction tier limit for feature extraction (fast | balanced | full)
-    #[arg(long, global = true)]
-    tier: Option<String>,
+    /// Extraction tier: fast, balance/balanced, or full (also: ctx g build fast)
+    #[arg(long, global = true, value_enum)]
+    tier: Option<CliExtractionTier>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1065,39 +1101,47 @@ pub enum CliGraphContextMode {
 #[derive(clap::Subcommand, Debug)]
 enum GraphSubcommand {
     /// Show codegraph index status and graph-related project overview
+    #[command(long_about = GRAPH_INFO_LONG_ABOUT)]
     Info {
         /// Output format (text, json)
         #[arg(long, default_value = "text")]
         format: String,
     },
     /// Build or rebuild the codegraph SQLite index database
+    #[command(long_about = GRAPH_BUILD_LONG_ABOUT)]
     Build,
     /// List all indexed symbols grouped by their files, or find a specific symbol
+    #[command(long_about = GRAPH_SYMBOLS_LONG_ABOUT)]
     Symbols {
         /// The name or qualified path of the target symbol
         query: Option<String>,
     },
-    /// List the direct callees (called functions/symbols) of a target symbol
+    /// List the direct callees of a target symbol
+    #[command(about = GRAPH_CALLS_ABOUT)]
     Calls {
         /// The name or qualified path of the target symbol
         symbol: String,
     },
-    /// List the direct callees (called functions/symbols) of a target symbol
+    /// List the direct callees of a target symbol (alias for calls)
+    #[command(about = GRAPH_CALLS_ABOUT)]
     Callees {
         /// The name or qualified path of the target symbol
         symbol: String,
     },
     /// List the direct callers of a target symbol
+    #[command(about = GRAPH_CALLERS_ABOUT)]
     Callers {
         /// The name or qualified path of the target symbol
         symbol: String,
     },
-    /// Compute and display the forward call slice tree starting from a target symbol
+    /// Compute and display the forward call slice tree from a target symbol
+    #[command(about = GRAPH_SLICE_ABOUT)]
     Slice {
         /// The name or qualified path of the target symbol
         symbol: String,
     },
     /// Extract a graph context around a target symbol and render it
+    #[command(long_about = GRAPH_CONTEXT_LONG_ABOUT)]
     Context {
         /// The target symbol query
         symbol: String,
@@ -1112,6 +1156,7 @@ enum GraphSubcommand {
         max_nodes: usize,
     },
     /// Retrieve ranked code context under token budget around symbol
+    #[command(long_about = GRAPH_AFFECT_LONG_ABOUT, after_help = GRAPH_AFFECT_AFTER_HELP)]
     Affect {
         /// The query to resolve (symbol name, qualified name, file path, etc.)
         query: String,
@@ -1179,8 +1224,18 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         }
         GraphSubcommand::Build => {
             let start_time = std::time::Instant::now();
-            println!("\x1b[36m\x1b[1mBuilding codegraph index...\x1b[0m");
             let config = ctx_config::find_and_load_config(&graph_args.path).unwrap_or_default();
+            let (project_path, tier_val) = resolve_build_path_and_tier(
+                &graph_args.path,
+                graph_args.tier,
+                config.extraction_tier.as_deref(),
+            );
+            let tier_label = tier_val
+                .map(|t| t.as_str())
+                .unwrap_or("balanced");
+            let progress = ProgressGuard::new(&format!(
+                "Building codegraph index (tier: {tier_label})..."
+            ));
             let with_emb = if graph_args.without_emb {
                 Some(false)
             } else if graph_args.with_emb || graph_args.all {
@@ -1195,11 +1250,6 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             } else {
                 None
             };
-            let tier_val = graph_args.tier.as_deref()
-                .and_then(ctx_codegraph::model::ExtractionTier::from_str)
-                .or_else(|| {
-                    config.extraction_tier.as_deref().and_then(ctx_codegraph::model::ExtractionTier::from_str)
-                });
             let lsp_mode = if use_rust_analyzer {
                 match tier_val {
                     Some(ctx_codegraph::model::ExtractionTier::Full) => {
@@ -1230,7 +1280,10 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 parallel_threads: config.parallel_threads,
                 incremental: config.incremental_indexing.unwrap_or(true),
             };
-            let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
+            progress.set_message("Parsing files and writing index...");
+            let (_index, report) =
+                ctx_codegraph::rebuild_index_db(&project_path, options)?;
+            drop(progress);
             let elapsed = start_time.elapsed();
 
             if graph_args.verbose {
@@ -2051,7 +2104,9 @@ fn get_connection_or_rebuild(
     let conn = if matches!(state, ctx_codegraph::model::IndexState::Ready) {
         ctx_codegraph::open_db(&workspace_root)?
     } else {
+        let progress = ProgressGuard::new("Building codegraph index...");
         let (_index, report) = ctx_codegraph::rebuild_index_db(&workspace_root, options)?;
+        drop(progress);
         if verbose {
             println!("--- Codegraph Build Report ---");
             println!(
@@ -2460,6 +2515,14 @@ fn handle_healthcheck_command(
         .into());
     }
 
+    let _progress = if health.probe {
+        Some(ProgressGuard::new(
+            "Running health probes (parsers, LSP, search)...",
+        ))
+    } else {
+        None
+    };
+
     let report = ctx_health::run_healthcheck(
         &health.path,
         env!("CARGO_PKG_VERSION"),
@@ -2485,6 +2548,7 @@ fn handle_stats_command(stats: StatsCommand) -> Result<(), Box<dyn std::error::E
     let path = &stats.path;
     println!("📊 ctx stats for {}", path.display());
     let config = ctx_config::find_and_load_config(path).unwrap_or_default();
+    let _scan_progress = ProgressGuard::new("Scanning project for stats...");
 
     // Note if collection disabled (affects what MCP will persist).
     if let Some(false) = config.stats_enabled {
@@ -2610,6 +2674,8 @@ fn handle_mcp_install(args: InstallCommand) -> Result<(), Box<dyn std::error::Er
 
     println!("Installing ctx MCP server using binary: {}", exe);
     println!("Target clients: {}", clients.join(", "));
+
+    let _install_progress = ProgressGuard::new("Detecting agent configs and installing MCP entries...");
 
     // Detection based on real filesystem (inspired by user discovery commands)
     println!("\nDetection on this machine:");

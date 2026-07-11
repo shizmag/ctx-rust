@@ -978,3 +978,112 @@ fn test_cli_graph_info_invalid_format() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("unsupported format"));
 }
+
+fn read_extraction_tier(root: &Path) -> Option<String> {
+    let db_path = root.join(".ctx-codegraph/codegraph.sqlite");
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open(&db_path).ok()?;
+    conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'extraction_tier'",
+        [],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+#[test]
+fn test_cli_graph_build_tier_positional_fast() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = run_ctx(root);
+    cmd.current_dir(root);
+    let output = cmd
+        .args(["g", "build", "fast", "--no-rust-analyzer"])
+        .output()
+        .expect("failed positional fast build");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(read_extraction_tier(root).as_deref(), Some("fast"));
+}
+
+#[test]
+fn test_cli_graph_build_tier_positional_balance_alias() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = run_ctx(root);
+    cmd.current_dir(root);
+    let output = cmd
+        .args(["g", "build", "balance", "--no-rust-analyzer"])
+        .output()
+        .expect("failed positional balance build");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(read_extraction_tier(root).as_deref(), Some("balanced"));
+}
+
+#[test]
+fn test_cli_graph_build_path_still_works_with_explicit_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = run_ctx(root);
+    let output = cmd
+        .args([
+            "g",
+            "build",
+            root.to_str().unwrap(),
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed explicit path build");
+    assert!(output.status.success());
+    assert!(root.join(".ctx-codegraph/codegraph.sqlite").exists());
+}
+
+#[test]
+fn test_cli_graph_build_invalid_tier_errors() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    create_temp_project(root);
+
+    let mut cmd = run_ctx(root);
+    let output = cmd
+        .args([
+            "g",
+            "build",
+            "--tier",
+            "typo",
+            "--no-rust-analyzer",
+        ])
+        .output()
+        .expect("failed invalid tier run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("typo") || stderr.contains("invalid") || stderr.contains("possible values"),
+        "expected parse error for invalid tier, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_cli_graph_build_help_lists_tier() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    let mut cmd = run_ctx(root);
+    let output = cmd
+        .args(["g", "build", "--help"])
+        .output()
+        .expect("failed build help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("--tier"), "build help should list --tier:\n{stdout}");
+    assert!(
+        stdout.contains("fast") && stdout.contains("balanced") && stdout.contains("full"),
+        "build help should document tier values:\n{stdout}"
+    );
+}

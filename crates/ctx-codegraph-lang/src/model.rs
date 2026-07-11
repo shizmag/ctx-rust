@@ -156,7 +156,7 @@ impl ExtractionTier {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "fast" => Some(Self::Fast),
-            "balanced" => Some(Self::Balanced),
+            "balance" | "balanced" => Some(Self::Balanced),
             "full" => Some(Self::Full),
             _ => None,
         }
@@ -757,6 +757,21 @@ pub enum UpdatePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extraction_tier_from_str_accepts_balance_alias() {
+        assert_eq!(
+            ExtractionTier::from_str("balance"),
+            Some(ExtractionTier::Balanced)
+        );
+        assert_eq!(
+            ExtractionTier::from_str("balanced"),
+            Some(ExtractionTier::Balanced)
+        );
+        assert_eq!(ExtractionTier::from_str("fast"), Some(ExtractionTier::Fast));
+        assert_eq!(ExtractionTier::from_str("full"), Some(ExtractionTier::Full));
+        assert_eq!(ExtractionTier::from_str("unknown"), None);
+    }
 
     #[test]
     fn symbol_kind_as_str_roundtrip() {
