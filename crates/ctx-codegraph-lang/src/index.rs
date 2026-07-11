@@ -4,6 +4,8 @@ use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use ctx_codegraph_models::batch_ranges;
+
 use crate::backend::{BackendRegistry, ParseInput, ResolveInput};
 use crate::error::CodeGraphError;
 use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, GraphEdge, SymbolId, SymbolKind};
@@ -158,6 +160,11 @@ pub fn build_index_with_registry(
     options: BuildIndexOptions,
     registry: &BackendRegistry,
 ) -> Result<CodeIndex, CodeGraphError> {
+    // Load ctx_config early for effective_build_batch_size (simple direct load; no sig change).
+    let batch_size = ctx_config::find_and_load_config(root)
+        .map(|c| c.effective_build_batch_size())
+        .unwrap_or(32);
+
     let mut files = Vec::new();
     let mut global_symbols = Vec::new();
     let mut global_occurrences = Vec::new();
@@ -180,70 +187,75 @@ pub fn build_index_with_registry(
         }
     }
 
-    // Process each file
-    for path in matching_files {
-        let backend = match registry.find_by_path(&path) {
-            Some(b) => b,
-            None => continue,
-        };
+    // Process files in build-batches: group for file I/O + TS parse (using now-resident parser per backend).
+    for range in batch_ranges(matching_files.len(), batch_size) {
+        let batch = &matching_files[range];
+        for path in batch {
+            let backend = match registry.find_by_path(&path) {
+                Some(b) => b,
+                None => continue,
+            };
 
-        let mut source_file = create_file_snapshot_with_registry(
-            root,
-            &path,
-            options.change_detection,
-            options.include_tests,
-            registry,
-        );
+            let mut source_file = create_file_snapshot_with_registry(
+                root,
+                &path,
+                options.change_detection,
+                options.include_tests,
+                registry,
+            );
 
-        let parsed = match backend.parser().parse_file(ParseInput { path: &path }) {
-            Ok(res) => res,
-            Err(e) => {
-                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                source_file.parse_status = FileParseStatus::Failed;
-                files.push(source_file);
-                continue;
-            }
-        };
-        files.push(source_file);
-
-        let (mut file_symbols, mut file_occurrences) = (parsed.symbols, parsed.occurrences);
-
-        if !options.include_tests {
-            let mut new_symbols = Vec::new();
-            let mut index_map = std::collections::HashMap::new();
-            for (i, sym) in file_symbols.into_iter().enumerate() {
-                if sym.kind != SymbolKind::Test {
-                    index_map.insert(i, new_symbols.len());
-                    new_symbols.push(sym);
+            let parsed = match backend.parser().parse_file(ParseInput { path: &path }) {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                    source_file.parse_status = FileParseStatus::Failed;
+                    files.push(source_file);
+                    continue;
                 }
-            }
-            file_symbols = new_symbols;
+            };
+            files.push(source_file);
 
-            file_occurrences.retain(|cs| {
-                if let Some(old_idx) = cs.enclosing_temp_index {
-                    index_map.contains_key(&old_idx)
-                } else {
-                    true
-                }
-            });
+            let (mut file_symbols, mut file_occurrences) = (parsed.symbols, parsed.occurrences);
 
-            for cs in &mut file_occurrences {
-                if let Some(ref mut idx) = cs.enclosing_temp_index
-                    && let Some(&new_idx) = index_map.get(idx) {
-                        *idx = new_idx;
+            if !options.include_tests {
+                let mut new_symbols = Vec::new();
+                let mut index_map = std::collections::HashMap::new();
+                for (i, sym) in file_symbols.into_iter().enumerate() {
+                    if sym.kind != SymbolKind::Test {
+                        index_map.insert(i, new_symbols.len());
+                        new_symbols.push(sym);
                     }
-            }
-        }
+                }
+                file_symbols = new_symbols;
 
-        let start_sym_idx = global_symbols.len();
-        for cs in &mut file_occurrences {
-            if let Some(ref mut idx) = cs.enclosing_temp_index {
-                *idx += start_sym_idx;
-            }
-        }
+                file_occurrences.retain(|cs| {
+                    if let Some(old_idx) = cs.enclosing_temp_index {
+                        index_map.contains_key(&old_idx)
+                    } else {
+                        true
+                    }
+                });
 
-        global_symbols.extend(file_symbols);
-        global_occurrences.extend(file_occurrences);
+                for cs in &mut file_occurrences {
+                    if let Some(ref mut idx) = cs.enclosing_temp_index
+                        && let Some(&new_idx) = index_map.get(idx) {
+                            *idx = new_idx;
+                        }
+                }
+            }
+
+            let start_sym_idx = global_symbols.len();
+            for cs in &mut file_occurrences {
+                if let Some(ref mut idx) = cs.enclosing_temp_index {
+                    *idx += start_sym_idx;
+                }
+            }
+
+            global_symbols.extend(file_symbols);
+            global_occurrences.extend(file_occurrences);
+        }
+        // After a batch is parsed, optionally note opportunity for early chunk (leave TODO; do not implement full embed here).
+        // TODO: after batch parse, could flush/early-chunk here before next batch I/O (for future search build integration)
     }
 
     // Set temporary symbol IDs

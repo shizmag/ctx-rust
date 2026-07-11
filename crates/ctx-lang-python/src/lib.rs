@@ -24,7 +24,7 @@ impl Default for PythonBackend {
 impl PythonBackend {
     pub fn new() -> Self {
         Self {
-            parser: PythonParser,
+            parser: PythonParser::new(),
             resolver: LspDefinitionResolver::python(),
         }
     }

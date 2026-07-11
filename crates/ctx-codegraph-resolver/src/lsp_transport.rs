@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -10,6 +11,7 @@ pub struct GenericLspClient {
     writer: std::process::ChildStdin,
     rx: Receiver<serde_json::Value>,
     next_id: usize,
+    opened_uris: HashSet<String>,
 }
 
 fn reader_thread<R: Read>(mut reader: BufReader<R>, tx: Sender<serde_json::Value>) {
@@ -67,6 +69,7 @@ impl GenericLspClient {
             writer: stdin,
             rx,
             next_id: 1,
+            opened_uris: HashSet::new(),
         };
 
         let root_uri = format!(
@@ -99,6 +102,29 @@ impl GenericLspClient {
         client.notify("initialized", serde_json::json!({}))?;
 
         Ok(client)
+    }
+
+    pub fn ensure_document_open(&mut self, file_path: &Path, language_id: &str) -> Result<(), String> {
+        let canon = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+        let uri = format!("file://{}", canon.display());
+        if self.opened_uris.contains(&uri) {
+            return Ok(());
+        }
+        let text = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read {} for didOpen: {}", file_path.display(), e))?;
+        let params = serde_json::json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id,
+                "version": 1,
+                "text": text
+            }
+        });
+        self.notify("textDocument/didOpen", params)?;
+        self.opened_uris.insert(uri);
+        Ok(())
     }
 
     fn send_raw(&mut self, payload: serde_json::Value) -> Result<(), String> {

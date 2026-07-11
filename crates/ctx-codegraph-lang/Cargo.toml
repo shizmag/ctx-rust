@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ctx-codegraph-models = { path = "../ctx-codegraph-models" }
+ctx-config = { path = "../ctx-config" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 walkdir = "2"

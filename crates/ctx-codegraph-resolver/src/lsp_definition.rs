@@ -84,6 +84,7 @@ impl ResolverBackend for LspDefinitionResolver {
                 self.config.args,
             ) {
                 Ok(mut c) => {
+                    let _ = c.ensure_document_open(&input.occurrence.file, &input.occurrence.language.0);
                     let start = std::time::Instant::now();
                     let timeout = Duration::from_secs(45);
                     let delay = Duration::from_millis(200);
@@ -278,6 +279,7 @@ fn resolve_via_lsp(
     symbols: &[Symbol],
     location_parser: LocationParser,
 ) -> Result<Option<usize>, String> {
+    let _ = client.ensure_document_open(&occurrence.file, &occurrence.language.0);
     let file_uri = format!(
         "file://{}",
         occurrence

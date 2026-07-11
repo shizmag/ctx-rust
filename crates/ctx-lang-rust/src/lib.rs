@@ -24,7 +24,7 @@ impl Default for RustBackend {
 impl RustBackend {
     pub fn new() -> Self {
         Self {
-            parser: RustParser,
+            parser: RustParser::new(),
             resolver: LspDefinitionResolver::rust(),
         }
     }

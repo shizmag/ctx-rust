@@ -26,23 +26,33 @@ pub fn resolve_name_only(
     let target_name = parse_raw_name(raw_name);
     let is_method_call = raw_name.contains('.') && !raw_name.contains("::");
 
-    let candidates: Vec<usize> = symbols
-        .iter()
-        .enumerate()
-        .filter(|(_, sym)| {
-            if sym.name != target_name {
-                return false;
-            }
-            if is_method_call {
-                sym.kind == SymbolKind::Method
-            } else {
-                sym.kind == SymbolKind::Function
-                    || sym.kind == SymbolKind::Method
-                    || sym.kind == SymbolKind::Test
-            }
+    // Build a cheap name index on the fly for this call (callers that care about perf
+    // for thousands of sites should build once outside and use a richer helper).
+    // This turns the dominant linear scan into a direct bucket lookup + small filter.
+    use std::collections::HashMap;
+    let mut name_index: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, sym) in symbols.iter().enumerate() {
+        name_index.entry(sym.name.as_str()).or_default().push(i);
+    }
+
+    let candidates: Vec<usize> = name_index
+        .get(target_name)
+        .map(|idxs| {
+            idxs.iter()
+                .filter(|&&i| {
+                    let sym = &symbols[i];
+                    if is_method_call {
+                        sym.kind == SymbolKind::Method
+                    } else {
+                        sym.kind == SymbolKind::Function
+                            || sym.kind == SymbolKind::Method
+                            || sym.kind == SymbolKind::Test
+                    }
+                })
+                .copied()
+                .collect()
         })
-        .map(|(i, _)| i)
-        .collect();
+        .unwrap_or_default();
 
     if candidates.len() == 1 {
         let sym_idx = candidates[0];

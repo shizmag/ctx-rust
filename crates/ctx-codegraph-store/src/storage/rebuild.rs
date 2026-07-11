@@ -435,10 +435,11 @@ pub fn run_full_rebuild_with_registry(
 ) -> Result<(CodeIndex, ctx_codegraph_lang::model::BuildReport), CodeGraphError> {
     clear_index_with_registry(conn, registry)?;
 
-    let mut base_options = options.clone();
-    base_options.use_lsp = false;
+    // Use the caller's options directly (including use_lsp). The build pass now performs
+    // resolution (LSP when enabled, or name-only) and populates correct edges for the full index.
+    // This eliminates the prior forced no-LSP base pass + later reload + redundant re-resolution.
     let mut index =
-        ctx_codegraph_lang::index::build_index_with_registry(workspace_root, base_options, registry)?;
+        ctx_codegraph_lang::index::build_index_with_registry(workspace_root, options.clone(), registry)?;
 
     save_index(conn, &mut index)?;
 
@@ -498,40 +499,10 @@ pub fn run_full_rebuild_with_registry(
     write_meta(&tx, "change_detection_strategy", change_detection)?;
     write_meta(&tx, "base_index_ready", "true")?;
 
-    let mut affected_files = std::collections::HashSet::new();
-    {
-        let mut stmt = tx.prepare("SELECT id FROM files")?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            affected_files.insert(FileId(row.get(0)?));
-        }
-    }
-
-    let affected = AffectedSet {
-        files: affected_files,
-        symbols: std::collections::HashSet::new(),
-        occurrences: std::collections::HashSet::new(),
-        edge_kinds: {
-            let mut s = std::collections::HashSet::new();
-            s.insert(EdgeKind::Call);
-            s
-        },
-        resolvers: {
-            let mut s = std::collections::HashSet::new();
-            s.insert(ResolverId::new(resolver_id));
-            s
-        },
-    };
-
-    let affected_files_vec: Vec<FileId> = affected.files.iter().copied().collect();
-    rebuild_affected_edges_in_tx_with_registry(
-        &tx,
-        workspace_root,
-        &options,
-        &affected_files_vec,
-        &affected.occurrences,
-        registry,
-    )?;
+    // In full rebuild we rely on the edges produced (and saved) by build_index_with_registry,
+    // which already performed resolution according to options.use_lsp. Skip the call-edge
+    // recomputation (which would reload everything and potentially re-resolve). Always rebuild
+    // the "contains" edges (they are independent of LSP).
     rebuild_contains_edges_in_tx(&tx)?;
 
     if options.use_lsp {

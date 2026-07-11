@@ -3,10 +3,35 @@ use ctx_codegraph_lang::error::CodeGraphError;
 use ctx_codegraph_lang::model::{
     Language, Occurrence, OccurrenceKind, Symbol, SymbolKind, TextRange,
 };
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
-pub struct RustParser;
+pub struct RustParser {
+    // Holds reusable tree-sitter Parser. RefCell enables &self mutation for
+    // ParserBackend trait (parse_file takes &self). Language is set once on
+    // construction for residency (reused across parse calls via parse(source, None)).
+    parser: RefCell<Parser>,
+}
+
+// SAFETY: tree-sitter Parser is Send. We use RefCell for single-threaded
+// interior mutability (parsers are not thread-safe for concurrent mutation).
+// Backends are not concurrently used from multiple threads on the same
+// instance in current architecture, satisfying Send + Sync supertrait bounds.
+unsafe impl Send for RustParser {}
+unsafe impl Sync for RustParser {}
+
+impl RustParser {
+    pub fn new() -> Self {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("failed to set tree-sitter-rust language");
+        Self {
+            parser: RefCell::new(parser),
+        }
+    }
+}
 
 impl ParserBackend for RustParser {
     fn parser_id(&self) -> ParserId {
@@ -18,10 +43,42 @@ impl ParserBackend for RustParser {
     }
 
     fn parse_file(&self, input: ParseInput<'_>) -> Result<ParsedFile, CodeGraphError> {
-        let (symbols, occurrences) = parse_rust_file(input.path)?;
+        // Reuse the held parser instance (no new + set_language per call).
+        let content_str = std::fs::read_to_string(input.path)?;
+        let source = content_str.as_bytes();
+        let tree = {
+            let mut parser = self.parser.borrow_mut();
+            parser
+                .parse(source, None)
+                .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", input.path.display())))?
+        };
+
+        if tree.root_node().has_error() {
+            return Err(CodeGraphError::Parse(format!(
+                "Syntax error in {}",
+                input.path.display()
+            )));
+        }
+
+        let file_stem = input.path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mod")
+            .to_string();
+
+        let mut state = ParserState {
+            source,
+            file_path: input.path.to_path_buf(),
+            file_stem,
+            symbols: Vec::new(),
+            occurrences: Vec::new(),
+        };
+
+        state.visit(tree.root_node(), None, None, None);
+
         Ok(ParsedFile {
-            symbols,
-            occurrences,
+            symbols: state.symbols,
+            occurrences: state.occurrences,
         })
     }
 }
@@ -309,39 +366,10 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn parse_rust_file(path: &Path) -> Result<(Vec<Symbol>, Vec<Occurrence>), CodeGraphError> {
-    let content_str = std::fs::read_to_string(path)?;
-    let source = content_str.as_bytes();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
-
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", path.display())))?;
-
-    if tree.root_node().has_error() {
-        return Err(CodeGraphError::Parse(format!(
-            "Syntax error in {}",
-            path.display()
-        )));
-    }
-
-    let file_stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("mod")
-        .to_string();
-
-    let mut state = ParserState {
-        source,
-        file_path: path.to_path_buf(),
-        file_stem,
-        symbols: Vec::new(),
-        occurrences: Vec::new(),
-    };
-
-    state.visit(tree.root_node(), None, None, None);
-
-    Ok((state.symbols, state.occurrences))
+    // Delegate to RustParser (which holds the reusable instance) to keep
+    // public API and output identical. Each direct call creates a fresh
+    // instance (init+set once), matching prior behavior.
+    let p = RustParser::new();
+    let parsed = p.parse_file(ParseInput { path })?;
+    Ok((parsed.symbols, parsed.occurrences))
 }
