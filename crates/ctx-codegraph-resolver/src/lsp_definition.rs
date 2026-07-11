@@ -5,7 +5,7 @@ use ctx_codegraph_lang::error::CodeGraphError;
 use ctx_codegraph_lang::model::{
     Occurrence, ResolutionConfidence, Symbol, SymbolKind, TextRange,
 };
-use ctx_codegraph_lang::noop::{parse_raw_name, resolve_name_only_occurrence};
+use ctx_codegraph_lang::noop::parse_raw_name;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -31,6 +31,7 @@ pub struct LspDefinitionResolver {
     client: Mutex<Option<(PathBuf, GenericLspClient)>>,
     canon_cache: Mutex<std::collections::HashMap<PathBuf, PathBuf>>,
     symbol_map: Mutex<Option<(usize, usize, std::collections::HashMap<PathBuf, Vec<usize>>)>>,
+    name_map: Mutex<Option<(usize, usize, std::collections::HashMap<String, Vec<usize>>)>>,
 }
 
 impl LspDefinitionResolver {
@@ -40,6 +41,7 @@ impl LspDefinitionResolver {
             client: Mutex::new(None),
             canon_cache: Mutex::new(std::collections::HashMap::new()),
             symbol_map: Mutex::new(None),
+            name_map: Mutex::new(None),
         }
     }
 
@@ -97,6 +99,19 @@ impl ResolverBackend for LspDefinitionResolver {
                 }
                 *symbol_map_lock = Some((input.symbols.as_ptr() as usize, input.symbols.len(), map));
                 &symbol_map_lock.as_ref().unwrap().2
+            }
+        };
+
+        let mut name_map_lock = self.name_map.lock().unwrap();
+        let name_map = match &*name_map_lock {
+            Some((ptr, len, map)) if *ptr == input.symbols.as_ptr() as usize && *len == input.symbols.len() => map,
+            _ => {
+                let mut map: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+                for (i, sym) in input.symbols.iter().enumerate() {
+                    map.entry(sym.name.clone()).or_default().push(i);
+                }
+                *name_map_lock = Some((input.symbols.as_ptr() as usize, input.symbols.len(), map));
+                &name_map_lock.as_ref().unwrap().2
             }
         };
 
@@ -191,7 +206,7 @@ impl ResolverBackend for LspDefinitionResolver {
 
         if resolved_symbol_index.is_none() {
             let (fallback_idx, fallback_conf) =
-                resolve_name_only_occurrence(input.occurrence, input.symbols);
+                resolve_with_name_map(&input.occurrence.raw_text, input.symbols, &input.occurrence.file, name_map);
             resolved_symbol_index = fallback_idx;
             confidence = fallback_conf;
         }
@@ -200,6 +215,48 @@ impl ResolverBackend for LspDefinitionResolver {
             resolved_symbol_index,
             confidence,
         })
+    }
+}
+
+fn resolve_with_name_map(
+    raw_name: &str,
+    symbols: &[Symbol],
+    call_site_file: &Path,
+    name_map: &std::collections::HashMap<String, Vec<usize>>,
+) -> (Option<usize>, ResolutionConfidence) {
+    let target_name = parse_raw_name(raw_name);
+    let is_method_call = raw_name.contains('.') && !raw_name.contains("::");
+
+    let candidates: Vec<usize> = name_map
+        .get(target_name)
+        .map(|idxs| {
+            idxs.iter()
+                .filter(|&&i| {
+                    let sym = &symbols[i];
+                    if is_method_call {
+                        sym.kind == SymbolKind::Method
+                    } else {
+                        sym.kind == SymbolKind::Function
+                            || sym.kind == SymbolKind::Method
+                            || sym.kind == SymbolKind::Test
+                    }
+                })
+                .copied()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if candidates.len() == 1 {
+        let sym_idx = candidates[0];
+        let target_sym = &symbols[sym_idx];
+        let confidence = if target_sym.file == call_site_file {
+            ResolutionConfidence::Syntax
+        } else {
+            ResolutionConfidence::Heuristic
+        };
+        (Some(sym_idx), confidence)
+    } else {
+        (None, ResolutionConfidence::Unresolved)
     }
 }
 

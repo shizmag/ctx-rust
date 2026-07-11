@@ -144,7 +144,7 @@ pub fn maybe_build_search_indexes(
     if !force && !needs_search_index_build(conn, workspace_root, options, config) {
         return SearchBuildReport::default();
     }
-    match build_search_indexes(conn, workspace_root, options, config) {
+    match build_search_indexes_impl(conn, workspace_root, options, config, force) {
         Ok(report) => report,
         Err(err) => {
             eprintln!("Warning: search index build failed: {}", err);
@@ -159,12 +159,23 @@ pub fn build_search_indexes(
     options: &BuildIndexOptions,
     config: &Config,
 ) -> Result<SearchBuildReport, CodeGraphError> {
+    build_search_indexes_impl(conn, workspace_root, options, config, false)
+}
+
+pub fn build_search_indexes_impl(
+    conn: &Connection,
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+    config: &Config,
+    full_rebuild: bool,
+) -> Result<SearchBuildReport, CodeGraphError> {
     let auto = config.search_auto_enabled();
     if !options.builds_chunks(auto) {
         return Ok(SearchBuildReport::default());
     }
 
-    if options.force_search_rebuild {
+    let is_rebuild = full_rebuild || options.force_search_rebuild;
+    if is_rebuild {
         clear_chunks(conn)?;
         DenseIndex::open(workspace_root)
             .and_then(|mut dense| dense.clear())
@@ -183,51 +194,42 @@ pub fn build_search_indexes(
     };
     let mut all_chunks = Vec::new();
     let mut next_chunk_id = 0i64;
-    let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
-    let mut embed_buffer: Vec<Chunk> = Vec::new();
 
     let chunk_build_started = Instant::now();
+    let tx = conn.unchecked_transaction()?;
     for file_range in batch_ranges(file_ids.len(), file_batch_size) {
         let file_batch = &file_ids[file_range];
         let batch_chunks =
-            build_chunks_for_files(conn, file_batch, options, &mut next_chunk_id)?;
+            build_chunks_for_files(&tx, file_batch, options, &mut next_chunk_id)?;
         report.chunks_written += batch_chunks.len();
-
-        if options.builds_embeddings(auto) {
-            for chunk in &batch_chunks {
-                if is_dense_embeddable(chunk) {
-                    embed_buffer.push(chunk.clone());
-                }
-            }
-            if !embed_buffer.is_empty() && embedding_ctx.is_none() {
-                embedding_ctx = Some(open_embedding_build_context(
-                    workspace_root,
-                    options,
-                    config,
-                )?);
-            }
-            if let Some(ctx) = embedding_ctx.as_mut() {
-                while embed_buffer.len() >= embed_batch_size {
-                    let batch: Vec<Chunk> =
-                        embed_buffer.drain(..embed_batch_size).collect();
-                    report.embeddings_written +=
-                        embed_and_store_chunks(ctx, &batch, embed_batch_size, &mut profile)?;
-                }
-            }
-        }
-
         all_chunks.extend(batch_chunks);
     }
+    tx.commit()?;
     profile.chunk_build_ms = chunk_build_started.elapsed().as_millis() as u64;
 
-    if let Some(ctx) = embedding_ctx.as_mut() {
-        if !embed_buffer.is_empty() {
-            let remainder = std::mem::take(&mut embed_buffer);
-            report.embeddings_written +=
-                embed_and_store_chunks(ctx, &remainder, embed_batch_size, &mut profile)?;
+    if options.builds_embeddings(auto) {
+        let embeddable_chunks: Vec<&Chunk> = all_chunks
+            .iter()
+            .filter(|c| is_dense_embeddable(c))
+            .collect();
+
+        if !embeddable_chunks.is_empty() {
+            let mut embedding_ctx = open_embedding_build_context(
+                workspace_root,
+                options,
+                config,
+                full_rebuild,
+            )?;
+
+            for chunk_batch in embeddable_chunks.chunks(embed_batch_size) {
+                let batch: Vec<Chunk> = chunk_batch.iter().map(|&c| c.clone()).collect();
+                report.embeddings_written +=
+                    embed_and_store_chunks(&mut embedding_ctx, &batch, embed_batch_size, &mut profile)?;
+            }
+
+            embedding_ctx.flush_pending(&mut profile)?;
+            finalize_embedding_metadata(conn, &embedding_ctx)?;
         }
-        ctx.flush_pending(&mut profile)?;
-        finalize_embedding_metadata(conn, ctx)?;
     }
     profile.embeddable_chunks = all_chunks.iter().filter(|c| is_dense_embeddable(c)).count();
 
@@ -294,14 +296,25 @@ fn build_lexical_index(
     workspace_root: &Path,
     all_chunks: &[Chunk],
 ) -> Result<usize, CodeGraphError> {
+    let mut file_paths = std::collections::HashMap::new();
+    let mut stmt = conn.prepare_cached("SELECT id, rel_path FROM files")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, rel_path) = row?;
+        file_paths.insert(FileId(id), rel_path);
+    }
+
     let docs: Vec<IndexDoc> = all_chunks
         .iter()
         .filter_map(|c| {
             let text = c.text.as_ref()?;
+            let path = file_paths.get(&c.file_id)?.clone();
             Some(IndexDoc {
                 chunk_id: c.id.unwrap(),
                 symbol_id: c.symbol_id,
-                path: file_path_for_chunk(conn, c.file_id).ok()?,
+                path,
                 qualified_name: c.qualified_name.clone(),
                 text: text.clone(),
             })
@@ -351,6 +364,7 @@ struct EmbeddingBuildContext {
     dense: DenseIndex,
     pending_records: Vec<EmbeddingRecord>,
     lance_flush_size: usize,
+    bulk_append: bool,
 }
 
 impl EmbeddingBuildContext {
@@ -366,17 +380,29 @@ impl EmbeddingBuildContext {
                 .drain(..self.lance_flush_size)
                 .collect();
             let started = Instant::now();
-            self.dense
-                .upsert_batch(&batch)
-                .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            if self.bulk_append {
+                self.dense
+                    .add_batch(&batch)
+                    .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            } else {
+                self.dense
+                    .upsert_batch(&batch)
+                    .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            }
             profile.lance_upsert_ms += started.elapsed().as_millis() as u64;
         }
         if !self.pending_records.is_empty() {
             let batch = std::mem::take(&mut self.pending_records);
             let started = Instant::now();
-            self.dense
-                .upsert_batch(&batch)
-                .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            if self.bulk_append {
+                self.dense
+                    .add_batch(&batch)
+                    .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            } else {
+                self.dense
+                    .upsert_batch(&batch)
+                    .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            }
             profile.lance_upsert_ms += started.elapsed().as_millis() as u64;
         }
         Ok(())
@@ -387,6 +413,7 @@ fn open_embedding_build_context(
     workspace_root: &Path,
     options: &BuildIndexOptions,
     config: &Config,
+    full_rebuild: bool,
 ) -> Result<EmbeddingBuildContext, CodeGraphError> {
     let embedding_path = resolve_embedding_model_path(options, config)?;
     let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
@@ -399,7 +426,8 @@ fn open_embedding_build_context(
         model,
         dense,
         pending_records: Vec::new(),
-        lance_flush_size: LANCE_UPSERT_BATCH_SIZE,
+        lance_flush_size: usize::MAX,
+        bulk_append: full_rebuild || options.force_search_rebuild,
     })
 }
 
@@ -484,7 +512,7 @@ fn load_contains_parents(
     conn: &Connection,
     file_id: FileId,
 ) -> Result<HashMap<SymbolId, SymbolId>, CodeGraphError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT to_symbol_id, from_symbol_id FROM edges
          WHERE kind = ?1 AND from_file_id = ?2 AND to_symbol_id IS NOT NULL AND from_symbol_id IS NOT NULL",
     )?;
@@ -504,7 +532,7 @@ fn load_occurrences_for_file(
     file_id: FileId,
     path: &Path,
 ) -> Result<Vec<ctx_codegraph_lang::model::Occurrence>, CodeGraphError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, enclosing_symbol_id, kind, raw_text, start_line, start_col, end_line, end_col, language, backend_id
          FROM occurrences WHERE file_id = ?1",
     )?;

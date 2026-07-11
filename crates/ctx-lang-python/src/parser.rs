@@ -8,28 +8,26 @@ use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
 pub struct PythonParser {
-    // Holds reusable tree-sitter Parser. RefCell enables &self mutation for
-    // ParserBackend trait (parse_file takes &self). Language is set once on
-    // construction for residency (reused across parse calls via parse(source, None)).
-    parser: RefCell<Parser>,
+    _dummy: (),
 }
 
-// SAFETY: tree-sitter Parser is Send. We use RefCell for single-threaded
-// interior mutability (parsers are not thread-safe for concurrent mutation).
-// Backends are not concurrently used from multiple threads on the same
-// instance in current architecture, satisfying Send + Sync supertrait bounds.
+thread_local! {
+    static PYTHON_TS_PARSER: RefCell<Parser> = {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .expect("failed to set tree-sitter-python language");
+        RefCell::new(parser)
+    };
+}
+
+// SAFETY: PythonParser holds no state and uses thread-local tree-sitter parsers, which is safe.
 unsafe impl Send for PythonParser {}
 unsafe impl Sync for PythonParser {}
 
 impl PythonParser {
     pub fn new() -> Self {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
-            .expect("failed to set tree-sitter-python language");
-        Self {
-            parser: RefCell::new(parser),
-        }
+        Self { _dummy: () }
     }
 }
 
@@ -43,15 +41,14 @@ impl ParserBackend for PythonParser {
     }
 
     fn parse_file(&self, input: ParseInput<'_>) -> Result<ParsedFile, CodeGraphError> {
-        // Reuse the held parser instance (no new + set_language per call).
         let content_str = std::fs::read_to_string(input.path)?;
         let source = content_str.as_bytes();
-        let tree = {
-            let mut parser = self.parser.borrow_mut();
+        let tree = PYTHON_TS_PARSER.with(|parser_cell| {
+            let mut parser = parser_cell.borrow_mut();
             parser
                 .parse(source, None)
-                .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", input.path.display())))?
-        };
+                .ok_or_else(|| CodeGraphError::Parse(format!("Failed to parse {}", input.path.display())))
+        })?;
 
         if tree.root_node().has_error() {
             return Err(CodeGraphError::Parse(format!(

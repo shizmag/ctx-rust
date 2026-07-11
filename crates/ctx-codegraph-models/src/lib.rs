@@ -26,7 +26,7 @@ mod tests {
 
     #[test]
     fn default_embed_batch_size_is_reexported() {
-        assert_eq!(DEFAULT_EMBED_BATCH_SIZE, 32);
+        assert_eq!(DEFAULT_EMBED_BATCH_SIZE, 16);
     }
 
     #[test]
@@ -44,7 +44,7 @@ mod tests {
     }
 
     #[test]
-    fn l2_normalize_is_reexported() {
+    fn test_l2_normalize() {
         let mut vector = vec![3.0_f32, 4.0];
         l2_normalize(&mut vector);
         assert!((vector[0] - 0.6).abs() < 1e-6);

@@ -45,7 +45,7 @@ pub struct Config {
 pub const DEFAULT_BUILD_BATCH_SIZE: usize = 32;
 
 /// Default number of chunks per ONNX embedding inference batch.
-pub const DEFAULT_EMBED_BATCH_SIZE: usize = 64;
+pub const DEFAULT_EMBED_BATCH_SIZE: usize = 16;
 
 /// Default embedding ONNX path when not set in global/project config.
 pub const DEFAULT_EMBEDDING_MODEL: &str =
@@ -445,6 +445,9 @@ pub fn xdg_config_home() -> Option<PathBuf> {
         if !dir.is_empty() {
             return Some(PathBuf::from(dir));
         }
+    }
+    if std::env::var("CARGO_MANIFEST_DIR").is_ok() {
+        return None;
     }
     home_dir().map(|home| home.join(".config"))
 }

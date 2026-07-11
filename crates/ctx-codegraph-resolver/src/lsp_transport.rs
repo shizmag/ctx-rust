@@ -95,11 +95,15 @@ impl GenericLspClient {
                     "uri": root_uri,
                     "name": "workspace"
                 }
-            ]
+            ],
+            "settings": {}
         });
 
         if command.contains("rust-analyzer") {
-            init_params["initializationOptions"] = serde_json::json!({
+            let config_options = serde_json::json!({
+                "checkOnSave": {
+                    "enable": false
+                },
                 "check": {
                     "enable": false
                 },
@@ -107,11 +111,39 @@ impl GenericLspClient {
                     "enable": false
                 },
                 "cargo": {
+                    "noDeps": true,
+                    "sysroot": null,
+                    "sysrootSrc": null,
+                    "autoreload": false,
                     "buildScripts": {
                         "enable": false
                     }
+                },
+                "cachePriming": {
+                    "enable": false
+                },
+                "procMacro": {
+                    "enable": false
                 }
             });
+
+            let mut init_opts = config_options.clone();
+            init_opts["rust-analyzer"] = config_options.clone();
+
+            init_params["initializationOptions"] = init_opts;
+            init_params["settings"] = serde_json::json!({
+                "rust-analyzer": config_options
+            });
+        } else if command.contains("pyright") {
+            let settings_json = serde_json::json!({
+                "python": {
+                    "analysis": {
+                        "diagnosticMode": "openFilesOnly"
+                    }
+                }
+            });
+            init_params["initializationOptions"] = settings_json.clone();
+            init_params["settings"] = settings_json;
         }
 
         let _init_resp = client.request("initialize", init_params, Duration::from_secs(5))?;

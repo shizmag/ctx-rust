@@ -1075,6 +1075,7 @@ mod tests {
     fn dense_index_warns_for_legacy_sqlite_without_lance_rows() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        fs::write(root.join(".ctxconfig"), "embedding_model = \"dummy.onnx\"\n").unwrap();
         let sqlite_path = root.join(".ctx-codegraph/dense.sqlite");
         fs::create_dir_all(sqlite_path.parent().unwrap()).unwrap();
 

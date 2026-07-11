@@ -14,31 +14,27 @@ pub fn delete_chunks_for_file(conn: &Connection, file_id: FileId) -> Result<(), 
 }
 
 pub fn save_chunks(conn: &Connection, chunks: &[Chunk]) -> Result<(), CodeGraphError> {
-    let tx = conn.unchecked_transaction()?;
-    {
-        let mut stmt = tx.prepare(
-            "INSERT INTO chunks (
-                id, symbol_id, parent_chunk_id, file_id, kind, text_hash,
-                token_count, start_line, end_line, qualified_name
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )?;
-        for chunk in chunks {
-            let id = chunk.id.map(|c| c.0).unwrap_or(0);
-            stmt.execute(params![
-                id,
-                chunk.symbol_id.map(|s| s.0),
-                chunk.parent_chunk_id.map(|c| c.0),
-                chunk.file_id.0,
-                chunk.kind.as_str(),
-                chunk.text_hash,
-                chunk.token_count as i64,
-                chunk.start_line as i64,
-                chunk.end_line as i64,
-                chunk.qualified_name,
-            ])?;
-        }
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO chunks (
+            id, symbol_id, parent_chunk_id, file_id, kind, text_hash,
+            token_count, start_line, end_line, qualified_name
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
+    for chunk in chunks {
+        let id = chunk.id.map(|c| c.0).unwrap_or(0);
+        stmt.execute(params![
+            id,
+            chunk.symbol_id.map(|s| s.0),
+            chunk.parent_chunk_id.map(|c| c.0),
+            chunk.file_id.0,
+            chunk.kind.as_str(),
+            chunk.text_hash,
+            chunk.token_count as i64,
+            chunk.start_line as i64,
+            chunk.end_line as i64,
+            chunk.qualified_name,
+        ])?;
     }
-    tx.commit()?;
     Ok(())
 }
 

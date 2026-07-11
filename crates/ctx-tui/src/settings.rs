@@ -67,7 +67,7 @@ const DEFAULT_BM25_TOP_K: usize = 50;
 const DEFAULT_DENSE_TOP_K: usize = 50;
 const DEFAULT_RERANK_TOP_K: usize = 20;
 const DEFAULT_BUILD_BATCH_SIZE: usize = 32;
-const DEFAULT_EMBED_BATCH_SIZE: usize = 64;
+const DEFAULT_EMBED_BATCH_SIZE: usize = 16;
 
 impl SettingsState {
     fn new(dir: PathBuf) -> Self {

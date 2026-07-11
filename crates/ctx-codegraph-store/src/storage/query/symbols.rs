@@ -321,7 +321,7 @@ pub fn load_symbols_for_file(
     };
 
     let mut results = Vec::new();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "
         SELECT id, name, qualified_name, kind, language,
                start_line, start_col, end_line, end_col,

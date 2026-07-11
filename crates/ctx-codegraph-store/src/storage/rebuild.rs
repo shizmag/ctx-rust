@@ -350,6 +350,7 @@ fn rebuild_affected_edges_in_tx_with_registry(
     tx.execute(&sql, [])?;
 
     let all_symbols = load_all_symbols(tx)?;
+    let name_index = ctx_codegraph_lang::noop::SymbolNameIndex::new(&all_symbols);
 
     let mut edge_stmt = tx.prepare(
         "INSERT INTO edges (kind, from_file_id, from_symbol_id, to_symbol_id, occurrence_id, raw_text, start_line, start_col, end_line, end_col, confidence, produced_by)
@@ -397,7 +398,7 @@ fn rebuild_affected_edges_in_tx_with_registry(
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
-                ctx_codegraph_lang::noop::resolve_name_only_occurrence(cs, &all_symbols);
+                name_index.resolve(&cs.raw_text, &all_symbols, &cs.file);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }

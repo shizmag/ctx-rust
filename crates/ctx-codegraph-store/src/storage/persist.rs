@@ -74,6 +74,7 @@ pub fn save_index(
             let file_id = FileId(row_id);
             file.file_id = Some(file_id);
             path_to_file_id.insert(file.abs_path.clone(), file_id);
+            path_to_file_id.insert(file.rel_path.clone(), file_id);
         }
     }
 
@@ -92,13 +93,6 @@ pub fn save_index(
             let file_id = path_to_file_id
                 .get(&sym.file)
                 .copied()
-                .or_else(|| {
-                    index
-                        .files
-                        .iter()
-                        .find(|f| f.rel_path == sym.file || f.abs_path == sym.file)
-                        .and_then(|f| f.file_id)
-                })
                 .ok_or_else(|| {
                     CodeGraphError::Parse(format!(
                         "File not found for symbol: {}",
@@ -106,7 +100,6 @@ pub fn save_index(
                     ))
                 })?;
             sym.file_id = Some(file_id);
-
             let body_start_line = sym.body_range.as_ref().map(|r| r.start_line);
             let body_start_col = sym.body_range.as_ref().map(|r| r.start_col);
             let body_end_line = sym.body_range.as_ref().map(|r| r.end_line);
@@ -149,13 +142,6 @@ pub fn save_index(
             let file_id = path_to_file_id
                 .get(&cs.file)
                 .copied()
-                .or_else(|| {
-                    index
-                        .files
-                        .iter()
-                        .find(|f| f.rel_path == cs.file || f.abs_path == cs.file)
-                        .and_then(|f| f.file_id)
-                })
                 .ok_or_else(|| {
                     CodeGraphError::Parse(format!(
                         "File not found for occurrence: {}",

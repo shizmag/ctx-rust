@@ -47,6 +47,7 @@ pub struct EmbeddingRecord {
 pub struct DenseIndex {
     db_path: PathBuf,
     connection: Connection,
+    table: Table,
     runtime: Runtime,
 }
 
@@ -60,14 +61,16 @@ impl DenseIndex {
             .to_string();
 
         let runtime = Runtime::new().map_err(|err| DenseError::Other(err.to_string()))?;
-        let connection = runtime.block_on(async {
-            connect(&db_uri).execute().await
+        let (connection, table) = runtime.block_on(async {
+            let connection = connect(&db_uri).execute().await?;
+            let table = ensure_table(&connection).await?;
+            Ok::<_, DenseError>((connection, table))
         })?;
-        runtime.block_on(ensure_table(&connection))?;
 
         Ok(Self {
             db_path,
             connection,
+            table,
             runtime,
         })
     }
@@ -78,8 +81,7 @@ impl DenseIndex {
 
     pub fn count(&self) -> Result<u64, DenseError> {
         self.block_on(async {
-            let table = open_table(&self.connection).await?;
-            let count = table.count_rows(None).await?;
+            let count = self.table.count_rows(None).await?;
             Ok(count as u64)
         })
     }
@@ -105,11 +107,37 @@ impl DenseIndex {
         let reader = RecordBatchIterator::new(std::iter::once(Ok(batch)), schema);
 
         self.block_on(async {
-            let table = open_table(&self.connection).await?;
-            let mut merge = table.merge_insert(&["chunk_id"]);
+            let mut merge = self.table.merge_insert(&["chunk_id"]);
             merge.when_matched_update_all(None);
             merge.when_not_matched_insert_all();
             merge.execute(Box::new(reader)).await?;
+            Ok(())
+        })
+    }
+
+    pub fn add_batch(&mut self, records: &[EmbeddingRecord]) -> Result<(), DenseError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        for record in records {
+            if record.embedding.len() != EMBEDDING_DIM {
+                return Err(DenseError::Other(format!(
+                    "embedding for chunk {} has dim {}, expected {}",
+                    record.chunk_id.0,
+                    record.embedding.len(),
+                    EMBEDDING_DIM
+                )));
+            }
+        }
+
+        let batch = records_to_batch(records)?;
+        let schema = batch.schema();
+        let reader = RecordBatchIterator::new(std::iter::once(Ok(batch)), schema);
+        let boxed_reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(reader);
+
+        self.block_on(async {
+            self.table.add(boxed_reader).execute().await?;
             Ok(())
         })
     }
@@ -131,8 +159,7 @@ impl DenseIndex {
         let query = query_embedding.to_vec();
 
         let mut hits = self.block_on(async {
-            let table = open_table(&self.connection).await?;
-            let batches = table
+            let batches = self.table
                 .query()
                 .nearest_to(query.as_slice())?
                 .column(VECTOR_COLUMN)
@@ -167,19 +194,20 @@ impl DenseIndex {
             .join(", ");
 
         self.block_on(async {
-            let table = open_table(&self.connection).await?;
             let filter = format!("chunk_id IN ({predicate})");
-            table.delete(filter.as_str()).await?;
+            self.table.delete(filter.as_str()).await?;
             Ok(())
         })
     }
 
     pub fn clear(&mut self) -> Result<(), DenseError> {
-        self.block_on(async {
+        let new_table = self.block_on(async {
             let _ = self.connection.drop_table(TABLE_NAME, &[]).await;
-            ensure_table(&self.connection).await?;
-            Ok(())
-        })
+            let table = ensure_table(&self.connection).await?;
+            Ok(table)
+        })?;
+        self.table = new_table;
+        Ok(())
     }
 
     fn block_on<F, T>(&self, future: F) -> Result<T, DenseError>

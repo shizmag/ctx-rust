@@ -7,7 +7,7 @@ use crate::error::ModelError;
 use crate::tokenizer::CodeTokenizer;
 
 pub const EMBEDDING_DIM: usize = 768;
-pub const DEFAULT_EMBED_BATCH_SIZE: usize = 32;
+pub const DEFAULT_EMBED_BATCH_SIZE: usize = 16;
 
 /// Yields half-open index ranges `[start, end)` covering `0..len` in batches of `batch_size`.
 pub fn batch_ranges(len: usize, batch_size: usize) -> impl Iterator<Item = std::ops::Range<usize>> {
@@ -34,6 +34,7 @@ impl EmbeddingModel {
         let intra_threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+            .min(4)
             .max(1);
         let mut builder = Session::builder().map_err(ModelError::Onnx)?;
         builder = builder
