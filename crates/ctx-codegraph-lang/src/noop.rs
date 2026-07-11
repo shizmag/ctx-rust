@@ -68,6 +68,62 @@ pub fn resolve_name_only(
     }
 }
 
+pub struct SymbolNameIndex<'a> {
+    name_map: std::collections::HashMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> SymbolNameIndex<'a> {
+    pub fn new(symbols: &'a [Symbol]) -> Self {
+        let mut name_map: std::collections::HashMap<&'a str, Vec<usize>> = std::collections::HashMap::new();
+        for (i, sym) in symbols.iter().enumerate() {
+            name_map.entry(sym.name.as_str()).or_default().push(i);
+        }
+        Self { name_map }
+    }
+
+    pub fn resolve(
+        &self,
+        raw_name: &str,
+        symbols: &[Symbol],
+        call_site_file: &Path,
+    ) -> (Option<usize>, ResolutionConfidence) {
+        let target_name = parse_raw_name(raw_name);
+        let is_method_call = raw_name.contains('.') && !raw_name.contains("::");
+
+        let candidates: Vec<usize> = self.name_map
+            .get(target_name)
+            .map(|idxs| {
+                idxs.iter()
+                    .filter(|&&i| {
+                        let sym = &symbols[i];
+                        if is_method_call {
+                            sym.kind == SymbolKind::Method
+                        } else {
+                            sym.kind == SymbolKind::Function
+                                || sym.kind == SymbolKind::Method
+                                || sym.kind == SymbolKind::Test
+                        }
+                    })
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if candidates.len() == 1 {
+            let sym_idx = candidates[0];
+            let target_sym = &symbols[sym_idx];
+            let confidence = if target_sym.file == call_site_file {
+                ResolutionConfidence::Syntax
+            } else {
+                ResolutionConfidence::Heuristic
+            };
+            (Some(sym_idx), confidence)
+        } else {
+            (None, ResolutionConfidence::Unresolved)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

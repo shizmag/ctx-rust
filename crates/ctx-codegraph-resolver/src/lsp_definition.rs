@@ -30,6 +30,7 @@ pub struct LspDefinitionResolver {
     config: LspServerConfig,
     client: Mutex<Option<(PathBuf, GenericLspClient)>>,
     canon_cache: Mutex<std::collections::HashMap<PathBuf, PathBuf>>,
+    symbol_map: Mutex<Option<(usize, usize, std::collections::HashMap<PathBuf, Vec<usize>>)>>,
 }
 
 impl LspDefinitionResolver {
@@ -38,6 +39,7 @@ impl LspDefinitionResolver {
             config,
             client: Mutex::new(None),
             canon_cache: Mutex::new(std::collections::HashMap::new()),
+            symbol_map: Mutex::new(None),
         }
     }
 
@@ -75,6 +77,29 @@ impl ResolverBackend for LspDefinitionResolver {
         let mut canon_cache_lock = self.canon_cache.lock().unwrap();
         let canon_cache = &mut *canon_cache_lock;
 
+        let mut symbol_map_lock = self.symbol_map.lock().unwrap();
+        let symbol_map = match &*symbol_map_lock {
+            Some((ptr, len, map)) if *ptr == input.symbols.as_ptr() as usize && *len == input.symbols.len() => map,
+            _ => {
+                let mut map: std::collections::HashMap<PathBuf, Vec<usize>> = std::collections::HashMap::new();
+                for (i, sym) in input.symbols.iter().enumerate() {
+                    if sym.kind == SymbolKind::Impl {
+                        continue;
+                    }
+                    let sym_canon = if let Some(canon) = canon_cache.get(&sym.file) {
+                        canon.clone()
+                    } else {
+                        let canon = sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone());
+                        canon_cache.insert(sym.file.clone(), canon.clone());
+                        canon
+                    };
+                    map.entry(sym_canon).or_default().push(i);
+                }
+                *symbol_map_lock = Some((input.symbols.as_ptr() as usize, input.symbols.len(), map));
+                &symbol_map_lock.as_ref().unwrap().2
+            }
+        };
+
         let mut client_lock = self.client.lock().unwrap();
         let needs_new_client = match &*client_lock {
             Some((root, _)) => root != input.workspace_root,
@@ -110,6 +135,7 @@ impl ResolverBackend for LspDefinitionResolver {
                             self.config.location_parser,
                             &canon_file,
                             canon_cache,
+                            symbol_map,
                         );
                         match res {
                             Err(err)
@@ -147,6 +173,7 @@ impl ResolverBackend for LspDefinitionResolver {
                 self.config.location_parser,
                 &canon_file,
                 canon_cache,
+                symbol_map,
             ) {
                 Ok(Some(idx)) => {
                     resolved_symbol_index = Some(idx);
@@ -237,6 +264,7 @@ fn find_matching_symbol(
     target_line_1: usize,
     target_col_1: usize,
     canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
+    symbol_map: &std::collections::HashMap<PathBuf, Vec<usize>>,
 ) -> Option<usize> {
     let target_canon = if let Some(canon) = canon_cache.get(target_file) {
         canon.clone()
@@ -247,23 +275,23 @@ fn find_matching_symbol(
     };
     let mut best_match: Option<(usize, usize)> = None;
 
-    for (i, sym) in symbols.iter().enumerate() {
-        if sym.kind == SymbolKind::Impl {
-            continue;
-        }
-        if matches_definition(
-            sym,
-            &target_canon,
-            target_line_1,
-            target_col_1,
-            canon_cache,
-        ) {
-            let range_size = sym.range.end_line - sym.range.start_line;
-            match best_match {
-                None => best_match = Some((i, range_size)),
-                Some((_, best_size)) => {
-                    if range_size < best_size {
-                        best_match = Some((i, range_size));
+    if let Some(indices) = symbol_map.get(&target_canon) {
+        for &i in indices {
+            let sym = &symbols[i];
+            if matches_definition(
+                sym,
+                &target_canon,
+                target_line_1,
+                target_col_1,
+                canon_cache,
+            ) {
+                let range_size = sym.range.end_line - sym.range.start_line;
+                match best_match {
+                    None => best_match = Some((i, range_size)),
+                    Some((_, best_size)) => {
+                        if range_size < best_size {
+                            best_match = Some((i, range_size));
+                        }
                     }
                 }
             }
@@ -305,6 +333,7 @@ fn resolve_via_lsp(
     location_parser: LocationParser,
     canon_file: &Path,
     canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
+    symbol_map: &std::collections::HashMap<PathBuf, Vec<usize>>,
 ) -> Result<Option<usize>, String> {
     let _ = client.ensure_document_open(&occurrence.file, canon_file, &occurrence.language.0);
     let file_uri = format!("file://{}", canon_file.display());
@@ -339,7 +368,7 @@ fn resolve_via_lsp(
     for loc in locations {
         if let Some((target_path, target_line, target_col)) = parse_location(&loc, location_parser)
             && let Some(sym_idx) =
-                find_matching_symbol(symbols, &target_path, target_line, target_col, canon_cache)
+                find_matching_symbol(symbols, &target_path, target_line, target_col, canon_cache, symbol_map)
         {
             return Ok(Some(sym_idx));
         }
@@ -468,9 +497,27 @@ mod tests {
         );
 
         // Target inside outer body should not match outer declaration.
-        assert!(find_matching_symbol(&[outer.clone(), inner.clone()], &file, 1, 10, &mut std::collections::HashMap::new()).is_none());
+        let canon = file.canonicalize().unwrap();
+        let mut symbol_map = std::collections::HashMap::new();
+        symbol_map.insert(canon.clone(), vec![0, 2]);
+        assert!(find_matching_symbol(
+            &[outer.clone(), impl_sym.clone(), inner.clone()],
+            &file,
+            1,
+            10,
+            &mut std::collections::HashMap::new(),
+            &symbol_map
+        )
+        .is_none());
         assert_eq!(
-            find_matching_symbol(&[outer, impl_sym, inner], &file, 2, 1, &mut std::collections::HashMap::new()),
+            find_matching_symbol(
+                &[outer, impl_sym, inner],
+                &file,
+                2,
+                1,
+                &mut std::collections::HashMap::new(),
+                &symbol_map
+            ),
             Some(2)
         );
     }
@@ -506,8 +553,11 @@ mod tests {
             None,
         );
 
+        let canon = file.canonicalize().unwrap();
+        let mut symbol_map = std::collections::HashMap::new();
+        symbol_map.insert(canon, vec![0, 1]);
         assert_eq!(
-            find_matching_symbol(&[wide, narrow], &file, 1, 2, &mut std::collections::HashMap::new()),
+            find_matching_symbol(&[wide, narrow], &file, 1, 2, &mut std::collections::HashMap::new(), &symbol_map),
             Some(1)
         );
     }
@@ -553,12 +603,15 @@ mod tests {
         let mut cache = std::collections::HashMap::new();
         cache.insert(file.clone(), fake_canon.clone());
 
+        let mut symbol_map = std::collections::HashMap::new();
+        symbol_map.insert(fake_canon.clone(), vec![0]);
         let matched = find_matching_symbol(
             &[sym],
             &fake_canon,
             1,
             5,
             &mut cache,
+            &symbol_map,
         );
 
         assert_eq!(matched, Some(0));

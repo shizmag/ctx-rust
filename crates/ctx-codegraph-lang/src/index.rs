@@ -9,7 +9,6 @@ use ctx_codegraph_models::batch_ranges;
 use crate::backend::{BackendRegistry, ParseInput, ResolveInput};
 use crate::error::CodeGraphError;
 use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, GraphEdge, SymbolId, SymbolKind};
-use crate::noop::resolve_name_only;
 
 #[derive(Debug, Clone)]
 pub struct BuildIndexOptions {
@@ -272,6 +271,7 @@ pub fn build_index_with_registry(
 
     // Resolve call occurrences
     let mut edges = Vec::new();
+    let name_index = crate::noop::SymbolNameIndex::new(&global_symbols);
 
     for (call_site_idx, cs) in global_occurrences.iter().enumerate() {
         if cs.kind != crate::model::OccurrenceKind::Call {
@@ -315,7 +315,7 @@ pub fn build_index_with_registry(
 
         if resolved_idx.is_none() {
             let (fallback_idx, fallback_conf) =
-                resolve_name_only(&cs.raw_text, &global_symbols, &cs.file);
+                name_index.resolve(&cs.raw_text, &global_symbols, &cs.file);
             resolved_idx = fallback_idx;
             confidence = fallback_conf;
         }

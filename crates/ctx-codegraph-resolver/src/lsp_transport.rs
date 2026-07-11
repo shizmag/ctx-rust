@@ -79,7 +79,7 @@ impl GenericLspClient {
                 .unwrap_or_else(|_| workspace_root.to_path_buf())
                 .display()
         );
-        let init_params = serde_json::json!({
+        let mut init_params = serde_json::json!({
             "processId": std::process::id(),
             "rootUri": root_uri,
             "capabilities": {
@@ -97,6 +97,22 @@ impl GenericLspClient {
                 }
             ]
         });
+
+        if command.contains("rust-analyzer") {
+            init_params["initializationOptions"] = serde_json::json!({
+                "check": {
+                    "enable": false
+                },
+                "diagnostics": {
+                    "enable": false
+                },
+                "cargo": {
+                    "buildScripts": {
+                        "enable": false
+                    }
+                }
+            });
+        }
 
         let _init_resp = client.request("initialize", init_params, Duration::from_secs(5))?;
         client.notify("initialized", serde_json::json!({}))?;
