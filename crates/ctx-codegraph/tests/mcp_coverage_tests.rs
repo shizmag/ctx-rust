@@ -375,6 +375,7 @@ fn test_mcp_coverage_initialized_notification_does_not_crash() {
         lines = output_str
             .lines()
             .filter(|l| !l.is_empty())
+            .map(str::to_string)
             .collect();
     });
     assert_eq!(lines.len(), 1, "notification must not produce a response");

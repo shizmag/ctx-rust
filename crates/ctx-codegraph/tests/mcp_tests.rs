@@ -226,7 +226,7 @@ fn test_mcp_notification_does_not_respond() {
         let mut output = Vec::new();
         run_mcp_server_with_io(input, &mut output).unwrap();
         let output_str = String::from_utf8(output).unwrap();
-        lines = output_str.lines().collect();
+        lines = output_str.lines().map(str::to_string).collect();
     });
     assert_eq!(lines.len(), 1, "notifications must not produce a response");
 }
