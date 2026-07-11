@@ -35,9 +35,9 @@ pub use hybrid_service::retrieve_context_for_service;
 pub use service::GraphContextService;
 pub use slice::{SliceOptions, forward_slice, reverse_slice};
 pub use storage::{
-    check_db_compatibility, compute_index_diff, ensure_index, find_symbols, find_workspace_root,
-    get_index_state, load_callees, load_callers, load_edges_for_symbol, load_edges_from,
-    load_edges_to, load_file_span, load_index, load_occurrence, load_symbol, load_symbols_by_ids,
-    load_symbols_for_file, open_codegraph_db, open_db, rebuild_index_db, resolve_symbol,
-    validate_index_db,
+    check_db_compatibility, compute_index_diff, dense_embedding_count, ensure_index, find_symbols,
+    find_workspace_root, get_index_state, load_callees, load_callers, load_edges_for_symbol,
+    load_edges_from, load_edges_to, load_file_span, load_index, load_occurrence, load_symbol,
+    load_symbols_by_ids, load_symbols_for_file, open_codegraph_db, open_db, rebuild_index_db,
+    resolve_symbol, validate_index_db,
 };
