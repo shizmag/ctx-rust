@@ -16,7 +16,8 @@ use ctx_render::{Format, RenderOptions};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tier::{CliExtractionTier, resolve_build_path_and_tier};
+use std::sync::{Arc, Mutex};
+use tier::{CliExtractionTier, resolve_build_path_and_tier, resolve_graph_lsp_settings};
 use ui::progress::ProgressGuard;
 use ui::theme;
 
@@ -1215,12 +1216,11 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
     use ctx_codegraph::BuildIndexOptions;
     use std::collections::HashMap;
 
-    let use_rust_analyzer =
-        (graph_args.with_lsp || graph_args.all) && !graph_args.no_rust_analyzer;
+    let cli_lsp = (graph_args.with_lsp || graph_args.all) && !graph_args.no_rust_analyzer;
 
     match graph_args.command {
         GraphSubcommand::Info { format } => {
-            handle_graph_info(&graph_args.path, use_rust_analyzer, &format)?;
+            handle_graph_info(&graph_args.path, cli_lsp, &format)?;
         }
         GraphSubcommand::Build => {
             let start_time = std::time::Instant::now();
@@ -1233,9 +1233,17 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             let tier_label = tier_val
                 .map(|t| t.as_str())
                 .unwrap_or("balanced");
-            let progress = ProgressGuard::new(&format!(
+            let progress_holder = Arc::new(Mutex::new(ProgressGuard::new(&format!(
                 "Building codegraph index (tier: {tier_label})..."
-            ));
+            ))));
+            let progress_hook: ctx_codegraph::BuildProgressHook = {
+                let holder = Arc::clone(&progress_holder);
+                Arc::new(move |msg: &str| {
+                    if let Ok(guard) = holder.lock() {
+                        guard.set_message(msg);
+                    }
+                })
+            };
             let with_emb = if graph_args.without_emb {
                 Some(false)
             } else if graph_args.with_emb || graph_args.all {
@@ -1250,26 +1258,16 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             } else {
                 None
             };
-            let lsp_mode = if use_rust_analyzer {
-                match tier_val {
-                    Some(ctx_codegraph::model::ExtractionTier::Full) => {
-                        ctx_codegraph::model::LspMode::Full
-                    }
-                    Some(ctx_codegraph::model::ExtractionTier::Balanced) => {
-                        ctx_codegraph::model::LspMode::Light
-                    }
-                    _ => ctx_codegraph::model::LspMode::Off,
-                }
-            } else {
-                config
-                    .lsp_mode
-                    .as_deref()
-                    .and_then(ctx_codegraph::model::LspMode::from_str)
-                    .unwrap_or(ctx_codegraph::model::LspMode::Off)
-            };
+            let (use_lsp, lsp_mode) = resolve_graph_lsp_settings(
+                tier_val,
+                graph_args.with_lsp,
+                graph_args.all,
+                graph_args.no_rust_analyzer,
+                &config,
+            );
             let options = BuildIndexOptions {
                 extraction_tier: tier_val,
-                use_lsp: use_rust_analyzer,
+                use_lsp,
                 max_depth: None,
                 include_tests: true,
                 change_detection: ctx_codegraph::model::FileChangeDetection::MtimeAndSize,
@@ -1279,11 +1277,14 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 lsp_mode,
                 parallel_threads: config.parallel_threads,
                 incremental: config.incremental_indexing.unwrap_or(true),
+                on_progress: Some(progress_hook),
             };
-            progress.set_message("Parsing files and writing index...");
+            if let Ok(guard) = progress_holder.lock() {
+                guard.set_message("Parsing files and writing index...");
+            }
             let (_index, report) =
                 ctx_codegraph::rebuild_index_db(&project_path, options)?;
-            drop(progress);
+            drop(progress_holder);
             let elapsed = start_time.elapsed();
 
             if graph_args.verbose {
@@ -1422,7 +1423,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             }
 
             let conn =
-                get_connection_or_rebuild(&target_path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&target_path, cli_lsp, graph_args.verbose)?;
 
             if let Some(q) = query {
                 match ctx_codegraph::resolve_symbol(&conn, &q)? {
@@ -1486,7 +1487,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         }
         GraphSubcommand::Calls { symbol } | GraphSubcommand::Callees { symbol } => {
             let conn =
-                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -1525,7 +1526,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         }
         GraphSubcommand::Callers { symbol } => {
             let conn =
-                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -1568,7 +1569,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         }
         GraphSubcommand::Slice { symbol } => {
             let conn =
-                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
             let candidates = ctx_codegraph::storage::find_symbols(&conn, &symbol)?;
 
             if candidates.is_empty() {
@@ -1606,7 +1607,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             // Call get_ (unified to smart check via get_index_state + cond rebuild) so
             // --with-lsp flag is respected for this query, messages emitted only on actual work.
             let _conn =
-                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
             let service = ctx_codegraph::GraphContextService::load_or_build(&graph_args.path)?;
 
             match service.resolve_symbol(&symbol)? {
@@ -1670,7 +1671,7 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
             explain_ranking,
         } => {
             let conn =
-                get_connection_or_rebuild(&graph_args.path, use_rust_analyzer, graph_args.verbose)?;
+                get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
 
             let ctx_mode = match mode.as_str() {
                 "callers" => ctx_codegraph::GraphContextMode::Callers,
@@ -2078,16 +2079,26 @@ fn graph_info_hints(
 
 fn get_connection_or_rebuild(
     path: &Path,
-    use_rust_analyzer: bool,
+    cli_with_lsp: bool,
     verbose: bool,
 ) -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
     let workspace_root = ctx_codegraph::storage::find_workspace_root(path);
     let config = ctx_config::find_and_load_config(path).unwrap_or_default();
-    let tier_val = config.extraction_tier.as_deref()
+    let tier_val = config
+        .extraction_tier
+        .as_deref()
         .and_then(ctx_codegraph::model::ExtractionTier::from_str);
+    let (use_lsp, lsp_mode) = resolve_graph_lsp_settings(
+        tier_val,
+        cli_with_lsp,
+        false,
+        false,
+        &config,
+    );
     let options = ctx_codegraph::BuildIndexOptions {
         extraction_tier: tier_val,
-        use_lsp: use_rust_analyzer,
+        use_lsp,
+        lsp_mode,
         ..Default::default()
     };
 

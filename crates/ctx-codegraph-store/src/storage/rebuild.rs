@@ -539,6 +539,7 @@ pub fn run_full_rebuild_with_registry(
         || options.with_embeddings.unwrap_or(false)
         || options.with_lexical.unwrap_or(false);
     let search_report = if build_search {
+        options.report_progress("Building search indexes...");
         super::search_build::maybe_build_search_indexes(
             conn,
             workspace_root,
@@ -969,6 +970,7 @@ pub fn run_incremental_update_with_registry(
         || options.with_embeddings.unwrap_or(false)
         || options.with_lexical.unwrap_or(false);
     let search_report = if build_search {
+        options.report_progress("Building search indexes...");
         super::search_build::maybe_build_search_indexes(
             conn,
             workspace_root,

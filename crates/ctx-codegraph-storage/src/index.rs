@@ -3,7 +3,7 @@ use ctx_codegraph_lang::model::{CodeIndex, FileSnapshot};
 use std::path::Path;
 
 pub use ctx_codegraph_lang::index::{
-    BuildIndexOptions, build_index_with_registry, compute_file_hash,
+    BuildIndexOptions, BuildProgressHook, build_index_with_registry, compute_file_hash,
     create_file_snapshot_with_registry, get_mtime_ms, get_size_bytes,
     should_index_path_with_registry,
 };

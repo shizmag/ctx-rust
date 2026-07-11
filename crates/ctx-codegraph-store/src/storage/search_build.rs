@@ -188,57 +188,95 @@ pub fn build_search_indexes_impl(
     let file_batch_size = config.effective_build_batch_size();
     let embed_batch_size = config.effective_embed_batch_size();
 
+    let needs_embeddings = options.builds_embeddings(auto);
+    let needs_lexical = options.builds_lexical(auto);
+
     let mut report = SearchBuildReport::default();
     let mut profile = SearchBuildProfile {
         file_batch_size,
         embed_batch_size,
         ..SearchBuildProfile::default()
     };
-    let mut all_chunks = Vec::new();
+    let mut lexical_chunks = if needs_lexical {
+        Some(Vec::new())
+    } else {
+        None
+    };
     let mut next_chunk_id = 0i64;
+    let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
+    let mut embed_buffer: Vec<Chunk> = Vec::new();
+    let total_files = file_ids.len();
+    let mut files_processed = 0usize;
 
+    options.report_progress("Building search chunks...");
     let chunk_build_started = Instant::now();
     let tx = conn.unchecked_transaction()?;
     for file_range in batch_ranges(file_ids.len(), file_batch_size) {
         let file_batch = &file_ids[file_range];
+        files_processed += file_batch.len();
+        options.report_progress(&format!(
+            "Building chunks ({files_processed}/{total_files} files)..."
+        ));
+
         let batch_chunks =
             build_chunks_for_files(&tx, file_batch, options, &mut next_chunk_id)?;
         report.chunks_written += batch_chunks.len();
-        all_chunks.extend(batch_chunks);
+
+        if needs_embeddings {
+            for chunk in &batch_chunks {
+                if is_dense_embeddable(chunk) {
+                    profile.embeddable_chunks += 1;
+                    embed_buffer.push(chunk.clone());
+                }
+            }
+            if !embed_buffer.is_empty() && embedding_ctx.is_none() {
+                options.report_progress("Loading embedding model...");
+                embedding_ctx = Some(open_embedding_build_context(
+                    workspace_root,
+                    options,
+                    config,
+                    full_rebuild,
+                )?);
+            }
+            if let Some(ctx) = embedding_ctx.as_mut() {
+                while embed_buffer.len() >= embed_batch_size {
+                    let batch: Vec<Chunk> = embed_buffer.drain(..embed_batch_size).collect();
+                    report.embeddings_written +=
+                        embed_and_store_chunks(ctx, &batch, embed_batch_size, &mut profile)?;
+                    options.report_progress(&format!(
+                        "Embedding chunks ({} / {} embedded)...",
+                        report.embeddings_written, profile.embeddable_chunks
+                    ));
+                }
+            }
+        }
+
+        if let Some(chunks) = lexical_chunks.as_mut() {
+            chunks.extend(batch_chunks);
+        }
     }
     tx.commit()?;
     profile.chunk_build_ms = chunk_build_started.elapsed().as_millis() as u64;
 
-    if options.builds_embeddings(auto) {
-        let embeddable_chunks: Vec<&Chunk> = all_chunks
-            .iter()
-            .filter(|c| is_dense_embeddable(c))
-            .collect();
-
-        if !embeddable_chunks.is_empty() {
-            let mut embedding_ctx = open_embedding_build_context(
-                workspace_root,
-                options,
-                config,
-                full_rebuild,
-            )?;
-
-            for chunk_batch in embeddable_chunks.chunks(embed_batch_size) {
-                let batch: Vec<Chunk> = chunk_batch.iter().map(|&c| c.clone()).collect();
-                report.embeddings_written +=
-                    embed_and_store_chunks(&mut embedding_ctx, &batch, embed_batch_size, &mut profile)?;
-            }
-
-            embedding_ctx.flush_pending(&mut profile)?;
-            finalize_embedding_metadata(conn, &embedding_ctx)?;
+    if let Some(ctx) = embedding_ctx.as_mut() {
+        if !embed_buffer.is_empty() {
+            let remainder = std::mem::take(&mut embed_buffer);
+            report.embeddings_written +=
+                embed_and_store_chunks(ctx, &remainder, embed_batch_size, &mut profile)?;
         }
+        options.report_progress(&format!(
+            "Flushing embeddings ({} total)...",
+            report.embeddings_written
+        ));
+        ctx.flush_pending(&mut profile)?;
+        finalize_embedding_metadata(conn, ctx)?;
     }
-    profile.embeddable_chunks = all_chunks.iter().filter(|c| is_dense_embeddable(c)).count();
 
-    if options.builds_lexical(auto) {
+    if needs_lexical {
+        options.report_progress("Building lexical index...");
         let lexical_started = Instant::now();
-        report.lexical_docs_written =
-            build_lexical_index(conn, workspace_root, &all_chunks)?;
+        let chunks = lexical_chunks.as_deref().unwrap_or(&[]);
+        report.lexical_docs_written = build_lexical_index(conn, workspace_root, chunks)?;
         profile.lexical_ms = lexical_started.elapsed().as_millis() as u64;
     }
 
@@ -431,7 +469,7 @@ fn open_embedding_build_context(
         model,
         dense,
         pending_records: Vec::new(),
-        lance_flush_size: usize::MAX,
+        lance_flush_size: LANCE_UPSERT_BATCH_SIZE,
         bulk_append: full_rebuild || options.force_search_rebuild,
     })
 }
@@ -753,6 +791,12 @@ mod tests {
             &options,
             &Config::default()
         ));
+    }
+
+    #[test]
+    fn lance_flush_size_is_bounded() {
+        assert_eq!(LANCE_UPSERT_BATCH_SIZE, 256);
+        assert!(LANCE_UPSERT_BATCH_SIZE < usize::MAX);
     }
 
     #[test]

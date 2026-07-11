@@ -2,6 +2,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::backend::BackendRegistry;
 use crate::error::CodeGraphError;
@@ -10,7 +11,10 @@ use crate::model::{
 };
 use crate::pipeline::{self, PipelineTimings};
 
-#[derive(Debug, Clone)]
+/// Optional progress callback for long-running build phases (embeddings, etc.).
+pub type BuildProgressHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+#[derive(Clone)]
 pub struct BuildIndexOptions {
     pub use_lsp: bool,
     pub max_depth: Option<usize>,
@@ -28,6 +32,27 @@ pub struct BuildIndexOptions {
     pub parallel_threads: Option<usize>,
     /// Enable incremental file-change detection (mtime/hash).
     pub incremental: bool,
+    /// Optional hook for updating CLI progress messages during long build phases.
+    pub on_progress: Option<BuildProgressHook>,
+}
+
+impl std::fmt::Debug for BuildIndexOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuildIndexOptions")
+            .field("use_lsp", &self.use_lsp)
+            .field("max_depth", &self.max_depth)
+            .field("include_tests", &self.include_tests)
+            .field("change_detection", &self.change_detection)
+            .field("with_embeddings", &self.with_embeddings)
+            .field("with_lexical", &self.with_lexical)
+            .field("force_search_rebuild", &self.force_search_rebuild)
+            .field("extraction_tier", &self.extraction_tier)
+            .field("lsp_mode", &self.lsp_mode)
+            .field("parallel_threads", &self.parallel_threads)
+            .field("incremental", &self.incremental)
+            .field("on_progress", &self.on_progress.is_some())
+            .finish()
+    }
 }
 
 impl Default for BuildIndexOptions {
@@ -44,6 +69,7 @@ impl Default for BuildIndexOptions {
             lsp_mode: LspMode::Off,
             parallel_threads: None,
             incremental: true,
+            on_progress: None,
         }
     }
 }
@@ -75,6 +101,12 @@ impl BuildIndexOptions {
 
     pub fn should_use_full_lsp(&self) -> bool {
         pipeline::should_use_full_lsp(self)
+    }
+
+    pub fn report_progress(&self, message: &str) {
+        if let Some(hook) = &self.on_progress {
+            hook(message);
+        }
     }
 }
 

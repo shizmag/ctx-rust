@@ -28,7 +28,7 @@ pub use backend::{
     ResolverId, WorkspaceMarker, global_registry,
 };
 pub use error::CodeGraphError;
-pub use index::{BuildIndexOptions, build_index};
+pub use index::{BuildIndexOptions, BuildProgressHook, build_index};
 pub use model::*;
 pub use ctx_codegraph_storage::hybrid::WorkspaceHybridBackend;
 pub use hybrid_service::retrieve_context_for_service;
