@@ -81,10 +81,13 @@ impl ResolverBackend for LspDefinitionResolver {
             None => true,
         };
 
-        let canon_file = canon_cache
-            .entry(input.occurrence.file.clone())
-            .or_insert_with(|| input.occurrence.file.canonicalize().unwrap_or_else(|_| input.occurrence.file.clone()))
-            .clone();
+        let canon_file = if let Some(canon) = canon_cache.get(&input.occurrence.file) {
+            canon.clone()
+        } else {
+            let canon = input.occurrence.file.canonicalize().unwrap_or_else(|_| input.occurrence.file.clone());
+            canon_cache.insert(input.occurrence.file.clone(), canon.clone());
+            canon
+        };
 
         if needs_new_client {
             *client_lock = None;
@@ -193,9 +196,13 @@ fn matches_definition(
     target_col_1: usize,
     canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> bool {
-    let sym_canon = canon_cache
-        .entry(sym.file.clone())
-        .or_insert_with(|| sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone()));
+    let sym_canon = if let Some(canon) = canon_cache.get(&sym.file) {
+        canon
+    } else {
+        let canon = sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone());
+        canon_cache.insert(sym.file.clone(), canon);
+        canon_cache.get(&sym.file).unwrap()
+    };
     if sym_canon != target_canon {
         return false;
     }
@@ -231,10 +238,13 @@ fn find_matching_symbol(
     target_col_1: usize,
     canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> Option<usize> {
-    let target_canon = canon_cache
-        .entry(target_file.to_path_buf())
-        .or_insert_with(|| target_file.canonicalize().unwrap_or_else(|_| target_file.to_path_buf()))
-        .clone();
+    let target_canon = if let Some(canon) = canon_cache.get(target_file) {
+        canon.clone()
+    } else {
+        let canon = target_file.canonicalize().unwrap_or_else(|_| target_file.to_path_buf());
+        canon_cache.insert(target_file.to_path_buf(), canon.clone());
+        canon
+    };
     let mut best_match: Option<(usize, usize)> = None;
 
     for (i, sym) in symbols.iter().enumerate() {
