@@ -272,6 +272,8 @@ pub fn build_index_with_registry(
             registry,
             &mut timings,
         )?;
+    } else if options.effective_use_lsp() {
+        registry.shutdown_lsp_clients();
     }
 
     timings.log_summary();

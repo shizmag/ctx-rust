@@ -84,12 +84,14 @@ pub fn should_use_full_lsp(options: &BuildIndexOptions) -> bool {
     target_tier(options) >= ExtractionTier::Full && options.effective_use_lsp()
 }
 
-/// Whether light LSP (upgrade unresolved/heuristic edges only) should run at Tier 2+.
+/// Whether LSP should run during the balanced call-graph phase (Tier 2+).
+///
+/// Full tier uses the same resolver here so Tier 3 only upgrades edges that
+/// were not already resolved to `LspExact`.
 pub fn should_use_light_lsp(options: &BuildIndexOptions) -> bool {
     options.effective_use_lsp()
-        && options.lsp_mode.allows_light()
         && target_tier(options) >= ExtractionTier::Balanced
-        && !should_use_full_lsp(options)
+        && (options.lsp_mode.allows_light() || should_use_full_lsp(options))
 }
 
 #[cfg(test)]
@@ -120,7 +122,7 @@ mod tests {
             ..Default::default()
         };
         assert!(should_use_full_lsp(&options));
-        assert!(!should_use_light_lsp(&options));
+        assert!(should_use_light_lsp(&options));
     }
 
     #[test]

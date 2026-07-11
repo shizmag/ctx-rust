@@ -64,6 +64,19 @@ impl LspDefinitionResolver {
             location_parser: LocationParser::Extended,
         })
     }
+
+    /// Drop the live LSP client and clear per-build caches so memory is reclaimed
+    /// before heavyweight phases such as embedding model load.
+    pub fn shutdown(&self) {
+        *self.client.lock().unwrap() = None;
+        self.canon_cache.lock().unwrap().clear();
+        *self.symbol_map.lock().unwrap() = None;
+        *self.name_map.lock().unwrap() = None;
+    }
+
+    pub fn has_live_client(&self) -> bool {
+        self.client.lock().unwrap().is_some()
+    }
 }
 
 impl ResolverBackend for LspDefinitionResolver {
@@ -215,6 +228,10 @@ impl ResolverBackend for LspDefinitionResolver {
             resolved_symbol_index,
             confidence,
         })
+    }
+
+    fn shutdown_lsp(&self) {
+        self.shutdown();
     }
 }
 
@@ -642,6 +659,25 @@ mod tests {
         assert!(matches_definition(&sym, &canon, 1, 4, &mut cache));
         assert!(!matches_definition(&sym, &canon, 1, 3, &mut cache));
         assert!(!matches_definition(&sym, &canon, 1, 9, &mut cache));
+    }
+
+    #[test]
+    fn shutdown_clears_cached_state() {
+        let resolver = LspDefinitionResolver::rust();
+        resolver
+            .canon_cache
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("a.rs"), PathBuf::from("/canon/a.rs"));
+        *resolver.symbol_map.lock().unwrap() = Some((1, 1, std::collections::HashMap::new()));
+        *resolver.name_map.lock().unwrap() = Some((1, 1, std::collections::HashMap::new()));
+
+        resolver.shutdown();
+
+        assert!(!resolver.has_live_client());
+        assert!(resolver.canon_cache.lock().unwrap().is_empty());
+        assert!(resolver.symbol_map.lock().unwrap().is_none());
+        assert!(resolver.name_map.lock().unwrap().is_none());
     }
 
     #[test]

@@ -1,8 +1,10 @@
 use ctx_codegraph_lang::backend::registry::BackendRegistry;
 use ctx_codegraph_lang::backend::traits::{
     BackendId, BackendMetadata, LanguageBackend, ParseInput, ParsedFile, ParserBackend, ParserId,
-    WorkspaceMarker,
+    ResolveInput, ResolveOutput, ResolverBackend, ResolverId, WorkspaceMarker,
 };
+use ctx_codegraph_lang::model::ResolutionConfidence;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{Language, LanguageId};
 use std::path::Path;
@@ -303,6 +305,95 @@ fn should_index_path_respects_registry_and_skip_dirs() {
         Path::new("src/foo.rs"),
         &reg
     ));
+}
+
+#[test]
+fn shutdown_lsp_clients_invokes_registered_resolvers() {
+    static SHUTDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    struct ShutdownTrackingResolver;
+
+    impl ResolverBackend for ShutdownTrackingResolver {
+        fn resolver_id(&self) -> ResolverId {
+            ResolverId::new("shutdown-test")
+        }
+
+        fn resolver_version(&self) -> String {
+            "0.0.1".to_string()
+        }
+
+        fn resolve(&self, _input: ResolveInput<'_>) -> Result<ResolveOutput, ctx_codegraph_lang::CodeGraphError> {
+            Ok(ResolveOutput {
+                resolved_symbol_index: None,
+                confidence: ResolutionConfidence::Unresolved,
+            })
+        }
+
+        fn shutdown_lsp(&self) {
+            SHUTDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct ResolverBackendWrapper {
+        parser: StubParser,
+        resolver: ShutdownTrackingResolver,
+    }
+
+    impl LanguageBackend for ResolverBackendWrapper {
+        fn id(&self) -> BackendId {
+            BackendId::new("resolver-backend")
+        }
+
+        fn language(&self) -> Language {
+            LanguageId::new("stub")
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Resolver Stub"
+        }
+
+        fn matches_path(&self, path: &Path) -> bool {
+            path.extension().and_then(|e| e.to_str()) == Some("stub")
+        }
+
+        fn parser(&self) -> &dyn ParserBackend {
+            &self.parser
+        }
+
+        fn resolver(&self) -> Option<&dyn ResolverBackend> {
+            Some(&self.resolver)
+        }
+
+        fn workspace_markers(&self) -> &[WorkspaceMarker] {
+            &[]
+        }
+
+        fn metadata(&self, config: &BuildIndexOptions) -> BackendMetadata {
+            BackendMetadata {
+                backend_id: self.id().0,
+                language: self.language().0,
+                parser_id: self.parser().parser_id().0,
+                parser_version: self.parser().parser_version(),
+                resolver_id: Some(self.resolver().unwrap().resolver_id().0),
+                resolver_version: Some(self.resolver().unwrap().resolver_version()),
+                config_hash: self.config_fingerprint(config),
+            }
+        }
+
+        fn config_fingerprint(&self, config: &BuildIndexOptions) -> String {
+            format!("include_tests={}", config.include_tests)
+        }
+    }
+
+    SHUTDOWN_COUNT.store(0, Ordering::SeqCst);
+    let mut reg = BackendRegistry::new();
+    reg.register(Box::new(ResolverBackendWrapper {
+        parser: StubParser,
+        resolver: ShutdownTrackingResolver,
+    }));
+
+    reg.shutdown_lsp_clients();
+    assert_eq!(SHUTDOWN_COUNT.load(Ordering::SeqCst), 1);
 }
 
 #[test]

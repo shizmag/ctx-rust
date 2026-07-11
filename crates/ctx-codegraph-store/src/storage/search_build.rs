@@ -204,7 +204,7 @@ pub fn build_search_indexes_impl(
     };
     let mut next_chunk_id = 0i64;
     let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
-    let mut embed_buffer: Vec<Chunk> = Vec::new();
+    let mut embed_buffer: Vec<EmbeddableChunk> = Vec::new();
     let total_files = file_ids.len();
     let mut files_processed = 0usize;
 
@@ -226,7 +226,7 @@ pub fn build_search_indexes_impl(
             for chunk in &batch_chunks {
                 if is_dense_embeddable(chunk) {
                     profile.embeddable_chunks += 1;
-                    embed_buffer.push(chunk.clone());
+                    embed_buffer.push(EmbeddableChunk::from_chunk(chunk));
                 }
             }
             if !embed_buffer.is_empty() && embedding_ctx.is_none() {
@@ -240,7 +240,8 @@ pub fn build_search_indexes_impl(
             }
             if let Some(ctx) = embedding_ctx.as_mut() {
                 while embed_buffer.len() >= embed_batch_size {
-                    let batch: Vec<Chunk> = embed_buffer.drain(..embed_batch_size).collect();
+                    let batch: Vec<EmbeddableChunk> =
+                        embed_buffer.drain(..embed_batch_size).collect();
                     report.embeddings_written +=
                         embed_and_store_chunks(ctx, &batch, embed_batch_size, &mut profile)?;
                     options.report_progress(&format!(
@@ -394,8 +395,25 @@ fn resolve_embedding_model_path(
 fn chunk_embedding_text(chunk: &Chunk) -> String {
     chunk
         .text
-        .clone()
-        .unwrap_or_else(|| chunk.qualified_name.clone())
+        .as_deref()
+        .unwrap_or(chunk.qualified_name.as_str())
+        .to_string()
+}
+
+/// Minimal data retained between file batches while waiting to embed.
+#[derive(Clone)]
+struct EmbeddableChunk {
+    id: ChunkId,
+    text: String,
+}
+
+impl EmbeddableChunk {
+    fn from_chunk(chunk: &Chunk) -> Self {
+        Self {
+            id: chunk.id.expect("chunk id assigned before embedding queue"),
+            text: chunk_embedding_text(chunk),
+        }
+    }
 }
 
 struct EmbeddingBuildContext {
@@ -476,7 +494,7 @@ fn open_embedding_build_context(
 
 fn embed_and_store_chunks(
     ctx: &mut EmbeddingBuildContext,
-    chunks: &[Chunk],
+    chunks: &[EmbeddableChunk],
     embed_batch_size: usize,
     profile: &mut SearchBuildProfile,
 ) -> Result<usize, CodeGraphError> {
@@ -484,20 +502,14 @@ fn embed_and_store_chunks(
         return Ok(0);
     }
 
-    let embeddable: Vec<&Chunk> = chunks.iter().filter(|c| is_dense_embeddable(c)).collect();
-    if embeddable.is_empty() {
-        return Ok(0);
-    }
-
-    let texts: Vec<String> = embeddable.iter().map(|c| chunk_embedding_text(c)).collect();
     let mut embeddings_written = 0usize;
-    for range in batch_ranges(texts.len(), embed_batch_size) {
-        let batch_texts = &texts[range.clone()];
-        let batch_chunks: Vec<&Chunk> = embeddable[range].iter().copied().collect();
+    for range in batch_ranges(chunks.len(), embed_batch_size) {
+        let batch_chunks = &chunks[range.clone()];
+        let batch_texts: Vec<String> = batch_chunks.iter().map(|c| c.text.clone()).collect();
         let started = Instant::now();
         let embeddings = ctx
             .model
-            .embed_texts(batch_texts)
+            .embed_texts(&batch_texts)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
         profile.embed_ms += started.elapsed().as_millis() as u64;
         profile.embed_batches += 1;
@@ -506,7 +518,7 @@ fn embed_and_store_chunks(
             .iter()
             .zip(embeddings.iter())
             .map(|(chunk, emb)| EmbeddingRecord {
-                chunk_id: chunk.id.unwrap(),
+                chunk_id: chunk.id,
                 embedding: emb.clone(),
             })
             .collect();
@@ -791,6 +803,26 @@ mod tests {
             &options,
             &Config::default()
         ));
+    }
+
+    #[test]
+    fn embeddable_chunk_stores_id_and_text_only() {
+        let chunk = Chunk {
+            id: Some(ChunkId(42)),
+            symbol_id: Some(SymbolId(7)),
+            parent_chunk_id: None,
+            file_id: FileId(1),
+            kind: ChunkKind::SymbolBody,
+            text_hash: "abc".into(),
+            token_count: 10,
+            start_line: 1,
+            end_line: 5,
+            qualified_name: "mod::foo".into(),
+            text: Some("fn foo() {}".into()),
+        };
+        let embeddable = EmbeddableChunk::from_chunk(&chunk);
+        assert_eq!(embeddable.id, ChunkId(42));
+        assert_eq!(embeddable.text, "fn foo() {}");
     }
 
     #[test]

@@ -11,6 +11,11 @@ use crate::model::{
 };
 use crate::pipeline::{PipelineTimings, should_use_full_lsp};
 
+/// Whether Tier 3 should attempt LSP resolution for this edge.
+pub(crate) fn edge_needs_lsp_upgrade(edge: &GraphEdge) -> bool {
+    edge.confidence != ResolutionConfidence::LspExact
+}
+
 /// Upgrade call edges with full LSP resolution (Tier 3).
 ///
 /// Re-resolves all call sites when full LSP is enabled, replacing heuristic/syntax edges
@@ -31,6 +36,10 @@ pub fn upgrade_edges_with_lsp(
     let started = Instant::now();
 
     for edge in edges.iter_mut() {
+        if !edge_needs_lsp_upgrade(edge) {
+            continue;
+        }
+
         let occ_id = match edge.occurrence_id {
             Some(id) => id.0 as usize,
             None => continue,
@@ -72,5 +81,44 @@ pub fn upgrade_edges_with_lsp(
     }
 
     timings.record("full_lsp_upgrade", started);
+    registry.shutdown_lsp_clients();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{EdgeKind, OccurrenceId, SymbolId};
+
+    fn sample_edge(confidence: ResolutionConfidence) -> GraphEdge {
+        GraphEdge {
+            id: None,
+            kind: EdgeKind::Call,
+            from_file_id: None,
+            from_symbol_id: Some(SymbolId(1)),
+            to_symbol_id: Some(SymbolId(2)),
+            to_external: None,
+            occurrence_id: Some(OccurrenceId(0)),
+            raw_text: Some("foo".into()),
+            range: None,
+            confidence,
+            produced_by: None,
+        }
+    }
+
+    #[test]
+    fn edge_needs_lsp_upgrade_skips_exact_edges() {
+        assert!(!edge_needs_lsp_upgrade(&sample_edge(
+            ResolutionConfidence::LspExact
+        )));
+        assert!(edge_needs_lsp_upgrade(&sample_edge(
+            ResolutionConfidence::Syntax
+        )));
+        assert!(edge_needs_lsp_upgrade(&sample_edge(
+            ResolutionConfidence::Heuristic
+        )));
+        assert!(edge_needs_lsp_upgrade(&sample_edge(
+            ResolutionConfidence::Unresolved
+        )));
+    }
 }

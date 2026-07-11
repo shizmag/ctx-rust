@@ -93,5 +93,8 @@ pub fn resolve_call_edges(
     }
 
     timings.record("balanced_call_graph", started);
+    if light_lsp && !options.should_use_full_lsp() {
+        registry.shutdown_lsp_clients();
+    }
     Ok(edges)
 }

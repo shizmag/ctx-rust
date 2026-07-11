@@ -104,6 +104,9 @@ pub trait ResolverBackend: Send + Sync {
     fn resolver_id(&self) -> ResolverId;
     fn resolver_version(&self) -> String;
     fn resolve(&self, input: ResolveInput<'_>) -> Result<ResolveOutput, CodeGraphError>;
+
+    /// Release any language-server process or session held by this resolver.
+    fn shutdown_lsp(&self) {}
 }
 
 pub trait LanguageBackend: Send + Sync {

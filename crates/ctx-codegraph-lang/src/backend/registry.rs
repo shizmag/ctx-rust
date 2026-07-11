@@ -40,4 +40,13 @@ impl BackendRegistry {
     pub fn all(&self) -> &[Box<dyn LanguageBackend>] {
         &self.backends
     }
+
+    /// Shut down all language-server clients held by registered resolvers.
+    pub fn shutdown_lsp_clients(&self) {
+        for backend in &self.backends {
+            if let Some(resolver) = backend.resolver() {
+                resolver.shutdown_lsp();
+            }
+        }
+    }
 }
