@@ -101,6 +101,9 @@ pub fn build_search_indexes(
 
     if options.force_search_rebuild {
         clear_chunks(conn)?;
+        DenseIndex::open(workspace_root)
+            .and_then(|mut dense| dense.clear())
+            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
     }
 
     let file_ids = collect_file_ids(conn)?;
@@ -110,13 +113,7 @@ pub fn build_search_indexes(
     let mut report = SearchBuildReport::default();
     let mut all_chunks = Vec::new();
     let mut next_chunk_id = 0i64;
-
-    // Load the embedding model once for the whole build when embeddings are enabled.
-    let mut embedding_ctx = if options.builds_embeddings(auto) {
-        Some(open_embedding_build_context(workspace_root, options, config)?)
-    } else {
-        None
-    };
+    let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
 
     // Process files in sequential batches: chunks → embeddings → DB (lexical at end).
     for file_range in batch_ranges(file_ids.len(), file_batch_size) {
@@ -124,6 +121,17 @@ pub fn build_search_indexes(
         let batch_chunks =
             build_chunks_for_files(conn, file_batch, options, &mut next_chunk_id)?;
         report.chunks_written += batch_chunks.len();
+
+        if options.builds_embeddings(auto)
+            && !batch_chunks.is_empty()
+            && embedding_ctx.is_none()
+        {
+            embedding_ctx = Some(open_embedding_build_context(
+                workspace_root,
+                options,
+                config,
+            )?);
+        }
 
         if let Some(ctx) = embedding_ctx.as_mut() {
             report.embeddings_written +=

@@ -129,6 +129,13 @@ impl DenseIndex {
         tx.commit()?;
         Ok(())
     }
+
+    /// Removes all stored embeddings. Used when forcing a full search index rebuild.
+    pub fn clear(&mut self) -> Result<(), DenseError> {
+        self.conn
+            .execute("DELETE FROM chunk_embeddings", [])?;
+        Ok(())
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<(), DenseError> {
@@ -319,6 +326,28 @@ mod tests {
         index.remove_chunk_ids(&[]).unwrap();
         let hits = index.search_knn(&sample_embedding(1.0), 1).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn clear_removes_all_embeddings() {
+        let dir = tempdir().unwrap();
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[
+                EmbeddingRecord {
+                    chunk_id: ChunkId(1),
+                    embedding: sample_embedding(1.0),
+                },
+                EmbeddingRecord {
+                    chunk_id: ChunkId(2),
+                    embedding: sample_embedding(2.0),
+                },
+            ])
+            .unwrap();
+
+        index.clear().unwrap();
+        let hits = index.search_knn(&sample_embedding(1.0), 5).unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]
