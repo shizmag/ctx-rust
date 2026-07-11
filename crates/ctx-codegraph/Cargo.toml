@@ -12,6 +12,7 @@ ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
 ctx-config = { path = "../ctx-config" }
 
 [dev-dependencies]
+serial_test = "3"
 tempfile = "3"
 ctx-codegraph-store = { path = "../ctx-codegraph-store", features = ["test-fixtures"] }
 ctx-mcp = { path = "../ctx-mcp" }

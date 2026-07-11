@@ -7,7 +7,10 @@ use tempfile::tempdir;
 
 fn setup_named_project_with_index(package_name: &str) -> (tempfile::TempDir, String) {
     let temp_dir = tempdir().unwrap();
-    let root = temp_dir.path();
+    // Use a stable workspace folder name so get_project_context render titles match
+    // the Cargo package name (tempfile root names are random, e.g. .tmpXXXX).
+    let root = temp_dir.path().join(package_name);
+    fs::create_dir_all(&root).unwrap();
 
     fs::write(
         root.join("Cargo.toml"),
@@ -42,7 +45,7 @@ fn setup_named_project_with_index(package_name: &str) -> (tempfile::TempDir, Str
     .unwrap();
 
     with_isolated_global_config(|| {
-        rebuild_index_db(root, no_search_options()).unwrap();
+        rebuild_index_db(&root, no_search_options()).unwrap();
     });
 
     let root_uri = format!("file://{}", root.display());

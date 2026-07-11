@@ -1,5 +1,7 @@
 mod common;
 
+use serial_test::serial;
+
 use common::{
     init_request, run_mcp_requests, setup_coverage_project_with_index, setup_project_with_index,
     tool_call_request,
@@ -180,6 +182,7 @@ fn test_mcp_coverage_prompts_list_and_get() {
 }
 
 #[test]
+#[serial]
 fn test_mcp_coverage_tool_calls_happy_paths() {
     let (_temp_dir, root_uri) = setup_coverage_project_with_index();
 
@@ -278,10 +281,15 @@ fn test_mcp_coverage_tool_calls_happy_paths() {
         .as_str()
         .unwrap()
         .contains("run_pipeline"));
-    assert!(responses[5]["result"]["content"][0]["text"]
+    assert_eq!(responses[5]["id"], 6, "responses[5] should be get_project_context");
+    let project_context = responses[5]["result"]["content"][0]["text"]
         .as_str()
-        .unwrap()
-        .contains("coverage_project"));
+        .unwrap();
+    assert!(
+        project_context.contains("coverage_project"),
+        "get_project_context should include package name in title or Cargo.toml; got: {}",
+        &project_context[..project_context.len().min(400)]
+    );
     assert!(responses[6]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -406,6 +414,7 @@ fn test_mcp_coverage_method_not_found_error() {
 /// Focused test for stats collection during calls (esp affected_context), toggle via env (proxy for stats_enabled),
 /// and that resource/status expose the data.
 #[test]
+#[serial]
 fn test_mcp_stats_toggle_via_env_and_collection() {
     let (_temp_dir, root_uri) = setup_project_with_index();
     let prev = std::env::var("CTX_MCP_COLLECT_STATS").ok();
@@ -463,6 +472,7 @@ fn test_mcp_stats_toggle_via_env_and_collection() {
 }
 
 #[test]
+#[serial]
 fn test_mcp_handlers_respect_config_defaults_for_ai_agents() {
     // Minimal project setup (kept local to avoid changing shared helpers or all call sites)
     let temp_dir = tempdir().unwrap();

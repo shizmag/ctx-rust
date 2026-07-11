@@ -32,16 +32,30 @@ pub fn no_search_options() -> BuildIndexOptions {
     }
 }
 
+struct IsolatedXdgGuard {
+    _env_lock: MutexGuard<'static, ()>,
+    _temp_dir: tempfile::TempDir,
+}
+
+impl Drop for IsolatedXdgGuard {
+    fn drop(&mut self) {
+        // SAFETY: guarded test-only env mutation; restored on scope exit (incl. panic).
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+}
+
 /// Run `f` with an empty isolated `XDG_CONFIG_HOME` (mutex-guarded).
 pub fn with_isolated_global_config<F: FnOnce()>(f: F) {
-    let _guard = env_lock();
     let temp_dir = tempfile::tempdir().unwrap();
     let xdg = temp_dir.path().join("xdg-config");
     fs::create_dir_all(&xdg).unwrap();
+    let _guard = IsolatedXdgGuard {
+        _env_lock: env_lock(),
+        _temp_dir: temp_dir,
+    };
     // SAFETY: guarded test-only env mutation.
     unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
     f();
-    unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
 }
 
 /// Production-like language backend registry (cached).
