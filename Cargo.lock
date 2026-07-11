@@ -1168,6 +1168,8 @@ dependencies = [
 name = "ctx-codegraph-lang"
 version = "0.1.0"
 dependencies = [
+ "ctx-codegraph-models",
+ "ctx-config",
  "rusqlite",
  "serde",
  "sha2",

@@ -29,6 +29,7 @@ pub struct LspServerConfig {
 pub struct LspDefinitionResolver {
     config: LspServerConfig,
     client: Mutex<Option<(PathBuf, GenericLspClient)>>,
+    canon_cache: Mutex<std::collections::HashMap<PathBuf, PathBuf>>,
 }
 
 impl LspDefinitionResolver {
@@ -36,6 +37,7 @@ impl LspDefinitionResolver {
         Self {
             config,
             client: Mutex::new(None),
+            canon_cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -70,11 +72,19 @@ impl ResolverBackend for LspDefinitionResolver {
     }
 
     fn resolve(&self, input: ResolveInput<'_>) -> Result<ResolveOutput, CodeGraphError> {
+        let mut canon_cache_lock = self.canon_cache.lock().unwrap();
+        let canon_cache = &mut *canon_cache_lock;
+
         let mut client_lock = self.client.lock().unwrap();
         let needs_new_client = match &*client_lock {
             Some((root, _)) => root != input.workspace_root,
             None => true,
         };
+
+        let canon_file = canon_cache
+            .entry(input.occurrence.file.clone())
+            .or_insert_with(|| input.occurrence.file.canonicalize().unwrap_or_else(|_| input.occurrence.file.clone()))
+            .clone();
 
         if needs_new_client {
             *client_lock = None;
@@ -84,7 +94,7 @@ impl ResolverBackend for LspDefinitionResolver {
                 self.config.args,
             ) {
                 Ok(mut c) => {
-                    let _ = c.ensure_document_open(&input.occurrence.file, &input.occurrence.language.0);
+                    let _ = c.ensure_document_open(&input.occurrence.file, &canon_file, &input.occurrence.language.0);
                     let start = std::time::Instant::now();
                     let timeout = Duration::from_secs(45);
                     let delay = Duration::from_millis(200);
@@ -95,6 +105,8 @@ impl ResolverBackend for LspDefinitionResolver {
                             input.occurrence,
                             input.symbols,
                             self.config.location_parser,
+                            &canon_file,
+                            canon_cache,
                         );
                         match res {
                             Err(err)
@@ -130,6 +142,8 @@ impl ResolverBackend for LspDefinitionResolver {
                 input.occurrence,
                 input.symbols,
                 self.config.location_parser,
+                &canon_file,
+                canon_cache,
             ) {
                 Ok(Some(idx)) => {
                     resolved_symbol_index = Some(idx);
@@ -215,12 +229,13 @@ fn find_matching_symbol(
     target_file: &Path,
     target_line_1: usize,
     target_col_1: usize,
+    canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> Option<usize> {
-    let target_canon = target_file
-        .canonicalize()
-        .unwrap_or_else(|_| target_file.to_path_buf());
+    let target_canon = canon_cache
+        .entry(target_file.to_path_buf())
+        .or_insert_with(|| target_file.canonicalize().unwrap_or_else(|_| target_file.to_path_buf()))
+        .clone();
     let mut best_match: Option<(usize, usize)> = None;
-    let mut canon_cache = std::collections::HashMap::new();
 
     for (i, sym) in symbols.iter().enumerate() {
         if sym.kind == SymbolKind::Impl {
@@ -231,7 +246,7 @@ fn find_matching_symbol(
             &target_canon,
             target_line_1,
             target_col_1,
-            &mut canon_cache,
+            canon_cache,
         ) {
             let range_size = sym.range.end_line - sym.range.start_line;
             match best_match {
@@ -278,16 +293,11 @@ fn resolve_via_lsp(
     occurrence: &Occurrence,
     symbols: &[Symbol],
     location_parser: LocationParser,
+    canon_file: &Path,
+    canon_cache: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> Result<Option<usize>, String> {
-    let _ = client.ensure_document_open(&occurrence.file, &occurrence.language.0);
-    let file_uri = format!(
-        "file://{}",
-        occurrence
-            .file
-            .canonicalize()
-            .unwrap_or_else(|_| occurrence.file.clone())
-            .display()
-    );
+    let _ = client.ensure_document_open(&occurrence.file, canon_file, &occurrence.language.0);
+    let file_uri = format!("file://{}", canon_file.display());
 
     let name_segment = parse_raw_name(&occurrence.raw_text);
     let offset = occurrence.raw_text.len() - name_segment.len();
@@ -319,7 +329,7 @@ fn resolve_via_lsp(
     for loc in locations {
         if let Some((target_path, target_line, target_col)) = parse_location(&loc, location_parser)
             && let Some(sym_idx) =
-                find_matching_symbol(symbols, &target_path, target_line, target_col)
+                find_matching_symbol(symbols, &target_path, target_line, target_col, canon_cache)
         {
             return Ok(Some(sym_idx));
         }
@@ -448,9 +458,9 @@ mod tests {
         );
 
         // Target inside outer body should not match outer declaration.
-        assert!(find_matching_symbol(&[outer.clone(), inner.clone()], &file, 1, 10).is_none());
+        assert!(find_matching_symbol(&[outer.clone(), inner.clone()], &file, 1, 10, &mut std::collections::HashMap::new()).is_none());
         assert_eq!(
-            find_matching_symbol(&[outer, impl_sym, inner], &file, 2, 1),
+            find_matching_symbol(&[outer, impl_sym, inner], &file, 2, 1, &mut std::collections::HashMap::new()),
             Some(2)
         );
     }
@@ -487,7 +497,7 @@ mod tests {
         );
 
         assert_eq!(
-            find_matching_symbol(&[wide, narrow], &file, 1, 2),
+            find_matching_symbol(&[wide, narrow], &file, 1, 2, &mut std::collections::HashMap::new()),
             Some(1)
         );
     }
@@ -515,5 +525,32 @@ mod tests {
         assert!(matches_definition(&sym, &canon, 1, 4, &mut cache));
         assert!(!matches_definition(&sym, &canon, 1, 3, &mut cache));
         assert!(!matches_definition(&sym, &canon, 1, 9, &mut cache));
+    }
+
+    #[test]
+    fn find_matching_symbol_uses_canon_cache() {
+        let file = PathBuf::from("nonexistent_file_a.rs");
+        let fake_canon = PathBuf::from("fake_canonical_a.rs");
+
+        let sym = make_symbol(
+            "demo",
+            &file,
+            sample_range(1),
+            SymbolKind::Function,
+            None,
+        );
+
+        let mut cache = std::collections::HashMap::new();
+        cache.insert(file.clone(), fake_canon.clone());
+
+        let matched = find_matching_symbol(
+            &[sym],
+            &fake_canon,
+            1,
+            5,
+            &mut cache,
+        );
+
+        assert_eq!(matched, Some(0));
     }
 }

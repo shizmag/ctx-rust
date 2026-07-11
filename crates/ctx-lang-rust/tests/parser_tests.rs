@@ -212,7 +212,7 @@ fn test_parse_rust_malformed_graceful_error() {
 #[test]
 fn test_rust_parser_backend_trait() {
     let temp = write_temp_rust("fn via_backend() { helper(); }");
-    let parser = RustParser;
+    let parser = RustParser::new();
     assert_eq!(parser.parser_id().0, "tree-sitter-rust");
     assert_eq!(parser.parser_version(), "0.20.0");
 

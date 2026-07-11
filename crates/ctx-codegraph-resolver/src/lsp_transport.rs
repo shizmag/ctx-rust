@@ -104,11 +104,13 @@ impl GenericLspClient {
         Ok(client)
     }
 
-    pub fn ensure_document_open(&mut self, file_path: &Path, language_id: &str) -> Result<(), String> {
-        let canon = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
-        let uri = format!("file://{}", canon.display());
+    pub fn ensure_document_open(
+        &mut self,
+        file_path: &Path,
+        canon_path: &Path,
+        language_id: &str,
+    ) -> Result<(), String> {
+        let uri = format!("file://{}", canon_path.display());
         if self.opened_uris.contains(&uri) {
             return Ok(());
         }
