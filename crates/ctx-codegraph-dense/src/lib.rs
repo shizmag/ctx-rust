@@ -195,12 +195,87 @@ pub fn dense_storage_path(workspace: &Path) -> PathBuf {
     workspace.join(".ctx-codegraph/dense")
 }
 
+/// Returns the legacy SQLite path for dense embeddings (pre-LanceDB migration).
+pub fn legacy_dense_sqlite_path(workspace: &Path) -> PathBuf {
+    workspace.join(".ctx-codegraph/dense.sqlite")
+}
+
+/// Read-only count of rows in the LanceDB dense index without creating storage.
+pub fn peek_dense_embedding_count(workspace: &Path) -> u64 {
+    let db_path = dense_storage_path(workspace);
+    if !db_path.exists() {
+        return 0;
+    }
+
+    let db_uri = match db_path.to_str() {
+        Some(uri) => uri.to_string(),
+        None => return 0,
+    };
+
+    let runtime = match Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(_) => return 0,
+    };
+
+    runtime.block_on(async {
+        let connection = match connect(&db_uri).execute().await {
+            Ok(connection) => connection,
+            Err(_) => return 0,
+        };
+
+        let table = match connection.open_table(TABLE_NAME).execute().await {
+            Ok(table) => table,
+            Err(lancedb::Error::TableNotFound { .. }) => return 0,
+            Err(_) => return 0,
+        };
+
+        match table.count_rows(None).await {
+            Ok(count) => count as u64,
+            Err(_) => 0,
+        }
+    })
+}
+
+/// Read-only count of rows in the legacy `dense.sqlite` index (health messaging only).
+pub fn legacy_dense_sqlite_count(workspace: &Path) -> u64 {
+    let path = legacy_dense_sqlite_path(workspace);
+    if !path.is_file() {
+        return 0;
+    }
+
+    let conn = match rusqlite::Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(conn) => conn,
+        Err(_) => return 0,
+    };
+
+    let table_exists = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [TABLE_NAME],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !table_exists {
+        return 0;
+    }
+
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {TABLE_NAME}"),
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count.max(0) as u64)
+    .unwrap_or(0)
+}
+
 /// Returns the number of rows in the workspace dense embedding index.
 pub fn dense_embedding_count(workspace: &Path) -> u64 {
-    DenseIndex::open(workspace)
-        .ok()
-        .and_then(|index| index.count().ok())
-        .unwrap_or(0)
+    peek_dense_embedding_count(workspace)
 }
 
 fn embedding_schema() -> Arc<Schema> {
@@ -290,6 +365,7 @@ fn hits_from_batches(batches: &[ArrowRecordBatch]) -> Result<Vec<DenseHit>, Dens
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     fn sample_embedding(seed: f32) -> Vec<f32> {
@@ -468,9 +544,52 @@ mod tests {
     }
 
     #[test]
+    fn peek_dense_embedding_count_does_not_create_storage() {
+        let dir = tempdir().unwrap();
+        let dense_path = dense_storage_path(dir.path());
+
+        assert_eq!(peek_dense_embedding_count(dir.path()), 0);
+        assert!(!dense_path.exists());
+
+        fs::create_dir_all(&dense_path).unwrap();
+        assert_eq!(peek_dense_embedding_count(dir.path()), 0);
+
+        let runtime = Runtime::new().unwrap();
+        let db_uri = dense_path.to_str().unwrap().to_string();
+        runtime.block_on(async {
+            let connection = connect(&db_uri).execute().await.unwrap();
+            let err = connection.open_table(TABLE_NAME).execute().await.unwrap_err();
+            assert!(matches!(err, lancedb::Error::TableNotFound { .. }));
+        });
+    }
+
+    #[test]
+    fn legacy_dense_sqlite_count_reads_existing_rows() {
+        let dir = tempdir().unwrap();
+        let sqlite_path = legacy_dense_sqlite_path(dir.path());
+        fs::create_dir_all(sqlite_path.parent().unwrap()).unwrap();
+
+        let conn = rusqlite::Connection::open(&sqlite_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE chunk_embeddings (chunk_id INTEGER PRIMARY KEY, embedding BLOB NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (1, X'0102'), (2, X'0304')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(legacy_dense_sqlite_count(dir.path()), 2);
+        assert_eq!(peek_dense_embedding_count(dir.path()), 0);
+    }
+
+    #[test]
     fn dense_embedding_count_reports_rows() {
         let dir = tempdir().unwrap();
         assert_eq!(dense_embedding_count(dir.path()), 0);
+        assert!(!dense_storage_path(dir.path()).exists());
 
         let mut index = DenseIndex::open(dir.path()).unwrap();
         index
@@ -480,6 +599,7 @@ mod tests {
             }])
             .unwrap();
 
+        assert_eq!(peek_dense_embedding_count(dir.path()), 1);
         assert_eq!(dense_embedding_count(dir.path()), 1);
     }
 }

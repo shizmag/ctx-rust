@@ -918,23 +918,25 @@ fn check_search(workspace_root: &Path, config: &Config, probe: bool) -> Vec<Sear
     });
 
     let dense_path = workspace_root.join(".ctx-codegraph/dense");
-    let dense_count = ctx_codegraph_dense::dense_embedding_count(workspace_root);
+    let dense_count = ctx_codegraph_dense::peek_dense_embedding_count(workspace_root);
+    let legacy_dense_count = ctx_codegraph_dense::legacy_dense_sqlite_count(workspace_root);
+    let dense_message = if dense_count > 0 {
+        format!("{dense_count} embeddings indexed")
+    } else if legacy_dense_count > 0 {
+        format!(
+            "legacy dense.sqlite has {legacy_dense_count} embeddings; run `ctx graph build --with-emb` to populate LanceDB at .ctx-codegraph/dense"
+        )
+    } else {
+        "dense index missing or empty; run `ctx graph build` with embeddings enabled".into()
+    };
     checks.push(SearchCheck {
         component: "dense index".into(),
         status: if dense_count > 0 {
             CheckStatus::Ok
-        } else if dense_path.exists() {
-            CheckStatus::Warn
         } else {
             CheckStatus::Warn
         },
-        message: if dense_count > 0 {
-            format!("{dense_count} embeddings indexed")
-        } else if dense_path.exists() {
-            "dense index exists but has no embeddings".into()
-        } else {
-            "dense index missing; run `ctx graph build` with embeddings enabled".into()
-        },
+        message: dense_message,
         path: Some(dense_path.display().to_string()),
         count: Some(dense_count),
     });
@@ -1067,6 +1069,42 @@ mod tests {
         assert_eq!(report.parsers.len(), 2);
         assert!(report.summary.ok > 0);
         assert!(render_text(&report).contains("Tree-sitter parsers"));
+    }
+
+    #[test]
+    fn dense_index_warns_for_legacy_sqlite_without_lance_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let sqlite_path = root.join(".ctx-codegraph/dense.sqlite");
+        fs::create_dir_all(sqlite_path.parent().unwrap()).unwrap();
+
+        let conn = rusqlite::Connection::open(&sqlite_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE chunk_embeddings (chunk_id INTEGER PRIMARY KEY, embedding BLOB NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (1, X'0102')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = run_healthcheck(root, "0.0-test", HealthcheckOptions::default());
+        let dense = report
+            .search
+            .iter()
+            .find(|c| c.component == "dense index")
+            .expect("dense index check");
+
+        assert_eq!(dense.status, CheckStatus::Warn);
+        assert_eq!(dense.count, Some(0));
+        assert!(
+            dense.message.contains("legacy dense.sqlite has 1 embeddings"),
+            "unexpected message: {}",
+            dense.message
+        );
+        assert!(dense.message.contains("ctx graph build --with-emb"));
     }
 
     #[test]

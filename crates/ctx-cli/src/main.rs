@@ -1764,7 +1764,6 @@ fn handle_graph_info(
     let mut chunk_count = 0i64;
     let mut embedding_count = 0i64;
     let mut chunks_table = false;
-    let mut embeddings_table = false;
     let mut db_size_bytes: Option<u64> = None;
     let mut db_mtime: Option<String> = None;
 
@@ -1780,12 +1779,8 @@ fn handle_graph_info(
             symbol_count = query_count(&conn, "SELECT COUNT(*) FROM symbols");
             edge_count = query_count(&conn, "SELECT COUNT(*) FROM edges");
             chunks_table = table_exists(&conn, "chunks");
-            embeddings_table = table_exists(&conn, "chunk_embeddings");
             if chunks_table {
                 chunk_count = query_count(&conn, "SELECT COUNT(*) FROM chunks");
-            }
-            if embeddings_table {
-                embedding_count = query_count(&conn, "SELECT COUNT(*) FROM chunk_embeddings");
             }
 
             let mut lang_stmt = conn.prepare(
@@ -1818,6 +1813,8 @@ fn handle_graph_info(
             }
         }
     }
+
+    embedding_count = ctx_codegraph::storage::dense_embedding_count(&workspace_root) as i64;
 
     let search_configured = config.search_auto_enabled();
     let lexical_present = lexical_path.exists();
@@ -1896,7 +1893,7 @@ fn handle_graph_info(
         if chunks_table {
             writeln!(out, "  chunks: {chunk_count}")?;
         }
-        if embeddings_table || search_configured {
+        if search_configured || embedding_count > 0 {
             writeln!(out, "  embeddings: {embedding_count}")?;
         }
         if !languages.is_empty() {

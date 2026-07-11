@@ -12,6 +12,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 arrow = "58"
 arrow-array = "58"
 thiserror = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"
