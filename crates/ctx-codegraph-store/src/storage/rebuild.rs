@@ -450,6 +450,8 @@ pub fn run_full_rebuild_with_registry(
         ctx_codegraph_lang::index::build_index_with_registry(workspace_root, options.clone(), registry)?;
 
     save_index(conn, &mut index)?;
+    registry.shutdown_lsp_clients();
+    drop(index);
 
     let tx = conn.transaction()?;
 
@@ -538,8 +540,6 @@ pub fn run_full_rebuild_with_registry(
     let build_search = target_tier >= ctx_codegraph_lang::model::ExtractionTier::Full
         || options.with_embeddings.unwrap_or(false)
         || options.with_lexical.unwrap_or(false);
-    registry.shutdown_lsp_clients();
-    drop(index);
     let search_report = if build_search {
         options.report_progress("Building search indexes...");
         super::search_build::maybe_build_search_indexes(

@@ -197,7 +197,10 @@ pub fn build_search_indexes_impl(
         embed_batch_size,
         ..SearchBuildProfile::default()
     };
-    let mut lexical_chunks = if needs_lexical {
+    // When both indexes are requested, build lexical in a second pass so chunk
+    // text is not retained in memory while the ONNX embedding model loads.
+    let defer_lexical = needs_embeddings && needs_lexical;
+    let mut lexical_chunks = if needs_lexical && !defer_lexical {
         Some(Vec::new())
     } else {
         None
@@ -271,9 +274,22 @@ pub fn build_search_indexes_impl(
         ));
         ctx.flush_pending(&mut profile)?;
         finalize_embedding_metadata(conn, ctx)?;
+        drop(embedding_ctx);
     }
 
-    if needs_lexical {
+    if defer_lexical {
+        options.report_progress("Building lexical index (second pass)...");
+        let mut deferred_lexical = Vec::new();
+        for file_range in batch_ranges(file_ids.len(), file_batch_size) {
+            let file_batch = &file_ids[file_range];
+            let batch_chunks = build_chunks_in_memory_for_files(conn, file_batch)?;
+            deferred_lexical.extend(batch_chunks);
+        }
+        let lexical_started = Instant::now();
+        report.lexical_docs_written =
+            build_lexical_index(conn, workspace_root, &deferred_lexical)?;
+        profile.lexical_ms = lexical_started.elapsed().as_millis() as u64;
+    } else if needs_lexical {
         options.report_progress("Building lexical index...");
         let lexical_started = Instant::now();
         let chunks = lexical_chunks.as_deref().unwrap_or(&[]);
@@ -326,6 +342,30 @@ fn build_chunks_for_files(
             *next_chunk_id += 1;
         }
         save_chunks(conn, &chunks)?;
+        all_chunks.extend(chunks);
+    }
+
+    Ok(all_chunks)
+}
+
+/// Build chunks in memory without writing to the database (for deferred lexical pass).
+fn build_chunks_in_memory_for_files(
+    conn: &Connection,
+    file_ids: &[(FileId, String)],
+) -> Result<Vec<Chunk>, CodeGraphError> {
+    let mut all_chunks = Vec::new();
+
+    for (file_id, abs_path) in file_ids {
+        let path = Path::new(abs_path);
+        let symbols = load_symbols_for_file(conn, path)?;
+        let contains_parent = load_contains_parents(conn, *file_id)?;
+        let occurrences = load_occurrences_for_file(conn, *file_id, path)?;
+        let mut builder = ChunkBuilder::new(*file_id, path)
+            .include_text(true)
+            .context_lines(2);
+        let chunks = builder
+            .build(&symbols, &contains_parent, &occurrences)
+            .map_err(CodeGraphError::Io)?;
         all_chunks.extend(chunks);
     }
 

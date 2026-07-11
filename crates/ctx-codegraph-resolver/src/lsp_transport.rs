@@ -244,6 +244,7 @@ impl GenericLspClient {
 impl Drop for GenericLspClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
