@@ -10,6 +10,7 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 walkdir = "2"
 sha2 = "0.10"
+rayon = "1.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]

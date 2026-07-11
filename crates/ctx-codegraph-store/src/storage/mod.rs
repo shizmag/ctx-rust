@@ -1,6 +1,8 @@
 mod chunks;
 mod compat;
 mod diff;
+mod export;
+mod metrics;
 mod persist;
 mod query;
 mod rebuild;
@@ -29,5 +31,9 @@ pub use schema::{init_schema, validate_index_invariants};
 pub use search_build::{
     build_search_indexes, dense_embedding_count, maybe_build_search_indexes,
     needs_search_index_build, SearchBuildProfile, SearchBuildReport,
+};
+pub use export::{
+    export_call_graph_graphml, export_features_json, export_features_json_to_file, FeatureExport,
+    ModuleFeatureRow, SymbolFeatureRow,
 };
 pub use workspace::{find_workspace_root, open_codegraph_db, open_db, read_metadata, write_metadata};

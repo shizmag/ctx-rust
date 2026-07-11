@@ -20,4 +20,7 @@ pub enum CodeGraphError {
 
     #[error("index not found: {0}")]
     IndexNotFound(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }

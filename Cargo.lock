@@ -1170,6 +1170,7 @@ version = "0.1.0"
 dependencies = [
  "ctx-codegraph-models",
  "ctx-config",
+ "rayon",
  "rusqlite",
  "serde",
  "sha2",

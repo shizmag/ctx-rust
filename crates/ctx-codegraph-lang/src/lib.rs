@@ -4,6 +4,7 @@ pub mod error;
 pub mod index;
 pub mod model;
 pub mod noop;
+pub mod pipeline;
 
 pub use backend::{
     BackendId, BackendMetadata, BackendRegistry, LanguageBackend, ParseInput, ParsedFile,

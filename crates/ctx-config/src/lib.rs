@@ -40,6 +40,14 @@ pub struct Config {
     /// Chunks per ONNX embedding inference batch (independent of file batches).
     pub embed_batch_size: Option<usize>,
     pub extraction_tier: Option<String>,
+    /// Rayon thread count for parallel parsing/feature extraction (`0` = auto).
+    pub parallel_threads: Option<usize>,
+    /// LSP mode: off | light | full
+    pub lsp_mode: Option<String>,
+    /// Enable incremental indexing (file change detection).
+    pub incremental_indexing: Option<bool>,
+    /// ONNX execution provider: auto | cpu | coreml
+    pub embedding_execution_provider: Option<String>,
 }
 
 /// Default number of files processed per build batch.
@@ -96,6 +104,10 @@ pub const KNOWN_CONFIG_SETTING_KEYS: &[&str] = &[
     "build_batch_size",
     "embed_batch_size",
     "extraction_tier",
+    "parallel_threads",
+    "lsp_mode",
+    "incremental_indexing",
+    "embedding_execution_provider",
 ];
 
 /// What happened the last time [`ensure_global_config`] ran.
@@ -137,6 +149,10 @@ impl Config {
             build_batch_size: Some(DEFAULT_BUILD_BATCH_SIZE),
             embed_batch_size: Some(DEFAULT_EMBED_BATCH_SIZE),
             extraction_tier: Some("balanced".into()),
+            parallel_threads: None,
+            lsp_mode: Some("off".into()),
+            incremental_indexing: Some(true),
+            embedding_execution_provider: Some("auto".into()),
         }
     }
 
@@ -170,6 +186,12 @@ impl Config {
             build_batch_size: self.build_batch_size.or(d.build_batch_size),
             embed_batch_size: self.embed_batch_size.or(d.embed_batch_size),
             extraction_tier: self.extraction_tier.or(d.extraction_tier),
+            parallel_threads: self.parallel_threads.or(d.parallel_threads),
+            lsp_mode: self.lsp_mode.or(d.lsp_mode),
+            incremental_indexing: self.incremental_indexing.or(d.incremental_indexing),
+            embedding_execution_provider: self
+                .embedding_execution_provider
+                .or(d.embedding_execution_provider),
         }
     }
 
@@ -267,6 +289,26 @@ impl Config {
             .or(self.build_batch_size)
             .unwrap_or(DEFAULT_EMBED_BATCH_SIZE)
             .max(1)
+    }
+
+    /// Rayon threads for parallel parsing; `0` or unset uses available parallelism.
+    pub fn effective_parallel_threads(&self) -> usize {
+        match self.parallel_threads {
+            Some(0) | None => std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+            Some(n) => n.max(1),
+        }
+    }
+
+    pub fn effective_lsp_mode(&self) -> &str {
+        self.lsp_mode.as_deref().unwrap_or("off")
+    }
+
+    pub fn effective_embedding_execution_provider(&self) -> &str {
+        self.embedding_execution_provider
+            .as_deref()
+            .unwrap_or("auto")
     }
 }
 
@@ -435,6 +477,26 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     config.extraction_tier = Some(value.to_string());
                 }
             }
+            "parallel_threads" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    config.parallel_threads = Some(v);
+                }
+            }
+            "lsp_mode" => {
+                if !value.is_empty() {
+                    config.lsp_mode = Some(value.to_string());
+                }
+            }
+            "incremental_indexing" | "incremental" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    config.incremental_indexing = Some(b);
+                }
+            }
+            "embedding_execution_provider" | "embedding_provider" => {
+                if !value.is_empty() {
+                    config.embedding_execution_provider = Some(value.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -526,6 +588,12 @@ pub fn merge_configs(base: Config, overlay: Config) -> Config {
         build_batch_size: overlay.build_batch_size.or(base.build_batch_size),
         embed_batch_size: overlay.embed_batch_size.or(base.embed_batch_size),
         extraction_tier: overlay.extraction_tier.or(base.extraction_tier),
+        parallel_threads: overlay.parallel_threads.or(base.parallel_threads),
+        lsp_mode: overlay.lsp_mode.or(base.lsp_mode),
+        incremental_indexing: overlay.incremental_indexing.or(base.incremental_indexing),
+        embedding_execution_provider: overlay
+            .embedding_execution_provider
+            .or(base.embedding_execution_provider),
     }
 }
 
@@ -694,6 +762,18 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     }
     if let Some(t) = &config.extraction_tier {
         lines.push(format!("extraction_tier = {}", t));
+    }
+    if let Some(v) = config.parallel_threads {
+        lines.push(format!("parallel_threads = {}", v));
+    }
+    if let Some(m) = &config.lsp_mode {
+        lines.push(format!("lsp_mode = {}", m));
+    }
+    if let Some(b) = config.incremental_indexing {
+        lines.push(format!("incremental_indexing = {}", b));
+    }
+    if let Some(p) = &config.embedding_execution_provider {
+        lines.push(format!("embedding_execution_provider = {}", p));
     }
 
     let content = lines.join("\n") + "\n";

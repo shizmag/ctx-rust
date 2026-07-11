@@ -2,13 +2,13 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use walkdir::WalkDir;
 
-use ctx_codegraph_models::batch_ranges;
-
-use crate::backend::{BackendRegistry, ParseInput, ResolveInput};
+use crate::backend::BackendRegistry;
 use crate::error::CodeGraphError;
-use crate::model::{CodeIndex, FileParseStatus, FileSnapshot, GraphEdge, SymbolId, SymbolKind};
+use crate::model::{
+    CodeIndex, ExtractionTier, FileParseStatus, FileSnapshot, LspMode, SymbolId,
+};
+use crate::pipeline::{self, PipelineTimings};
 
 #[derive(Debug, Clone)]
 pub struct BuildIndexOptions {
@@ -21,7 +21,13 @@ pub struct BuildIndexOptions {
     /// `None` = auto-enable when embedding model path is configured (unless disabled).
     pub with_lexical: Option<bool>,
     pub force_search_rebuild: bool,
-    pub extraction_tier: Option<crate::model::ExtractionTier>,
+    pub extraction_tier: Option<ExtractionTier>,
+    /// LSP resolution depth: off / light (Tier 2) / full (Tier 3).
+    pub lsp_mode: LspMode,
+    /// Override rayon thread count; `None` uses config or available parallelism.
+    pub parallel_threads: Option<usize>,
+    /// Enable incremental file-change detection (mtime/hash).
+    pub incremental: bool,
 }
 
 impl Default for BuildIndexOptions {
@@ -35,6 +41,9 @@ impl Default for BuildIndexOptions {
             with_lexical: None,
             force_search_rebuild: false,
             extraction_tier: None,
+            lsp_mode: LspMode::Off,
+            parallel_threads: None,
+            incremental: true,
         }
     }
 }
@@ -50,6 +59,22 @@ impl BuildIndexOptions {
 
     pub fn builds_chunks(&self, auto: bool) -> bool {
         self.builds_embeddings(auto) || self.builds_lexical(auto)
+    }
+
+    pub fn target_tier(&self) -> ExtractionTier {
+        pipeline::target_tier(self)
+    }
+
+    pub fn effective_use_lsp(&self) -> bool {
+        self.use_lsp || !matches!(self.lsp_mode, LspMode::Off)
+    }
+
+    pub fn should_resolve_calls(&self) -> bool {
+        pipeline::should_resolve_calls(self)
+    }
+
+    pub fn should_use_full_lsp(&self) -> bool {
+        pipeline::should_use_full_lsp(self)
     }
 }
 
@@ -118,7 +143,8 @@ pub fn create_file_snapshot_with_registry(
         .find_by_path(abs_path)
         .expect("No backend registered for path");
     let parser = backend.parser();
-    let parser_config_hash = backend.config_fingerprint(&BuildIndexOptions { extraction_tier: None,
+    let parser_config_hash = backend.config_fingerprint(&BuildIndexOptions {
+        extraction_tier: None,
         use_lsp: false,
         max_depth: None,
         include_tests,
@@ -126,6 +152,7 @@ pub fn create_file_snapshot_with_registry(
         with_embeddings: None,
         with_lexical: None,
         force_search_rebuild: false,
+        ..Default::default()
     });
 
     FileSnapshot { max_tier: Default::default(),
@@ -161,187 +188,61 @@ pub fn build_index_with_registry(
     options: BuildIndexOptions,
     registry: &BackendRegistry,
 ) -> Result<CodeIndex, CodeGraphError> {
-    // Load ctx_config early for effective_build_batch_size (simple direct load; no sig change).
-    let batch_size = ctx_config::find_and_load_config(root)
-        .map(|c| c.effective_build_batch_size())
-        .unwrap_or(32);
+    let config = ctx_config::find_and_load_config(root).unwrap_or_default();
+    let batch_size = config.effective_build_batch_size();
+    let parallel_threads = options
+        .parallel_threads
+        .unwrap_or_else(|| config.effective_parallel_threads());
 
-    let mut files = Vec::new();
-    let mut global_symbols = Vec::new();
-    let mut global_occurrences = Vec::new();
+    let mut timings = PipelineTimings::default();
 
-    // Find files
-    let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
-        let path = e.path();
-        if path.is_dir()
-            && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && crate::discovery::should_skip_dir(name) {
-                    return false;
-                }
-        true
-    });
-    let mut matching_files = Vec::new();
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if should_index_path_with_registry(path, registry) && path.is_file() {
-            matching_files.push(path.to_path_buf());
-        }
-    }
+    // Tier 1: parallel Tree-Sitter parse + structural metrics
+    let (files, mut global_symbols, mut global_occurrences) =
+        pipeline::fast::run_fast_structural(
+            root,
+            &options,
+            registry,
+            batch_size,
+            parallel_threads,
+            &mut timings,
+        )?;
 
-    // Process files in build-batches: group for file I/O + TS parse (using now-resident parser per backend).
-    for range in batch_ranges(matching_files.len(), batch_size) {
-        let batch = &matching_files[range];
-        for path in batch {
-            let backend = match registry.find_by_path(&path) {
-                Some(b) => b,
-                None => continue,
-            };
-
-            let mut source_file = create_file_snapshot_with_registry(
-                root,
-                &path,
-                options.change_detection,
-                options.include_tests,
-                registry,
-            );
-            source_file.max_tier = options.extraction_tier.unwrap_or(crate::model::ExtractionTier::Fast);
-
-            let parsed = match backend.parser().parse_file(ParseInput { path: &path }) {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                    source_file.parse_status = FileParseStatus::Failed;
-                    files.push(source_file);
-                    continue;
-                }
-            };
-            files.push(source_file);
-
-            let (mut file_symbols, mut file_occurrences) = (parsed.symbols, parsed.occurrences);
-
-            if !options.include_tests {
-                let mut new_symbols = Vec::new();
-                let mut index_map = std::collections::HashMap::new();
-                for (i, sym) in file_symbols.into_iter().enumerate() {
-                    if sym.kind != SymbolKind::Test {
-                        index_map.insert(i, new_symbols.len());
-                        new_symbols.push(sym);
-                    }
-                }
-                file_symbols = new_symbols;
-
-                file_occurrences.retain(|cs| {
-                    if let Some(old_idx) = cs.enclosing_temp_index {
-                        index_map.contains_key(&old_idx)
-                    } else {
-                        true
-                    }
-                });
-
-                for cs in &mut file_occurrences {
-                    if let Some(ref mut idx) = cs.enclosing_temp_index
-                        && let Some(&new_idx) = index_map.get(idx) {
-                            *idx = new_idx;
-                        }
-                }
-            }
-
-            let start_sym_idx = global_symbols.len();
-            for cs in &mut file_occurrences {
-                if let Some(ref mut idx) = cs.enclosing_temp_index {
-                    *idx += start_sym_idx;
-                }
-            }
-
-            global_symbols.extend(file_symbols);
-            global_occurrences.extend(file_occurrences);
-        }
-        // After a batch is parsed, optionally note opportunity for early chunk (leave TODO; do not implement full embed here).
-        // TODO: after batch parse, could flush/early-chunk here before next batch I/O (for future search build integration)
-    }
-
-    // Set temporary symbol IDs
+    // Assign temporary symbol IDs
     for (i, sym) in global_symbols.iter_mut().enumerate() {
         sym.id = Some(SymbolId(i as i64));
     }
 
-    // Set temporary enclosing symbol IDs on occurrences
     for cs in &mut global_occurrences {
         if let Some(from_idx) = cs.enclosing_temp_index {
             cs.enclosing_symbol = Some(SymbolId(from_idx as i64));
         }
     }
 
-    // Resolve call occurrences
+    // Tier 2+: call graph resolution (name index; optional light LSP)
     let mut edges = Vec::new();
-    let name_index = crate::noop::SymbolNameIndex::new(&global_symbols);
+    if options.should_resolve_calls() {
+        edges = pipeline::balanced::resolve_call_edges(
+            root,
+            &global_symbols,
+            &global_occurrences,
+            &options,
+            registry,
+            &mut timings,
+        )?;
 
-    for (call_site_idx, cs) in global_occurrences.iter().enumerate() {
-        if cs.kind != crate::model::OccurrenceKind::Call {
-            continue;
-        }
-
-        let from_id = match cs.enclosing_symbol {
-            Some(id) => id,
-            None => {
-                // Correct invariant: occurrence without enclosing symbol has no symbol-to-symbol edge
-                continue;
-            }
-        };
-
-        let mut resolved_idx = None;
-        let mut confidence = crate::model::ResolutionConfidence::Unresolved;
-
-        let backend = registry.find_by_path(&cs.file);
-        let resolver = backend.and_then(|b| b.resolver());
-
-        if options.use_lsp
-            && let Some(res) = resolver {
-                let resolve_input = ResolveInput {
-                    workspace_root: root,
-                    occurrence: cs,
-                    symbols: &global_symbols,
-                };
-                match res.resolve(resolve_input) {
-                    Ok(out) => {
-                        resolved_idx = out.resolved_symbol_index;
-                        confidence = out.confidence;
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "LSP resolution warning for call to {}: {}",
-                            cs.raw_text, err
-                        );
-                    }
-                }
-            }
-
-        if resolved_idx.is_none() {
-            let (fallback_idx, fallback_conf) =
-                name_index.resolve(&cs.raw_text, &global_symbols, &cs.file);
-            resolved_idx = fallback_idx;
-            confidence = fallback_conf;
-        }
-
-        let edge = GraphEdge {
-            id: None,
-            kind: crate::model::EdgeKind::Call,
-            from_file_id: cs.file_id,
-            from_symbol_id: Some(from_id),
-            to_symbol_id: resolved_idx.map(|idx| SymbolId(idx as i64)),
-            to_external: None,
-            occurrence_id: Some(crate::model::OccurrenceId(call_site_idx as i64)),
-            raw_text: Some(cs.raw_text.clone()),
-            range: Some(cs.range.clone()),
-            confidence,
-            produced_by: Some(
-                resolver
-                    .map(|r| r.resolver_id().clone())
-                    .unwrap_or_else(|| crate::backend::ResolverId::new("noop")),
-            ),
-        };
-        edges.push(edge);
+        // Tier 3: full LSP upgrade
+        pipeline::full::upgrade_edges_with_lsp(
+            root,
+            &mut edges,
+            &global_symbols,
+            &global_occurrences,
+            &options,
+            registry,
+            &mut timings,
+        )?;
     }
+
+    timings.log_summary();
 
     let call_sites_compat = global_occurrences
         .iter()
@@ -757,8 +658,10 @@ mod tests {
         let mut registry = BackendRegistry::new();
         registry.register(Box::new(LspIndexTestBackend::new()));
 
-        let options = BuildIndexOptions { extraction_tier: None,
+        let options = BuildIndexOptions {
+            extraction_tier: Some(crate::model::ExtractionTier::Full),
             use_lsp: true,
+            lsp_mode: crate::model::LspMode::Full,
             ..Default::default()
         };
         let index = build_index_with_registry(root, options, &registry).unwrap();

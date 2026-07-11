@@ -5,7 +5,9 @@ use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{EdgeKind, FileId, SymbolId};
 use ctx_codegraph_lang::CodeGraphError;
 use ctx_codegraph_lexical::{IndexDoc, LexicalIndex};
-use ctx_codegraph_models::{batch_ranges, file_fingerprint, EmbeddingModel};
+use ctx_codegraph_models::{
+    batch_ranges, file_fingerprint, EmbeddingExecutionProvider, EmbeddingModel,
+};
 use ctx_config::Config;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -417,7 +419,10 @@ fn open_embedding_build_context(
 ) -> Result<EmbeddingBuildContext, CodeGraphError> {
     let embedding_path = resolve_embedding_model_path(options, config)?;
     let tokenizer_dir = config.resolved_embedding_tokenizer(&embedding_path);
-    let model = EmbeddingModel::load(&embedding_path, &tokenizer_dir)
+    let provider = EmbeddingExecutionProvider::from_config_str(
+        config.effective_embedding_execution_provider(),
+    );
+    let model = EmbeddingModel::load_with_provider(&embedding_path, &tokenizer_dir, provider)
         .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
     let dense = DenseIndex::open(workspace_root)
         .map_err(|e| CodeGraphError::Parse(e.to_string()))?;

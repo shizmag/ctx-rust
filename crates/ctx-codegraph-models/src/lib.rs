@@ -1,5 +1,6 @@
 pub mod embedding;
 pub mod error;
+pub mod execution_provider;
 pub mod fingerprint;
 pub mod paths;
 pub mod reranker;
@@ -8,6 +9,7 @@ pub mod tokenizer;
 pub use embedding::{
     batch_ranges, EmbeddingModel, DEFAULT_EMBED_BATCH_SIZE, EMBEDDING_DIM, l2_normalize,
 };
+pub use execution_provider::{configure_session_builder, EmbeddingExecutionProvider};
 pub use error::ModelError;
 pub use fingerprint::file_fingerprint;
 pub use paths::{ModelPaths, DEFAULT_EMBEDDING_ONNX, DEFAULT_RERANKER_ONNX};

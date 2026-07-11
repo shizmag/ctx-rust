@@ -175,6 +175,53 @@ impl Default for ExtractionTier {
     }
 }
 
+/// LSP usage mode for tiered extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum LspMode {
+    /// No LSP resolution (name-index only).
+    Off,
+    /// Upgrade unresolved/heuristic edges only (Tier 2 optional).
+    Light,
+    /// Full LSP resolution on all call sites (Tier 3).
+    Full,
+}
+
+impl Default for LspMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+impl LspMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Light => "light",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "off" | "none" | "false" => Some(Self::Off),
+            "light" | "shallow" => Some(Self::Light),
+            "full" | "true" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    pub fn allows_light(&self) -> bool {
+        matches!(self, Self::Light)
+    }
+}
+
+/// Per-pipeline-step timing for profiling and progress reporting.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StepTiming {
+    pub step: String,
+    pub duration_ms: u64,
+}
+
 impl rusqlite::types::ToSql for ExtractionTier {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         self.as_str().to_sql()
@@ -306,6 +353,7 @@ pub enum EdgeKind {
     Implements,
     DataFlow,
     Contains,
+    SemanticSimilarity,
     Unknown,
 }
 
@@ -321,6 +369,7 @@ impl EdgeKind {
             EdgeKind::Implements => "Implements",
             EdgeKind::DataFlow => "DataFlow",
             EdgeKind::Contains => "Contains",
+            EdgeKind::SemanticSimilarity => "SemanticSimilarity",
             EdgeKind::Unknown => "Unknown",
         }
     }
@@ -337,6 +386,7 @@ impl EdgeKind {
             "Implements" => Some(EdgeKind::Implements),
             "DataFlow" => Some(EdgeKind::DataFlow),
             "Contains" => Some(EdgeKind::Contains),
+            "SemanticSimilarity" => Some(EdgeKind::SemanticSimilarity),
             "Unknown" => Some(EdgeKind::Unknown),
             _ => None,
         }
@@ -681,6 +731,8 @@ pub struct BuildReport {
     pub chunks_written: usize,
     pub embeddings_written: usize,
     pub lexical_docs_written: usize,
+    #[serde(default)]
+    pub step_timings: Vec<StepTiming>,
 }
 
 // Generic Occurrence and GraphEdge model types are defined above.
@@ -759,6 +811,7 @@ mod tests {
             EdgeKind::Implements,
             EdgeKind::DataFlow,
             EdgeKind::Contains,
+            EdgeKind::SemanticSimilarity,
             EdgeKind::Unknown,
         ];
         for kind in variants {

@@ -22,7 +22,7 @@ pub fn init_schema(
                 |row| row.get::<_, String>(0),
             )
             .ok();
-        if schema_version.as_deref() != Some("6") {
+        if schema_version.as_deref() != Some("7") {
             needs_drop = true;
         }
     }
@@ -177,7 +177,7 @@ pub fn init_schema(
     )?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '6')",
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '7')",
         [],
     )?;
     conn.execute(

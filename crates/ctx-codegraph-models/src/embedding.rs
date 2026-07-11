@@ -1,9 +1,11 @@
 use std::path::Path;
 
+use ort::session::builder::SessionBuilder;
 use ort::session::Session;
 use ort::value::Tensor;
 
 use crate::error::ModelError;
+use crate::execution_provider::{configure_session_builder, EmbeddingExecutionProvider};
 use crate::tokenizer::CodeTokenizer;
 
 pub const EMBEDDING_DIM: usize = 768;
@@ -27,22 +29,19 @@ pub struct EmbeddingModel {
 
 impl EmbeddingModel {
     pub fn load(model_path: &Path, tokenizer_dir: &Path) -> Result<Self, ModelError> {
+        Self::load_with_provider(model_path, tokenizer_dir, EmbeddingExecutionProvider::Auto)
+    }
+
+    pub fn load_with_provider(
+        model_path: &Path,
+        tokenizer_dir: &Path,
+        provider: EmbeddingExecutionProvider,
+    ) -> Result<Self, ModelError> {
         if !model_path.exists() {
             return Err(ModelError::ModelNotFound(model_path.to_path_buf()));
         }
 
-        let intra_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
-            .min(4)
-            .max(1);
-        let mut builder = Session::builder().map_err(ModelError::Onnx)?;
-        builder = builder
-            .with_intra_threads(intra_threads)
-            .map_err(|e| ModelError::Inference(e.to_string()))?;
-        let session = builder
-            .commit_from_file(model_path)
-            .map_err(ModelError::Onnx)?;
+        let session = build_session(model_path, provider)?;
 
         let (input_ids_name, attention_mask_name) = discover_text_inputs(&session)?;
 
@@ -152,6 +151,38 @@ impl EmbeddingModel {
             all_embeddings.extend(batch_embeddings);
         }
         Ok(all_embeddings)
+    }
+}
+
+fn build_session(model_path: &Path, provider: EmbeddingExecutionProvider) -> Result<Session, ModelError> {
+    let intra_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(4)
+        .max(1);
+
+    let make_builder = || -> Result<SessionBuilder, ModelError> {
+        Session::builder()
+            .map_err(ModelError::Onnx)?
+            .with_intra_threads(intra_threads)
+            .map_err(|e| ModelError::Inference(e.to_string()))
+    };
+
+    match make_builder()
+        .and_then(|b| configure_session_builder(b, provider))
+        .and_then(|mut b| b.commit_from_file(model_path).map_err(ModelError::Onnx))
+    {
+        Ok(session) => Ok(session),
+        Err(err) if provider != EmbeddingExecutionProvider::Cpu => {
+            eprintln!(
+                "Warning: ONNX session with {} provider failed ({err}); retrying with CPU",
+                provider.as_str()
+            );
+            make_builder()?
+                .commit_from_file(model_path)
+                .map_err(ModelError::Onnx)
+        }
+        Err(err) => Err(err),
     }
 }
 

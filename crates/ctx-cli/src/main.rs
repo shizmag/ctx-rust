@@ -1200,6 +1200,23 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 .or_else(|| {
                     config.extraction_tier.as_deref().and_then(ctx_codegraph::model::ExtractionTier::from_str)
                 });
+            let lsp_mode = if use_rust_analyzer {
+                match tier_val {
+                    Some(ctx_codegraph::model::ExtractionTier::Full) => {
+                        ctx_codegraph::model::LspMode::Full
+                    }
+                    Some(ctx_codegraph::model::ExtractionTier::Balanced) => {
+                        ctx_codegraph::model::LspMode::Light
+                    }
+                    _ => ctx_codegraph::model::LspMode::Off,
+                }
+            } else {
+                config
+                    .lsp_mode
+                    .as_deref()
+                    .and_then(ctx_codegraph::model::LspMode::from_str)
+                    .unwrap_or(ctx_codegraph::model::LspMode::Off)
+            };
             let options = BuildIndexOptions {
                 extraction_tier: tier_val,
                 use_lsp: use_rust_analyzer,
@@ -1209,6 +1226,9 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 with_embeddings: with_emb,
                 with_lexical: with_lex,
                 force_search_rebuild: false,
+                lsp_mode,
+                parallel_threads: config.parallel_threads,
+                incremental: config.incremental_indexing.unwrap_or(true),
             };
             let (_index, report) = ctx_codegraph::rebuild_index_db(&graph_args.path, options)?;
             let elapsed = start_time.elapsed();
