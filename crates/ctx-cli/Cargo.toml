@@ -24,4 +24,5 @@ serde_json = "1"
 [dev-dependencies]
 tempfile = "3"
 assert_cmd = "2"
+ctx-codegraph-store = { path = "../ctx-codegraph-store", features = ["test-fixtures"] }
 

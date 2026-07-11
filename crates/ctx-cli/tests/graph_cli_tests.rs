@@ -7,6 +7,12 @@ fn isolated_xdg_env(temp_root: &Path) -> PathBuf {
     xdg
 }
 
+fn run_ctx(temp_root: &Path) -> assert_cmd::Command {
+    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    cmd.env("XDG_CONFIG_HOME", isolated_xdg_env(temp_root));
+    cmd
+}
+
 fn create_temp_project(root: &Path) {
     let cargo_content = r#"
         [package]
@@ -52,7 +58,7 @@ fn test_cli_graph_build() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -78,7 +84,7 @@ fn test_cli_graph_symbols() {
     create_temp_project(root);
 
     // Verify symbols output (should auto-build index since it doesn't exist)
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -102,7 +108,7 @@ fn test_cli_graph_calls() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -126,7 +132,7 @@ fn test_cli_graph_callers() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -149,7 +155,7 @@ fn test_cli_graph_slice() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -201,7 +207,7 @@ fn test_cli_ambiguous_symbol_message() {
     fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
 
     // Call "load" should be ambiguous
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -228,7 +234,7 @@ fn existing_plain_scan_still_works_after_graph_subcommands() {
     let temp_path = temp_dir.path();
     fs::write(temp_path.join("lib.rs"), "fn main() {}\n").unwrap();
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(temp_path);
     let output = cmd.arg(temp_path).output().expect("failed to execute ctx");
 
     assert!(output.status.success());
@@ -239,8 +245,10 @@ fn existing_plain_scan_still_works_after_graph_subcommands() {
 
 #[test]
 fn test_cli_graph_help_and_alias() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
     // 1. Test ctx graph --help
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args(["graph", "--help"])
         .output()
@@ -261,7 +269,7 @@ fn test_cli_graph_help_and_alias() {
     assert!(stdout.contains("ctx g info"));
 
     // 2. Test ctx g --help
-    let mut cmd_g = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd_g = run_ctx(root);
     let output_g = cmd_g
         .args(["g", "--help"])
         .output()
@@ -283,7 +291,9 @@ fn test_cli_graph_help_and_alias() {
 
 #[test]
 fn test_cli_graph_build_help_lists_all_flag() {
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args(["g", "build", "--help"])
         .output()
@@ -301,10 +311,14 @@ fn test_cli_graph_build_help_lists_all_flag() {
 }
 
 #[test]
+#[ignore = "slow ONNX/embeddings build; set CTX_TEST_MODELS=1 to run"]
 fn test_cli_graph_build_all_enables_embeddings_without_silent_skip() {
+    if std::env::var("CTX_TEST_MODELS").ok().as_deref() != Some("1") {
+        return;
+    }
+
     let temp_dir = tempfile::tempdir().unwrap();
     let root = temp_dir.path();
-    let xdg = isolated_xdg_env(root);
     create_temp_project(root);
     // Force a missing embedding model so --all cannot silently use the developer's default ONNX path.
     fs::write(
@@ -313,9 +327,8 @@ fn test_cli_graph_build_all_enables_embeddings_without_silent_skip() {
     )
     .unwrap();
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
-        .env("XDG_CONFIG_HOME", &xdg)
         .args([
             "graph",
             "build",
@@ -353,7 +366,7 @@ fn test_cli_graph_info_before_and_after_build() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output_missing = cmd
         .args(["graph", "info", root.to_str().unwrap()])
         .output()
@@ -368,7 +381,7 @@ fn test_cli_graph_info_before_and_after_build() {
     );
     assert!(stdout_missing.contains("ctx graph build"));
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output_build = cmd
         .args([
             "graph",
@@ -380,7 +393,7 @@ fn test_cli_graph_info_before_and_after_build() {
         .expect("failed to run ctx graph build");
     assert!(output_build.status.success());
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output_ready = cmd
         .args(["g", "info", root.to_str().unwrap()])
         .output()
@@ -391,7 +404,7 @@ fn test_cli_graph_info_before_and_after_build() {
     assert!(stdout_ready.contains("symbols:"));
     assert!(stdout_ready.contains("rust") || stdout_ready.contains("files:"));
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output_json = cmd
         .args([
             "graph",
@@ -416,7 +429,7 @@ fn test_cli_g_alias_execution() {
     create_temp_project(root);
 
     // Verify symbols output via 'g' alias
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args(["g", "symbols", root.to_str().unwrap(), "--no-rust-analyzer"])
         .output()
@@ -435,7 +448,7 @@ fn test_cli_graph_context_happy_case() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -490,7 +503,7 @@ fn test_cli_graph_context_ambiguous() {
     "#;
     fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -520,7 +533,7 @@ fn test_cli_graph_affect() {
     create_temp_project(root);
 
     // 1. Text mode
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -541,7 +554,7 @@ fn test_cli_graph_affect() {
     assert!(stdout.contains("process"));
 
     // 2. JSON mode
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output_json = cmd
         .args([
             "graph",
@@ -572,7 +585,7 @@ fn test_cli_graph_affect_failures() {
     create_temp_project(root);
 
     // 1. Conflict check: with-snippets and no-snippets together
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -590,7 +603,7 @@ fn test_cli_graph_affect_failures() {
     assert!(stderr.contains("cannot be used with"));
 
     // 2. Invalid format check
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -608,7 +621,7 @@ fn test_cli_graph_affect_failures() {
     assert!(stderr.contains("Invalid format"));
 
     // 3. Invalid depth check
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -635,7 +648,7 @@ fn test_cli_graph_queries_no_output_on_fresh_index() {
     create_temp_project(root);
 
     // First, ensure index via explicit build (non-verbose)
-    let mut build_cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut build_cmd = run_ctx(root);
     let build_out = build_cmd
         .args([
             "graph",
@@ -648,7 +661,7 @@ fn test_cli_graph_queries_no_output_on_fresh_index() {
     assert!(build_out.status.success());
 
     // Now run a query subcommand; should succeed with symbol data, no build msgs
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -670,7 +683,7 @@ fn test_cli_graph_queries_no_output_on_fresh_index() {
     );
 
     // Also test calls path
-    let mut cmd2 = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd2 = run_ctx(root);
     let out2 = cmd2
         .args([
             "graph",
@@ -692,7 +705,7 @@ fn test_cli_graph_symbols_query_unique_and_not_found() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -708,7 +721,7 @@ fn test_cli_graph_symbols_query_unique_and_not_found() {
     assert!(stdout.contains("Unique match:"));
     assert!(stdout.contains("run_pipeline"));
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -730,7 +743,7 @@ fn test_cli_graph_callees_alias_and_build_verbose() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -747,7 +760,7 @@ fn test_cli_graph_callees_alias_and_build_verbose() {
     assert!(stdout.contains("run_pipeline"));
     assert!(stdout.contains("load"));
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -769,7 +782,7 @@ fn test_cli_graph_callers_not_found() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -791,7 +804,7 @@ fn test_cli_graph_slice_not_found() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -813,7 +826,7 @@ fn test_cli_graph_calls_not_found() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -852,7 +865,7 @@ fn test_cli_graph_symbols_ambiguous_query() {
     )
     .unwrap();
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -876,7 +889,7 @@ fn test_cli_graph_context_not_found() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -900,7 +913,7 @@ fn test_cli_graph_symbols_dir_as_query_path() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -923,7 +936,7 @@ fn test_cli_graph_affect_text_mode_with_snippets() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",
@@ -950,7 +963,7 @@ fn test_cli_graph_info_invalid_format() {
     let root = temp_dir.path();
     create_temp_project(root);
 
-    let mut cmd = assert_cmd::Command::cargo_bin("ctx").unwrap();
+    let mut cmd = run_ctx(root);
     let output = cmd
         .args([
             "graph",

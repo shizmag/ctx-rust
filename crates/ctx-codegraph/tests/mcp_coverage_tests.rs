@@ -1,6 +1,11 @@
-use ctx_codegraph::index::BuildIndexOptions;
-use ctx_mcp::run_mcp_server_with_io;
+mod common;
+
+use common::{
+    init_request, run_mcp_requests, setup_project_with_index, tool_call_request,
+};
 use ctx_codegraph::storage::rebuild_index_db;
+use ctx_codegraph_store::test_fixtures::{no_search_options, with_isolated_global_config};
+use ctx_mcp::run_mcp_server_with_io;
 use std::fs;
 use std::io::Cursor;
 use tempfile::tempdir;
@@ -12,91 +17,6 @@ const EXPECTED_TOOLS: &[&str] = &[
     "rebuild_index",
     "get_project_context",
 ];
-
-fn setup_project_with_index() -> (tempfile::TempDir, String) {
-    let temp_dir = tempdir().unwrap();
-    let root = temp_dir.path();
-
-    fs::write(
-        root.join("Cargo.toml"),
-        "[package]\nname = \"coverage_project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).unwrap();
-    fs::write(
-        src_dir.join("lib.rs"),
-        r#"
-        pub fn run_pipeline() {
-            let value = load();
-            process(value);
-        }
-
-        fn load() -> i32 {
-            1
-        }
-
-        fn process(value: i32) {
-            save(value);
-        }
-
-        fn save(_: i32) {}
-        "#,
-    )
-    .unwrap();
-
-    rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
-
-    let root_uri = format!("file://{}", root.display());
-    (temp_dir, root_uri)
-}
-
-fn run_mcp_requests(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let input_str: String = requests
-        .iter()
-        .map(|r| serde_json::to_string(r).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    run_mcp_raw(&input_str)
-}
-
-fn run_mcp_raw(input: &str) -> Vec<serde_json::Value> {
-    let input = Cursor::new(input);
-    let mut output = Vec::new();
-    run_mcp_server_with_io(input, &mut output).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    output_str
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-fn init_request(root_uri: &str, id: i64) -> serde_json::Value {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "initialize",
-        "params": {
-            "workspaceFolders": [{ "uri": root_uri, "name": "coverage" }]
-        }
-    })
-}
-
-fn tool_call_request(id: i64, name: &str, arguments: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "name": name,
-            "arguments": arguments
-        }
-    })
-}
 
 /// Helper to extract the inner JSON from the wrapped stats resource text for key field checks.
 fn extract_mcp_stats_json(text: &str) -> serde_json::Value {
@@ -446,15 +366,17 @@ fn test_mcp_coverage_initialized_notification_does_not_crash() {
         })
     );
 
-    let input = Cursor::new(input_str);
-    let mut output = Vec::new();
-    run_mcp_server_with_io(input, &mut output).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    let lines: Vec<&str> = output_str
-        .lines()
-        .filter(|l| !l.is_empty())
-        .collect();
+    let mut lines = Vec::new();
+    with_isolated_global_config(|| {
+        let input = Cursor::new(input_str);
+        let mut output = Vec::new();
+        run_mcp_server_with_io(input, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        lines = output_str
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
+    });
     assert_eq!(lines.len(), 1, "notification must not produce a response");
 }
 
@@ -576,7 +498,9 @@ mcp_target = test
     )
     .unwrap();
 
-    rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
+    with_isolated_global_config(|| {
+        rebuild_index_db(root, no_search_options()).unwrap();
+    });
 
     let root_uri = format!("file://{}", root.display());
 

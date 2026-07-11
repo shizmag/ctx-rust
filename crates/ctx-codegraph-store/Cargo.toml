@@ -3,6 +3,11 @@ name = "ctx-codegraph-store"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Shared test helpers (`test_fixtures` module). Enable for integration tests:
+# `cargo test -p ctx-codegraph-store --features test-fixtures`
+test-fixtures = ["dep:ctx-lang-python", "dep:ctx-lang-rust", "dep:tempfile"]
+
 [dependencies]
 ctx-codegraph-lang = { path = "../ctx-codegraph-lang" }
 ctx-codegraph-resolver = { path = "../ctx-codegraph-resolver" }
@@ -11,6 +16,9 @@ ctx-codegraph-lexical = { path = "../ctx-codegraph-lexical" }
 ctx-codegraph-dense = { path = "../ctx-codegraph-dense" }
 ctx-codegraph-models = { path = "../ctx-codegraph-models" }
 ctx-config = { path = "../ctx-config" }
+ctx-lang-python = { path = "../ctx-lang-python", optional = true }
+ctx-lang-rust = { path = "../ctx-lang-rust", optional = true }
+tempfile = { version = "3", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

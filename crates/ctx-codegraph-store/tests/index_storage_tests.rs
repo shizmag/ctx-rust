@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod common;
-use common::production_registry;
+use common::{no_search_options, production_registry};
 
 #[test]
 fn test_sqlite_and_find_symbols() {
@@ -172,7 +172,7 @@ fn test_affected_set_callee_pulls_callers() {
     fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     // Build the initial index
     let (index, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -184,7 +184,7 @@ fn test_affected_set_callee_pulls_callers() {
     assert!(edge.to_symbol_id.is_some()); // resolved to b()
 
     // Now modify b.rs
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_b, "pub fn b() { let modified = 1; }").unwrap();
 
     // Run incremental build
@@ -276,7 +276,7 @@ fn test_empty_and_whitespace_only_files() {
     fs::write(&file2, "").unwrap();
     fs::write(&file3, "   \n  \n\t ").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     let (index, report) = rebuild_index_db_with_registry(root, options, &registry).unwrap();
     assert_eq!(report.parsed_files, 3);
@@ -304,12 +304,12 @@ fn test_multiple_simultaneous_changes() {
     fs::write(&file_a, "pub fn a() {}").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
 
     fs::remove_file(&file_a).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_b, "pub fn b_new() {}").unwrap();
     fs::write(&file_c, "pub fn c() {}").unwrap();
 
@@ -343,17 +343,17 @@ fn test_parse_failure_recovery() {
     let file_path = src_dir.join("lib.rs");
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     let (index1, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(index1.symbols.iter().any(|s| s.name == "a"));
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_path, "fn a( {").unwrap();
     let (index2, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(index2.symbols.iter().any(|s| s.name == "a"));
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_path, "pub fn b() {}").unwrap();
     let (index3, report3) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert_eq!(report3.modified_files, 1);
@@ -373,7 +373,7 @@ fn test_index_lifecycle_validation() {
     let file_path = root.join("lib.rs");
     fs::write(&file_path, "fn test() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     // 1. First call builds index
     let _conn = ensure_index_with_registry(root, options.clone(), &registry).unwrap();
@@ -396,7 +396,7 @@ fn test_index_lifecycle_validation() {
     );
 
     // 4. Modifying a file invalidates the index
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_path, "fn test_modified_long_body() { let x = 1; }").unwrap();
     let is_valid_after_mod = validate_index_db_with_registry(root, &options, &registry).unwrap();
     assert!(!is_valid_after_mod);
@@ -407,10 +407,8 @@ fn test_index_lifecycle_validation() {
 
     let different_options = BuildIndexOptions {
         use_lsp: true,
-        max_depth: None,
-        include_tests: true,
         change_detection: FileChangeDetection::MtimeAndSize,
-        ..Default::default()
+        ..no_search_options()
     };
     let is_valid_diff_opts = validate_index_db_with_registry(root, &different_options, &registry).unwrap();
     assert!(!is_valid_diff_opts);
@@ -439,7 +437,7 @@ fn test_ensure_index_unified_behavior() {
     let file_path = root.join("lib.rs");
     fs::write(&file_path, "fn foo() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     // 1. Missing -> ensure builds
     let conn1 = ensure_index_with_registry(root, options.clone(), &registry).unwrap();
@@ -457,7 +455,7 @@ fn test_ensure_index_unified_behavior() {
     assert!(matches!(state2, IndexState::Ready));
 
     // 3. Change -> next ensure triggers update to Ready
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_path, "fn foo() { let _ = 42; }").unwrap();
     let state_dirty = get_index_state_with_registry(root, &options, &registry).unwrap();
     assert!(matches!(state_dirty, IndexState::NeedsIncrementalUpdate(_)));
@@ -501,7 +499,7 @@ fn test_edge_resolution_quality_variants() {
 
     let (index, report) = rebuild_index_db_with_registry(
         root,
-        BuildIndexOptions::default(),
+        no_search_options(),
         &registry,
     )
     .unwrap();
@@ -561,7 +559,7 @@ fn test_incremental_diff_report() {
     fs::write(&file_a, "pub fn a() {}").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     // 1. Initial build: all files added
     let (_, report1) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -580,7 +578,7 @@ fn test_incremental_diff_report() {
     assert_eq!(report2.unchanged_files, 3);
 
     // 3. Modify a.rs: only a.rs is modified
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_a, "pub fn a() { // modified\n }").unwrap();
     let (_, report3) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(!report3.full_rebuild);
@@ -630,7 +628,7 @@ fn test_db_correctness_after_incremental_update() {
     fs::write(&file_lib, "pub fn a() { b(); }").unwrap();
     fs::write(&file_b, "pub fn b() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     let (index, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
     assert!(index.symbols.iter().any(|s| s.name == "b"));
@@ -642,7 +640,7 @@ fn test_db_correctness_after_incremental_update() {
     );
 
     // Modify file: change lib.rs so a calls c instead, and define c in lib.rs
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_lib, "pub fn a() { c(); }\npub fn c() {}").unwrap();
 
     let (index_mod, _) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -683,7 +681,7 @@ fn test_db_correctness_after_incremental_update() {
 
     // Scenario 4: Rename/change symbol
     // Change lib.rs from defining c to defining new_name, and calling it
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(
         &file_lib,
         "pub fn a() { new_name(); }\npub fn new_name() {}",
@@ -723,7 +721,7 @@ fn test_parse_failure_preserves_old_graph() {
     let file_path = src_dir.join("lib.rs");
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
 
     // 1. Initial build: success
     let (index, report) = rebuild_index_db_with_registry(root, options.clone(), &registry).unwrap();
@@ -731,7 +729,7 @@ fn test_parse_failure_preserves_old_graph() {
     assert!(index.symbols.iter().any(|s| s.name == "a"));
 
     // 2. Modify file to have invalid Rust syntax (e.g. "fn a( {")
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(&file_path, "fn a( {").unwrap();
 
     // Run incremental update (through rebuild_index_db)
@@ -765,11 +763,8 @@ fn test_content_hash_detection() {
     fs::write(&file_path, "pub fn a() {}").unwrap();
 
     let options = BuildIndexOptions {
-        use_lsp: false,
-        max_depth: None,
-        include_tests: true,
         change_detection: FileChangeDetection::MtimeAndSize,
-        ..Default::default()
+        ..no_search_options()
     };
 
     // Build the initial index

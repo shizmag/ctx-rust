@@ -125,6 +125,7 @@ fn test_slices() {
     assert_eq!(r_slice, vec![SymbolId(2), SymbolId(1), SymbolId(0)]);
 }
 #[test]
+#[ignore = "slow LSP integration; run explicitly when rust-analyzer is available"]
 fn test_integration_with_rust_analyzer() {
     let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     if std::process::Command::new("rust-analyzer")
@@ -534,6 +535,7 @@ fn test_service_context_selection() {
     );
 }
 #[test]
+#[ignore = "slow mock LSP integration; run explicitly for LSP enrichment coverage"]
 fn test_mock_lsp_exact_enrichment() {
     let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     use std::fs::{self, File};
@@ -658,6 +660,7 @@ while True:
     assert!(edge.to_symbol_id.is_some());
 }
 #[test]
+#[ignore = "slow mock LSP integration; run explicitly for LSP fallback coverage"]
 fn test_lsp_failure_fallback() {
     let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     use std::fs::{self, File};

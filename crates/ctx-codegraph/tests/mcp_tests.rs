@@ -1,86 +1,15 @@
-use ctx_codegraph::index::BuildIndexOptions;
+mod common;
+
+use common::{init_request, run_mcp_requests, setup_project_with_index, tool_call_request};
+use ctx_codegraph_store::test_fixtures::with_isolated_global_config;
 use ctx_mcp::run_mcp_server_with_io;
-use ctx_codegraph::storage::rebuild_index_db;
 use std::fs;
 use std::io::Cursor;
 use tempfile::tempdir;
 
-fn setup_project_with_index() -> (tempfile::TempDir, String) {
-    let temp_dir = tempdir().unwrap();
-    let root = temp_dir.path();
-
-    let cargo_content = r#"
-        [package]
-        name = "temp_project"
-        version = "0.1.0"
-        edition = "2024"
-    "#;
-    fs::write(root.join("Cargo.toml"), cargo_content).unwrap();
-
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).unwrap();
-
-    let lib_code = r#"
-        pub fn run_pipeline() {
-            let value = load();
-            process(value);
-        }
-
-        fn load() -> i32 {
-            1
-        }
-
-        fn process(value: i32) {
-            save(value);
-        }
-
-        fn save(_: i32) {}
-    "#;
-    fs::write(src_dir.join("lib.rs"), lib_code).unwrap();
-
-    rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
-
-    let root_uri = format!("file://{}", root.display());
-    (temp_dir, root_uri)
-}
-
-fn run_mcp_requests(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let input_str: String = requests
-        .iter()
-        .map(|r| serde_json::to_string(r).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-
-    let input = Cursor::new(input_str);
-    let mut output = Vec::new();
-    run_mcp_server_with_io(input, &mut output).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    output_str
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 #[test]
 fn test_mcp_server_flow() {
     let (_temp_dir, root_uri) = setup_project_with_index();
-
-    let init_request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "workspaceFolders": [
-                {
-                    "uri": root_uri,
-                    "name": "test"
-                }
-            ]
-        }
-    });
 
     let list_request = serde_json::json!({
         "jsonrpc": "2.0",
@@ -88,21 +17,17 @@ fn test_mcp_server_flow() {
         "method": "tools/list"
     });
 
-    let call_request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "name": "retrieve_context",
-            "arguments": {
-                "query": "run_pipeline",
-                "strategy": "graph",
-                "format": "text"
-            }
-        }
-    });
+    let call_request = tool_call_request(
+        3,
+        "retrieve_context",
+        serde_json::json!({
+            "query": "run_pipeline",
+            "strategy": "graph",
+            "format": "text"
+        }),
+    );
 
-    let responses = run_mcp_requests(&[init_request, list_request, call_request]);
+    let responses = run_mcp_requests(&[init_request(&root_uri, 1), list_request, call_request]);
     assert_eq!(responses.len(), 3);
 
     let init_resp = &responses[0];
@@ -156,14 +81,6 @@ fn test_mcp_initialize_succeeds_without_index_file_tools_work() {
     fs::write(src.join("lib.rs"), "pub fn example() { let x = 42; /* searchme */ }\n").unwrap();
 
     let root_uri = format!("file://{}", root.display());
-    let init_request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
-        }
-    });
 
     // Send init + list + file tool calls in single server run (each run_mcp_requests starts fresh server).
     let list_req = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
@@ -171,7 +88,7 @@ fn test_mcp_initialize_succeeds_without_index_file_tools_work() {
         "jsonrpc": "2.0", "id": 3, "method": "tools/call",
         "params": { "name": "read_file", "arguments": { "path": "src/lib.rs", "max_lines": 5 } }
     });
-    let responses = run_mcp_requests(&[init_request, list_req, read_req]);
+    let responses = run_mcp_requests(&[init_request(&root_uri, 1), list_req, read_req]);
     let resp = &responses[0];
     // Init now succeeds without index to enable read_file (key for agent adoption).
     assert!(resp.get("result").is_some(), "init must succeed for file tools");
@@ -193,12 +110,7 @@ fn test_mcp_ping_and_resources() {
     let (_temp_dir, root_uri) = setup_project_with_index();
 
     let requests = vec![
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "workspaceFolders": [{ "uri": root_uri, "name": "test" }] }
-        }),
+        init_request(&root_uri, 1),
         serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" }),
         serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }),
         serde_json::json!({
@@ -227,7 +139,7 @@ fn test_mcp_ping_and_resources() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert_eq!(resources.len(), 3);  // includes ctx://stats/mcp for metrics collection
+    assert_eq!(resources.len(), 3); // includes ctx://stats/mcp for metrics collection
 
     let status_text = responses[3]
         .get("result")
@@ -258,35 +170,22 @@ fn test_mcp_list_symbols_and_callers() {
     let (_temp_dir, root_uri) = setup_project_with_index();
 
     let requests = vec![
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "workspaceFolders": [{ "uri": root_uri, "name": "test" }] }
-        }),
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "list_symbols",
-                "arguments": { "query": "load", "limit": 10, "kind": "fn" }
-            }
-        }),
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "retrieve_context",
-                "arguments": {
-                    "query": "load",
-                    "strategy": "graph",
-                    "graph_mode": "callers",
-                    "format": "text"
-                }
-            }
-        }),
+        init_request(&root_uri, 1),
+        tool_call_request(
+            2,
+            "list_symbols",
+            serde_json::json!({ "query": "load", "limit": 10, "kind": "fn" }),
+        ),
+        tool_call_request(
+            3,
+            "retrieve_context",
+            serde_json::json!({
+                "query": "load",
+                "strategy": "graph",
+                "graph_mode": "callers",
+                "format": "text"
+            }),
+        ),
     ];
 
     let responses = run_mcp_requests(&requests);
@@ -321,11 +220,13 @@ fn test_mcp_notification_does_not_respond() {
         })
     );
 
-    let input = Cursor::new(input_str);
-    let mut output = Vec::new();
-    run_mcp_server_with_io(input, &mut output).unwrap();
-
-    let output_str = String::from_utf8(output).unwrap();
-    let lines: Vec<&str> = output_str.lines().collect();
+    let mut lines = Vec::new();
+    with_isolated_global_config(|| {
+        let input = Cursor::new(input_str);
+        let mut output = Vec::new();
+        run_mcp_server_with_io(input, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        lines = output_str.lines().collect();
+    });
     assert_eq!(lines.len(), 1, "notifications must not produce a response");
 }

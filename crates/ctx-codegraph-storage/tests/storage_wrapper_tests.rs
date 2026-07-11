@@ -3,7 +3,6 @@ use ctx_codegraph_lang::model::{
     EdgeDirection, EdgeKind, IndexState, RebuildReason, ResolutionConfidence, SymbolId,
     SymbolResolution,
 };
-use ctx_codegraph_storage::index::BuildIndexOptions;
 use ctx_codegraph_storage::storage::{
     check_db_compatibility, clear_index, compute_affected_set, compute_index_diff, ensure_index,
     find_symbols, find_workspace_root, get_index_state, init_schema, load_callees, load_callers,
@@ -13,16 +12,9 @@ use ctx_codegraph_storage::storage::{
     write_metadata,
 };
 use ctx_codegraph_store::storage::build_search_indexes;
+use ctx_codegraph_store::test_fixtures::{lexical_search_options, no_search_options};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn no_search_options() -> BuildIndexOptions {
-    BuildIndexOptions {
-        with_lexical: Some(false),
-        with_embeddings: Some(false),
-        ..BuildIndexOptions::default()
-    }
-}
 
 /// Match indexer path normalization (macOS `/var` vs `/private/var`).
 fn workspace_root(dir: &tempfile::TempDir) -> PathBuf {
@@ -90,7 +82,7 @@ fn open_db_and_open_codegraph_db_share_workspace_database() {
     let root = dir.path();
     setup_call_graph_project(root);
 
-    rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
+    rebuild_index_db(root, no_search_options()).unwrap();
 
     let conn = open_db(root).unwrap();
     let cg_conn = open_codegraph_db(root).unwrap();
@@ -127,7 +119,7 @@ fn metadata_round_trip_and_missing_key() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     setup_call_graph_project(root);
-    rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
+    rebuild_index_db(root, no_search_options()).unwrap();
 
     write_metadata(root, "custom_key", "custom_value").unwrap();
     assert_eq!(
@@ -143,7 +135,7 @@ fn check_db_compatibility_reports_missing_on_empty_schema() {
     let conn = rusqlite::Connection::open(dir.path().join("empty.sqlite")).unwrap();
     init_schema(&conn).unwrap();
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
     let reason = check_db_compatibility(&conn, &options).unwrap();
     assert!(
         reason.is_some(),
@@ -159,9 +151,9 @@ fn check_db_compatibility_ok_after_full_rebuild() {
 
     let mut conn = open_db(root).unwrap();
     init_schema(&conn).unwrap();
-    run_full_rebuild(&mut conn, root, BuildIndexOptions::default(), None).unwrap();
+    run_full_rebuild(&mut conn, root, no_search_options(), None).unwrap();
 
-    let reason = check_db_compatibility(&conn, &BuildIndexOptions::default()).unwrap();
+    let reason = check_db_compatibility(&conn, &no_search_options()).unwrap();
     assert!(reason.is_none());
 }
 
@@ -181,7 +173,7 @@ fn compute_index_diff_tracks_file_changes() {
     assert_eq!(diff_unchanged.deleted.len(), 0);
     assert_eq!(diff_unchanged.unchanged.len(), 3);
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(root.join("src/a.rs"), "pub fn a_modified() {}").unwrap();
 
     let diff_modified = compute_index_diff(&conn, &root, &options).unwrap();
@@ -195,7 +187,7 @@ fn get_index_state_and_validate_index_db_lifecycle() {
     let root = dir.path();
     setup_call_graph_project(root);
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
     assert!(matches!(
         get_index_state(root, &options).unwrap(),
         IndexState::Missing | IndexState::NeedsFullRebuild(_)
@@ -207,7 +199,7 @@ fn get_index_state_and_validate_index_db_lifecycle() {
     assert!(matches!(get_index_state(root, &options).unwrap(), IndexState::Ready));
     assert!(validate_index_db(root, &options).unwrap());
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(
         root.join("src/lib.rs"),
         "pub fn run_pipeline() { helper(); extra(); }\npub fn helper() {}\npub fn extra() {}",
@@ -270,7 +262,7 @@ fn ensure_index_builds_and_reuses_ready_index() {
     let root = dir.path();
     setup_call_graph_project(root);
 
-    let options = BuildIndexOptions::default();
+    let options = no_search_options();
     let conn1 = ensure_index(root, options.clone()).unwrap();
     let symbols = find_symbols(&conn1, "run_pipeline").unwrap();
     assert_eq!(symbols.len(), 1);
@@ -301,7 +293,7 @@ fn run_full_rebuild_and_incremental_update_via_wrappers() {
     assert!(report.full_rebuild);
     assert!(index.symbols.iter().any(|s| s.name == "run_pipeline"));
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+
     fs::write(
         root.join("src/lib.rs"),
         "pub fn run_pipeline() { helper(); }\npub fn helper() { let x = 1; }",
@@ -324,7 +316,7 @@ fn load_query_wrappers_resolve_call_graph() {
     let root = dir.path();
     setup_call_graph_project(root);
 
-    let (index, _) = rebuild_index_db(root, BuildIndexOptions::default()).unwrap();
+    let (index, _) = rebuild_index_db(root, no_search_options()).unwrap();
     let conn = open_db(root).unwrap();
     validate_index_invariants(&conn).unwrap();
 
@@ -388,11 +380,7 @@ fn load_chunk_after_search_index_build() {
     let base_options = no_search_options();
     rebuild_index_db(root, base_options).unwrap();
 
-    let options = BuildIndexOptions {
-        with_lexical: Some(true),
-        with_embeddings: Some(false),
-        ..BuildIndexOptions::default()
-    };
+    let options = lexical_search_options();
     let conn = open_db(root).unwrap();
     let report =
         build_search_indexes(&conn, root, &options, &ctx_config::Config::default()).unwrap();
