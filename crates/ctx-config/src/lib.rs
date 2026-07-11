@@ -35,12 +35,17 @@ pub struct Config {
     pub rerank_top_k: Option<usize>,
     pub enable_rerank: Option<bool>,
     pub default_retrieval_strategy: Option<String>,
-    /// Files per graph/search build batch (tree-sitter → LSP → embeddings → DB).
+    /// Files per graph/search build batch (chunk extraction and DB writes).
     pub build_batch_size: Option<usize>,
+    /// Chunks per ONNX embedding inference batch (independent of file batches).
+    pub embed_batch_size: Option<usize>,
 }
 
 /// Default number of files processed per build batch.
 pub const DEFAULT_BUILD_BATCH_SIZE: usize = 32;
+
+/// Default number of chunks per ONNX embedding inference batch.
+pub const DEFAULT_EMBED_BATCH_SIZE: usize = 64;
 
 /// Default embedding ONNX path when not set in global/project config.
 pub const DEFAULT_EMBEDDING_MODEL: &str =
@@ -88,6 +93,7 @@ pub const KNOWN_CONFIG_SETTING_KEYS: &[&str] = &[
     "enable_rerank",
     "default_retrieval_strategy",
     "build_batch_size",
+    "embed_batch_size",
 ];
 
 /// What happened the last time [`ensure_global_config`] ran.
@@ -127,6 +133,7 @@ impl Config {
             enable_rerank: Some(false),
             default_retrieval_strategy: Some("hybrid".into()),
             build_batch_size: Some(DEFAULT_BUILD_BATCH_SIZE),
+            embed_batch_size: Some(DEFAULT_EMBED_BATCH_SIZE),
         }
     }
 
@@ -158,6 +165,7 @@ impl Config {
                 .default_retrieval_strategy
                 .or(d.default_retrieval_strategy),
             build_batch_size: self.build_batch_size.or(d.build_batch_size),
+            embed_batch_size: self.embed_batch_size.or(d.embed_batch_size),
         }
     }
 
@@ -245,6 +253,15 @@ impl Config {
     pub fn effective_build_batch_size(&self) -> usize {
         self.build_batch_size
             .unwrap_or(DEFAULT_BUILD_BATCH_SIZE)
+            .max(1)
+    }
+
+    /// Chunks per ONNX embedding batch; falls back to [`DEFAULT_EMBED_BATCH_SIZE`],
+    /// then [`effective_build_batch_size`] when unset.
+    pub fn effective_embed_batch_size(&self) -> usize {
+        self.embed_batch_size
+            .or(self.build_batch_size)
+            .unwrap_or(DEFAULT_EMBED_BATCH_SIZE)
             .max(1)
     }
 }
@@ -395,10 +412,17 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     config.default_retrieval_strategy = Some(value.to_string());
                 }
             }
-            "build_batch_size" | "embed_batch_size" => {
+            "build_batch_size" => {
                 if let Ok(v) = value.parse::<usize>() {
                     if v > 0 {
                         config.build_batch_size = Some(v);
+                    }
+                }
+            }
+            "embed_batch_size" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    if v > 0 {
+                        config.embed_batch_size = Some(v);
                     }
                 }
             }
@@ -488,6 +512,7 @@ pub fn merge_configs(base: Config, overlay: Config) -> Config {
             .default_retrieval_strategy
             .or(base.default_retrieval_strategy),
         build_batch_size: overlay.build_batch_size.or(base.build_batch_size),
+        embed_batch_size: overlay.embed_batch_size.or(base.embed_batch_size),
     }
 }
 
@@ -650,6 +675,9 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     }
     if let Some(v) = config.build_batch_size {
         lines.push(format!("build_batch_size = {}", v));
+    }
+    if let Some(v) = config.embed_batch_size {
+        lines.push(format!("embed_batch_size = {}", v));
     }
 
     let content = lines.join("\n") + "\n";

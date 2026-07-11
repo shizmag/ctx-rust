@@ -1,5 +1,29 @@
 use std::path::Path;
 
+pub fn extract_lines_from_buffer(
+    lines: &[&str],
+    start_line: usize,
+    end_line: usize,
+    context_lines: usize,
+) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let start = start_line.saturating_sub(context_lines).max(1);
+    let end = (end_line + context_lines).min(lines.len());
+    if start > lines.len() || start > end {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for line in &lines[(start - 1)..end] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 pub fn extract_lines_from_file(
     path: &Path,
     start_line: usize,
@@ -8,22 +32,12 @@ pub fn extract_lines_from_file(
 ) -> Result<String, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
-        return Ok(String::new());
-    }
-
-    let start = start_line.saturating_sub(context_lines).max(1);
-    let end = (end_line + context_lines).min(lines.len());
-    if start > lines.len() || start > end {
-        return Ok(String::new());
-    }
-
-    let mut out = String::new();
-    for line in &lines[(start - 1)..end] {
-        out.push_str(line);
-        out.push('\n');
-    }
-    Ok(out)
+    Ok(extract_lines_from_buffer(
+        &lines,
+        start_line,
+        end_line,
+        context_lines,
+    ))
 }
 
 pub fn truncate_large_body(

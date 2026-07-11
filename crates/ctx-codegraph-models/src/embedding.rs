@@ -31,7 +31,15 @@ impl EmbeddingModel {
             return Err(ModelError::ModelNotFound(model_path.to_path_buf()));
         }
 
-        let session = Session::builder()?
+        let intra_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1);
+        let mut builder = Session::builder().map_err(ModelError::Onnx)?;
+        builder = builder
+            .with_intra_threads(intra_threads)
+            .map_err(|e| ModelError::Inference(e.to_string()))?;
+        let session = builder
             .commit_from_file(model_path)
             .map_err(ModelError::Onnx)?;
 

@@ -1,5 +1,5 @@
 use crate::model::{Chunk, ChunkId, ChunkKind};
-use crate::text::{extract_lines_from_file, truncate_large_body};
+use crate::text::{extract_lines_from_buffer, truncate_large_body};
 use ctx_codegraph_lang::model::{FileId, Occurrence, Symbol, SymbolId};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -55,6 +55,11 @@ impl ChunkBuilder {
             parents_with_children.insert(*parent_id);
         }
 
+        let symbol_by_id: HashMap<SymbolId, &Symbol> = symbols
+            .iter()
+            .filter_map(|sym| sym.id.map(|id| (id, sym)))
+            .collect();
+
         let mut symbol_parent_chunk = HashMap::<SymbolId, ChunkId>::new();
         let mut chunks = Vec::new();
 
@@ -104,12 +109,12 @@ impl ChunkBuilder {
                 .filter(|&line| line >= sym.range.start_line)
                 .unwrap_or(sym.range.start_line);
             let decl_text = if self.include_text {
-                Some(extract_lines_from_file(
-                    &self.file_path,
+                Some(extract_lines_from_buffer(
+                    &file_lines,
                     sym.range.start_line,
                     decl_end,
                     self.context_lines,
-                )?)
+                ))
             } else {
                 None
             };
@@ -138,12 +143,12 @@ impl ChunkBuilder {
                         self.context_lines,
                     )
                 } else {
-                    extract_lines_from_file(
-                        &self.file_path,
+                    extract_lines_from_buffer(
+                        &file_lines,
                         body_start,
                         body_end,
                         self.context_lines,
-                    )?
+                    )
                 })
             } else {
                 None
@@ -163,16 +168,16 @@ impl ChunkBuilder {
             let enclosing = occ.enclosing_symbol;
             let parent_chunk_id = enclosing.and_then(|sid| symbol_parent_chunk.get(&sid).copied());
             let qname = enclosing
-                .and_then(|sid| symbols.iter().find(|s| s.id == Some(sid)))
+                .and_then(|sid| symbol_by_id.get(&sid))
                 .map(|s| s.qualified_name.clone())
                 .unwrap_or_else(|| occ.raw_text.clone());
             let text = if self.include_text {
-                Some(extract_lines_from_file(
-                    &self.file_path,
+                Some(extract_lines_from_buffer(
+                    &file_lines,
                     occ.range.start_line,
                     occ.range.end_line,
                     self.context_lines,
-                )?)
+                ))
             } else {
                 None
             };

@@ -35,7 +35,7 @@ struct SettingsState {
     exclude_preset: usize,
 }
 
-const N_FIELDS: usize = 22;
+const N_FIELDS: usize = 23;
 const EXCLUDE_IDX: usize = 3;
 const ENABLE_RERANK_IDX: usize = 16;
 const EMBEDDING_MODEL_IDX: usize = 17;
@@ -43,6 +43,7 @@ const RERANKER_MODEL_IDX: usize = 18;
 const EMBEDDING_TOKENIZER_IDX: usize = 19;
 const RERANK_TOKENIZER_IDX: usize = 20;
 const BUILD_BATCH_SIZE_IDX: usize = 21;
+const EMBED_BATCH_SIZE_IDX: usize = 22;
 
 // Common exclude patterns for arrow cycling (no free-text input)
 const COMMON_EXCLUDES: &[&str] = &[
@@ -66,6 +67,7 @@ const DEFAULT_BM25_TOP_K: usize = 50;
 const DEFAULT_DENSE_TOP_K: usize = 50;
 const DEFAULT_RERANK_TOP_K: usize = 20;
 const DEFAULT_BUILD_BATCH_SIZE: usize = 32;
+const DEFAULT_EMBED_BATCH_SIZE: usize = 64;
 
 impl SettingsState {
     fn new(dir: PathBuf) -> Self {
@@ -112,6 +114,7 @@ impl SettingsState {
             19 => "embedding_tokenizer (Search)",
             20 => "rerank_tokenizer (Search)",
             21 => "build_batch_size (Build)",
+            22 => "embed_batch_size (Build)",
             _ => "",
         }
     }
@@ -142,8 +145,10 @@ impl SettingsState {
                     Converts text to token IDs before vector embedding. Defaults to embedding model's parent folder.",
             20 => "Directory with tokenizer.json (HuggingFace) for the reranker ONNX model. \
                     Tokenizes query+document pairs for cross-encoder scoring. Defaults to reranker model's parent folder.",
-            21 => "Files processed per build batch (tree-sitter → LSP → embeddings → DB). \
+            21 => "Files processed per build batch (chunk extraction and SQLite writes). \
                     Sequential batches; no concurrency. Typical: 32.",
+            22 => "Chunks per ONNX embedding inference batch (independent of file batches). \
+                    Larger values speed up --with-emb on CPU. Typical: 64–128.",
             _ => "",
         }
     }
@@ -224,6 +229,9 @@ impl SettingsState {
             21 => c.build_batch_size
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| DEFAULT_BUILD_BATCH_SIZE.to_string()),
+            22 => c.embed_batch_size
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| DEFAULT_EMBED_BATCH_SIZE.to_string()),
             _ => String::new(),
         }
     }
@@ -233,7 +241,7 @@ impl SettingsState {
     }
 
     fn is_numeric_field(&self, idx: usize) -> bool {
-        matches!(idx, 1 | 2 | 10 | 12 | 13 | 14 | 15 | 21)
+        matches!(idx, 1 | 2 | 10 | 12 | 13 | 14 | 15 | 21 | 22)
     }
 
     fn is_cyclable_field(&self, idx: usize) -> bool {
@@ -456,6 +464,15 @@ impl SettingsState {
                     .unwrap_or(DEFAULT_BUILD_BATCH_SIZE);
                 let new = (cur as i64 + delta * step).max(1) as usize;
                 self.config.build_batch_size = Some(new);
+            }
+            22 => {
+                let step: i64 = 8;
+                let cur = self
+                    .effective()
+                    .embed_batch_size
+                    .unwrap_or(DEFAULT_EMBED_BATCH_SIZE);
+                let new = (cur as i64 + delta * step).max(1) as usize;
+                self.config.embed_batch_size = Some(new);
             }
             _ => {}
         }
@@ -871,8 +888,16 @@ mod tests {
         let s = make_test_state();
         let help = s.field_help(BUILD_BATCH_SIZE_IDX);
         assert!(help.contains("batch"));
-        assert!(help.contains("tree-sitter"));
-        assert!(help.contains("embeddings"));
+        assert!(help.contains("chunk"));
+        assert!(help.contains("SQLite"));
+    }
+
+    #[test]
+    fn embed_batch_size_help_mentions_onnx_batches() {
+        let s = make_test_state();
+        let help = s.field_help(EMBED_BATCH_SIZE_IDX);
+        assert!(help.contains("ONNX"));
+        assert!(help.contains("embed"));
     }
 
     #[test]

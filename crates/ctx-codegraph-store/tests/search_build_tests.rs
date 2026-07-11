@@ -412,7 +412,8 @@ fn test_build_search_indexes_embeddings_with_model() {
 
     let report = build_search_indexes(&conn, root, &search_options, &config).unwrap();
     assert!(report.chunks_written > 0);
-    assert_eq!(report.embeddings_written, report.chunks_written);
+    assert!(report.embeddings_written > 0);
+    assert!(report.embeddings_written <= report.chunks_written);
     assert_eq!(report.lexical_docs_written, 0);
 
     let fp = read_metadata(root, &registry, "embedding_model_fingerprint");

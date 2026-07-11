@@ -1,5 +1,5 @@
 use ctx_codegraph_chunk::builder::ChunkBuilder;
-use ctx_codegraph_chunk::{Chunk, ChunkId};
+use ctx_codegraph_chunk::{Chunk, ChunkId, ChunkKind};
 use ctx_codegraph_dense::{dense_embedding_count as lance_dense_count, DenseIndex, EmbeddingRecord};
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{EdgeKind, FileId, SymbolId};
@@ -10,15 +10,56 @@ use ctx_config::Config;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use super::chunks::{clear_chunks, delete_chunks_for_file, save_chunks};
 use super::query::load_symbols_for_file;
+
+/// LanceDB rows buffered before a single `merge_insert` flush.
+const LANCE_UPSERT_BATCH_SIZE: usize = 256;
+
+#[derive(Debug, Default, Clone)]
+pub struct SearchBuildProfile {
+    pub chunk_build_ms: u64,
+    pub embed_ms: u64,
+    pub lance_upsert_ms: u64,
+    pub lexical_ms: u64,
+    pub embed_batches: usize,
+    pub embeddable_chunks: usize,
+    pub file_batch_size: usize,
+    pub embed_batch_size: usize,
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct SearchBuildReport {
     pub chunks_written: usize,
     pub embeddings_written: usize,
     pub lexical_docs_written: usize,
+    pub profile: Option<SearchBuildProfile>,
+}
+
+fn profile_enabled() -> bool {
+    std::env::var("CTX_PROFILE_BUILD")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn log_profile(profile: &SearchBuildProfile) {
+    if !profile_enabled() {
+        return;
+    }
+    eprintln!(
+        "Search build profile: chunk_build={}ms embed={}ms ({} batches) lance={}ms lexical={}ms \
+         embeddable_chunks={} file_batch={} embed_batch={}",
+        profile.chunk_build_ms,
+        profile.embed_ms,
+        profile.embed_batches,
+        profile.lance_upsert_ms,
+        profile.lexical_ms,
+        profile.embeddable_chunks,
+        profile.file_batch_size,
+        profile.embed_batch_size,
+    );
 }
 
 /// Returns the number of rows in the workspace dense embedding index.
@@ -26,8 +67,39 @@ pub fn dense_embedding_count(workspace_root: &Path) -> u64 {
     lance_dense_count(workspace_root)
 }
 
+fn is_dense_embeddable(chunk: &Chunk) -> bool {
+    !matches!(chunk.kind, ChunkKind::Occurrence)
+}
+
+fn count_dense_embeddable_chunks(conn: &Connection) -> Result<usize, CodeGraphError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE kind != ?1",
+        params![ChunkKind::Occurrence.as_str()],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count.max(0) as usize)
+    .map_err(CodeGraphError::from)
+}
+
+fn embeddings_need_rebuild(
+    conn: &Connection,
+    workspace_root: &Path,
+    options: &BuildIndexOptions,
+) -> Result<bool, CodeGraphError> {
+    if options.force_search_rebuild {
+        return Ok(true);
+    }
+    let dense_count = dense_embedding_count(workspace_root);
+    if dense_count == 0 {
+        return Ok(true);
+    }
+    let expected = count_dense_embeddable_chunks(conn)?;
+    Ok(dense_count < expected as u64)
+}
+
 /// Whether search indexes should be built on a ready graph index.
 pub fn needs_search_index_build(
+    conn: &Connection,
     workspace_root: &Path,
     options: &BuildIndexOptions,
     config: &Config,
@@ -39,11 +111,10 @@ pub fn needs_search_index_build(
     if options.force_search_rebuild {
         return true;
     }
-    if options.with_embeddings == Some(true) || options.with_lexical == Some(true) {
-        return true;
-    }
-    if options.builds_embeddings(auto) && dense_embedding_count(workspace_root) == 0 {
-        return true;
+    if options.with_lexical == Some(true) {
+        return !workspace_root
+            .join(".ctx-codegraph/lexical/meta.json")
+            .exists();
     }
     if options.builds_lexical(auto)
         && !workspace_root
@@ -51,6 +122,9 @@ pub fn needs_search_index_build(
             .exists()
     {
         return true;
+    }
+    if options.with_embeddings == Some(true) || options.builds_embeddings(auto) {
+        return embeddings_need_rebuild(conn, workspace_root, options).unwrap_or(true);
     }
     false
 }
@@ -67,7 +141,7 @@ pub fn maybe_build_search_indexes(
     if !options.builds_chunks(auto) {
         return SearchBuildReport::default();
     }
-    if !force && !needs_search_index_build(workspace_root, options, config) {
+    if !force && !needs_search_index_build(conn, workspace_root, options, config) {
         return SearchBuildReport::default();
     }
     match build_search_indexes(conn, workspace_root, options, config) {
@@ -99,46 +173,74 @@ pub fn build_search_indexes(
 
     let file_ids = collect_file_ids(conn)?;
     let file_batch_size = config.effective_build_batch_size();
-    let embed_batch_size = file_batch_size;
+    let embed_batch_size = config.effective_embed_batch_size();
 
     let mut report = SearchBuildReport::default();
+    let mut profile = SearchBuildProfile {
+        file_batch_size,
+        embed_batch_size,
+        ..SearchBuildProfile::default()
+    };
     let mut all_chunks = Vec::new();
     let mut next_chunk_id = 0i64;
     let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
+    let mut embed_buffer: Vec<Chunk> = Vec::new();
 
-    // Process files in sequential batches: chunks → embeddings → DB (lexical at end).
+    let chunk_build_started = Instant::now();
     for file_range in batch_ranges(file_ids.len(), file_batch_size) {
         let file_batch = &file_ids[file_range];
         let batch_chunks =
             build_chunks_for_files(conn, file_batch, options, &mut next_chunk_id)?;
         report.chunks_written += batch_chunks.len();
 
-        if options.builds_embeddings(auto)
-            && !batch_chunks.is_empty()
-            && embedding_ctx.is_none()
-        {
-            embedding_ctx = Some(open_embedding_build_context(
-                workspace_root,
-                options,
-                config,
-            )?);
-        }
-
-        if let Some(ctx) = embedding_ctx.as_mut() {
-            report.embeddings_written +=
-                embed_and_store_chunks(ctx, &batch_chunks, embed_batch_size)?;
+        if options.builds_embeddings(auto) {
+            for chunk in &batch_chunks {
+                if is_dense_embeddable(chunk) {
+                    embed_buffer.push(chunk.clone());
+                }
+            }
+            if !embed_buffer.is_empty() && embedding_ctx.is_none() {
+                embedding_ctx = Some(open_embedding_build_context(
+                    workspace_root,
+                    options,
+                    config,
+                )?);
+            }
+            if let Some(ctx) = embedding_ctx.as_mut() {
+                while embed_buffer.len() >= embed_batch_size {
+                    let batch: Vec<Chunk> =
+                        embed_buffer.drain(..embed_batch_size).collect();
+                    report.embeddings_written +=
+                        embed_and_store_chunks(ctx, &batch, embed_batch_size, &mut profile)?;
+                }
+            }
         }
 
         all_chunks.extend(batch_chunks);
     }
-
-    if options.builds_lexical(auto) {
-        report.lexical_docs_written =
-            build_lexical_index(conn, workspace_root, &all_chunks)?;
-    }
+    profile.chunk_build_ms = chunk_build_started.elapsed().as_millis() as u64;
 
     if let Some(ctx) = embedding_ctx.as_mut() {
+        if !embed_buffer.is_empty() {
+            let remainder = std::mem::take(&mut embed_buffer);
+            report.embeddings_written +=
+                embed_and_store_chunks(ctx, &remainder, embed_batch_size, &mut profile)?;
+        }
+        ctx.flush_pending(&mut profile)?;
         finalize_embedding_metadata(conn, ctx)?;
+    }
+    profile.embeddable_chunks = all_chunks.iter().filter(|c| is_dense_embeddable(c)).count();
+
+    if options.builds_lexical(auto) {
+        let lexical_started = Instant::now();
+        report.lexical_docs_written =
+            build_lexical_index(conn, workspace_root, &all_chunks)?;
+        profile.lexical_ms = lexical_started.elapsed().as_millis() as u64;
+    }
+
+    if profile_enabled() {
+        report.profile = Some(profile.clone());
+        log_profile(&profile);
     }
 
     Ok(report)
@@ -159,15 +261,13 @@ fn collect_file_ids(conn: &Connection) -> Result<Vec<(FileId, String)>, CodeGrap
 fn build_chunks_for_files(
     conn: &Connection,
     file_ids: &[(FileId, String)],
-    options: &BuildIndexOptions,
+    _options: &BuildIndexOptions,
     next_chunk_id: &mut i64,
 ) -> Result<Vec<Chunk>, CodeGraphError> {
     let mut all_chunks = Vec::new();
 
     for (file_id, abs_path) in file_ids {
-        if options.force_search_rebuild {
-            delete_chunks_for_file(conn, *file_id)?;
-        }
+        delete_chunks_for_file(conn, *file_id)?;
         let path = Path::new(abs_path);
         let symbols = load_symbols_for_file(conn, path)?;
         let contains_parent = load_contains_parents(conn, *file_id)?;
@@ -249,6 +349,38 @@ struct EmbeddingBuildContext {
     embedding_path: std::path::PathBuf,
     model: EmbeddingModel,
     dense: DenseIndex,
+    pending_records: Vec<EmbeddingRecord>,
+    lance_flush_size: usize,
+}
+
+impl EmbeddingBuildContext {
+    fn queue_records(&mut self, records: Vec<EmbeddingRecord>) -> Result<(), CodeGraphError> {
+        self.pending_records.extend(records);
+        Ok(())
+    }
+
+    fn flush_pending(&mut self, profile: &mut SearchBuildProfile) -> Result<(), CodeGraphError> {
+        while self.pending_records.len() >= self.lance_flush_size {
+            let batch: Vec<EmbeddingRecord> = self
+                .pending_records
+                .drain(..self.lance_flush_size)
+                .collect();
+            let started = Instant::now();
+            self.dense
+                .upsert_batch(&batch)
+                .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            profile.lance_upsert_ms += started.elapsed().as_millis() as u64;
+        }
+        if !self.pending_records.is_empty() {
+            let batch = std::mem::take(&mut self.pending_records);
+            let started = Instant::now();
+            self.dense
+                .upsert_batch(&batch)
+                .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+            profile.lance_upsert_ms += started.elapsed().as_millis() as u64;
+        }
+        Ok(())
+    }
 }
 
 fn open_embedding_build_context(
@@ -266,6 +398,8 @@ fn open_embedding_build_context(
         embedding_path,
         model,
         dense,
+        pending_records: Vec::new(),
+        lance_flush_size: LANCE_UPSERT_BATCH_SIZE,
     })
 }
 
@@ -273,20 +407,30 @@ fn embed_and_store_chunks(
     ctx: &mut EmbeddingBuildContext,
     chunks: &[Chunk],
     embed_batch_size: usize,
+    profile: &mut SearchBuildProfile,
 ) -> Result<usize, CodeGraphError> {
     if chunks.is_empty() {
         return Ok(0);
     }
 
-    let texts: Vec<String> = chunks.iter().map(chunk_embedding_text).collect();
+    let embeddable: Vec<&Chunk> = chunks.iter().filter(|c| is_dense_embeddable(c)).collect();
+    if embeddable.is_empty() {
+        return Ok(0);
+    }
+
+    let texts: Vec<String> = embeddable.iter().map(|c| chunk_embedding_text(c)).collect();
     let mut embeddings_written = 0usize;
     for range in batch_ranges(texts.len(), embed_batch_size) {
         let batch_texts = &texts[range.clone()];
-        let batch_chunks = &chunks[range];
+        let batch_chunks: Vec<&Chunk> = embeddable[range].iter().copied().collect();
+        let started = Instant::now();
         let embeddings = ctx
             .model
             .embed_texts(batch_texts)
             .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
+        profile.embed_ms += started.elapsed().as_millis() as u64;
+        profile.embed_batches += 1;
+
         let records: Vec<EmbeddingRecord> = batch_chunks
             .iter()
             .zip(embeddings.iter())
@@ -295,10 +439,11 @@ fn embed_and_store_chunks(
                 embedding: emb.clone(),
             })
             .collect();
-        ctx.dense
-            .upsert_batch(&records)
-            .map_err(|e| CodeGraphError::Parse(e.to_string()))?;
         embeddings_written += records.len();
+        ctx.queue_records(records)?;
+        if ctx.pending_records.len() >= ctx.lance_flush_size {
+            ctx.flush_pending(profile)?;
+        }
     }
     Ok(embeddings_written)
 }
@@ -535,38 +680,42 @@ mod tests {
     fn needs_search_index_build_when_embeddings_explicitly_requested() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        let conn = Connection::open_in_memory().unwrap();
         let config = Config::default();
         let options = BuildIndexOptions {
             with_embeddings: Some(true),
             with_lexical: Some(false),
             ..Default::default()
         };
-        assert!(needs_search_index_build(root, &options, &config));
+        assert!(needs_search_index_build(&conn, root, &options, &config));
     }
 
     #[test]
     fn needs_search_index_build_when_dense_index_missing_and_auto_enabled() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        let conn = Connection::open_in_memory().unwrap();
         let paths = ctx_codegraph_models::ModelPaths::default_paths();
         let config = Config {
             embedding_model: Some(paths.embedding_onnx.to_string_lossy().into_owned()),
             ..Default::default()
         };
         let options = BuildIndexOptions::default();
-        assert!(needs_search_index_build(root, &options, &config));
+        assert!(needs_search_index_build(&conn, root, &options, &config));
         assert_eq!(dense_embedding_count(root), 0);
     }
 
     #[test]
     fn needs_search_index_build_false_when_search_disabled() {
         let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         let options = BuildIndexOptions {
             with_embeddings: Some(false),
             with_lexical: Some(false),
             ..Default::default()
         };
         assert!(!needs_search_index_build(
+            &conn,
             dir.path(),
             &options,
             &Config::default()

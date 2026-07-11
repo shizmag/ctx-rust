@@ -305,10 +305,11 @@ fn load_config_build_batch_size_and_embed_batch_size_alias() {
     let config = load_config(&config_path).unwrap();
     assert_eq!(config.build_batch_size, Some(16));
 
-    let alias_path = temp_dir.path().join("embed_batch.ctxconfig");
-    fs::write(&alias_path, "embed_batch_size = 8\n").unwrap();
-    let alias_config = load_config(&alias_path).unwrap();
-    assert_eq!(alias_config.build_batch_size, Some(8));
+    let embed_path = temp_dir.path().join("embed_batch.ctxconfig");
+    fs::write(&embed_path, "embed_batch_size = 8\n").unwrap();
+    let embed_config = load_config(&embed_path).unwrap();
+    assert_eq!(embed_config.embed_batch_size, Some(8));
+    assert!(embed_config.build_batch_size.is_none());
 }
 
 #[test]
@@ -645,6 +646,10 @@ fn ensure_global_config_upgrades_legacy_config_missing_new_feature_settings() {
             Some("hybrid")
         );
         assert_eq!(config.build_batch_size, Some(DEFAULT_BUILD_BATCH_SIZE));
+        assert_eq!(
+            config.embed_batch_size,
+            Some(ctx_config::DEFAULT_EMBED_BATCH_SIZE)
+        );
 
         let content = fs::read_to_string(&path).unwrap();
         for key in [
@@ -655,6 +660,7 @@ fn ensure_global_config_upgrades_legacy_config_missing_new_feature_settings() {
             "enable_rerank",
             "default_retrieval_strategy",
             "build_batch_size",
+            "embed_batch_size",
             "# embedding_model",
             "# embedding_tokenizer",
             "# reranker_model",
@@ -713,9 +719,30 @@ fn save_config_writes_all_known_settings() {
         "enable_rerank",
         "default_retrieval_strategy",
         "build_batch_size",
+        "embed_batch_size",
     ] {
         assert!(content.contains(key), "missing key {key} in:\n{content}");
     }
+}
+
+#[test]
+fn effective_embed_batch_size_prefers_explicit_embed_setting() {
+    let config = Config {
+        build_batch_size: Some(16),
+        embed_batch_size: Some(96),
+        ..Default::default()
+    };
+    assert_eq!(config.effective_embed_batch_size(), 96);
+}
+
+#[test]
+fn effective_embed_batch_size_falls_back_to_build_batch_size() {
+    let config = Config {
+        build_batch_size: Some(48),
+        embed_batch_size: None,
+        ..Default::default()
+    };
+    assert_eq!(config.effective_embed_batch_size(), 48);
 }
 
 #[test]
