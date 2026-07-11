@@ -1,7 +1,8 @@
 mod common;
 
 use common::{
-    init_request, run_mcp_requests, setup_project_with_index, tool_call_request,
+    init_request, run_mcp_requests, setup_coverage_project_with_index, setup_project_with_index,
+    tool_call_request,
 };
 use ctx_codegraph::storage::rebuild_index_db;
 use ctx_codegraph_store::test_fixtures::{no_search_options, with_isolated_global_config};
@@ -180,7 +181,7 @@ fn test_mcp_coverage_prompts_list_and_get() {
 
 #[test]
 fn test_mcp_coverage_tool_calls_happy_paths() {
-    let (_temp_dir, root_uri) = setup_project_with_index();
+    let (_temp_dir, root_uri) = setup_coverage_project_with_index();
 
     let responses = run_mcp_requests(&[
         init_request(&root_uri, 1),

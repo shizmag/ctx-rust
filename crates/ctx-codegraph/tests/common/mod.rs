@@ -5,13 +5,15 @@ use std::fs;
 use std::io::Cursor;
 use tempfile::tempdir;
 
-pub fn setup_project_with_index() -> (tempfile::TempDir, String) {
+fn setup_named_project_with_index(package_name: &str) -> (tempfile::TempDir, String) {
     let temp_dir = tempdir().unwrap();
     let root = temp_dir.path();
 
     fs::write(
         root.join("Cargo.toml"),
-        "[package]\nname = \"temp_project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        format!(
+            "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+        ),
     )
     .unwrap();
 
@@ -45,6 +47,14 @@ pub fn setup_project_with_index() -> (tempfile::TempDir, String) {
 
     let root_uri = format!("file://{}", root.display());
     (temp_dir, root_uri)
+}
+
+pub fn setup_project_with_index() -> (tempfile::TempDir, String) {
+    setup_named_project_with_index("temp_project")
+}
+
+pub fn setup_coverage_project_with_index() -> (tempfile::TempDir, String) {
+    setup_named_project_with_index("coverage_project")
 }
 
 pub fn setup_ambiguous_foo_project() -> (tempfile::TempDir, String) {
