@@ -6,7 +6,11 @@ edition = "2024"
 [dependencies]
 ctx-codegraph-chunk = { path = "../ctx-codegraph-chunk" }
 ctx-codegraph-models = { path = "../ctx-codegraph-models" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+lancedb = "0.30"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+arrow = "58"
+arrow-array = "58"
 thiserror = "2"
 
 [dev-dependencies]

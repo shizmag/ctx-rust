@@ -503,8 +503,8 @@ fn test_ready_rebuild_builds_dense_index_when_embeddings_requested() {
     );
     assert!(report.lexical_docs_written > 0);
 
-    let dense_path = root.join(".ctx-codegraph/dense.sqlite");
-    assert!(dense_path.exists(), "dense.sqlite should exist after --with-emb style rebuild");
+    let dense_path = root.join(".ctx-codegraph/dense");
+    assert!(dense_path.exists(), "dense LanceDB directory should exist after --with-emb style rebuild");
     assert!(
         dense_embedding_count(root) > 0,
         "dense index should contain embeddings"

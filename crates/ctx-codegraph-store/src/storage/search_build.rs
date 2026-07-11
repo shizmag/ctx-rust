@@ -1,6 +1,6 @@
 use ctx_codegraph_chunk::builder::ChunkBuilder;
 use ctx_codegraph_chunk::{Chunk, ChunkId};
-use ctx_codegraph_dense::{DenseIndex, EmbeddingRecord};
+use ctx_codegraph_dense::{dense_embedding_count as lance_dense_count, DenseIndex, EmbeddingRecord};
 use ctx_codegraph_lang::index::BuildIndexOptions;
 use ctx_codegraph_lang::model::{EdgeKind, FileId, SymbolId};
 use ctx_codegraph_lang::CodeGraphError;
@@ -23,16 +23,7 @@ pub struct SearchBuildReport {
 
 /// Returns the number of rows in the workspace dense embedding index.
 pub fn dense_embedding_count(workspace_root: &Path) -> u64 {
-    let path = workspace_root.join(".ctx-codegraph/dense.sqlite");
-    if !path.exists() {
-        return 0;
-    }
-    let Ok(conn) = Connection::open(&path) else {
-        return 0;
-    };
-    conn.query_row("SELECT COUNT(*) FROM chunk_embeddings", [], |row| row.get::<_, i64>(0))
-        .unwrap_or(0)
-        .max(0) as u64
+    lance_dense_count(workspace_root)
 }
 
 /// Whether search indexes should be built on a ready graph index.

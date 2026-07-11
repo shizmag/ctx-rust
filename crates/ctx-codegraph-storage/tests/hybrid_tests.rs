@@ -10,6 +10,7 @@ use ctx_codegraph_storage::hybrid::{
 use ctx_codegraph_storage::index::BuildIndexOptions;
 use ctx_codegraph_storage::storage::{open_db, rebuild_index_db};
 use ctx_codegraph_store::storage::{build_search_indexes, load_chunk};
+use ctx_codegraph_store::test_fixtures::{lexical_search_options, no_search_options};
 use ctx_config::Config;
 use std::fs;
 use std::path::Path;
@@ -41,7 +42,7 @@ fn workspace_hybrid_backend_open_creates_index_dirs() {
     let backend = WorkspaceHybridBackend::open(dir.path()).unwrap();
 
     assert!(dir.path().join(".ctx-codegraph/lexical").exists());
-    assert!(dir.path().join(".ctx-codegraph/dense.sqlite").exists());
+    assert!(dir.path().join(".ctx-codegraph/dense").exists());
     drop(backend);
 }
 
@@ -192,14 +193,6 @@ fn search_lexical_maps_missing_symbol_id_to_zero() {
     assert_eq!(hits[0].symbol_id, SymbolId(0));
 }
 
-fn no_search_options() -> BuildIndexOptions {
-    BuildIndexOptions {
-        with_lexical: Some(false),
-        with_embeddings: Some(false),
-        ..BuildIndexOptions::default()
-    }
-}
-
 fn setup_dense_search_project(root: &Path) {
     fs::write(
         root.join("Cargo.toml"),
@@ -261,7 +254,7 @@ fn search_dense_with_embedding_model_returns_hits() {
     let search_options = BuildIndexOptions {
         with_lexical: Some(true),
         with_embeddings: Some(true),
-        ..BuildIndexOptions::default()
+        ..lexical_search_options()
     };
     let report = build_search_indexes(&conn, root, &search_options, &config).unwrap();
     assert!(report.embeddings_written > 0, "expected dense embeddings");
@@ -314,7 +307,7 @@ fn try_with_config_loads_embedding_when_model_present() {
     let search_options = BuildIndexOptions {
         with_lexical: Some(true),
         with_embeddings: Some(true),
-        ..BuildIndexOptions::default()
+        ..lexical_search_options()
     };
     build_search_indexes(&conn, root, &search_options, &config).unwrap();
 
@@ -419,7 +412,7 @@ fn lexical_only_search_options() -> BuildIndexOptions {
     BuildIndexOptions {
         with_lexical: Some(true),
         with_embeddings: Some(false),
-        ..BuildIndexOptions::default()
+        ..lexical_search_options()
     }
 }
 

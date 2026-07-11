@@ -917,8 +917,8 @@ fn check_search(workspace_root: &Path, config: &Config, probe: bool) -> Vec<Sear
         count: None,
     });
 
-    let dense_path = workspace_root.join(".ctx-codegraph/dense.sqlite");
-    let dense_count = dense_embedding_count(&dense_path);
+    let dense_path = workspace_root.join(".ctx-codegraph/dense");
+    let dense_count = ctx_codegraph_dense::dense_embedding_count(workspace_root);
     checks.push(SearchCheck {
         component: "dense index".into(),
         status: if dense_count > 0 {
@@ -931,7 +931,7 @@ fn check_search(workspace_root: &Path, config: &Config, probe: bool) -> Vec<Sear
         message: if dense_count > 0 {
             format!("{dense_count} embeddings indexed")
         } else if dense_path.exists() {
-            "dense DB exists but has no embeddings".into()
+            "dense index exists but has no embeddings".into()
         } else {
             "dense index missing; run `ctx graph build` with embeddings enabled".into()
         },
@@ -972,16 +972,6 @@ fn check_search(workspace_root: &Path, config: &Config, probe: bool) -> Vec<Sear
     }
 
     checks
-}
-
-fn dense_embedding_count(path: &Path) -> u64 {
-    if !path.exists() {
-        return 0;
-    }
-    let Ok(conn) = rusqlite::Connection::open(path) else {
-        return 0;
-    };
-    query_count(&conn, "SELECT COUNT(*) FROM chunk_embeddings").max(0) as u64
 }
 
 fn build_notes(config: &Config, index: &IndexCheck, probe: bool) -> Vec<String> {

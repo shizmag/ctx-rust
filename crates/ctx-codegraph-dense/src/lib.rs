@@ -1,17 +1,32 @@
+use arrow::array::AsArray;
+use arrow::datatypes::{DataType, Field, Float32Type, Int64Type, Schema};
+use arrow_array::{
+    FixedSizeListArray, Int64Array, RecordBatch as ArrowRecordBatch, RecordBatchIterator,
+};
 use ctx_codegraph_chunk::ChunkId;
 use ctx_codegraph_models::EMBEDDING_DIM;
-use rusqlite::{params, Connection};
+use futures::TryStreamExt;
+use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::{connect, Connection, DistanceType, Table};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 pub use ctx_codegraph_models::EMBEDDING_DIM as DENSE_EMBEDDING_DIM;
 
+const TABLE_NAME: &str = "chunk_embeddings";
+const VECTOR_COLUMN: &str = "vector";
+
 #[derive(Debug, thiserror::Error)]
 pub enum DenseError {
-    #[error("sqlite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("lancedb error: {0}")]
+    LanceDb(#[from] lancedb::Error),
+
+    #[error("arrow error: {0}")]
+    Arrow(#[from] arrow::error::ArrowError),
 
     #[error("dense index error: {0}")]
     Other(String),
@@ -31,47 +46,72 @@ pub struct EmbeddingRecord {
 
 pub struct DenseIndex {
     db_path: PathBuf,
-    conn: Connection,
+    connection: Connection,
+    runtime: Runtime,
 }
 
 impl DenseIndex {
     pub fn open(workspace: &Path) -> Result<Self, DenseError> {
-        let db_dir = workspace.join(".ctx-codegraph");
-        std::fs::create_dir_all(&db_dir)?;
-        let db_path = db_dir.join("dense.sqlite");
-        let conn = Connection::open(&db_path)?;
-        init_schema(&conn)?;
-        Ok(Self { db_path, conn })
+        let db_path = dense_storage_path(workspace);
+        std::fs::create_dir_all(&db_path)?;
+        let db_uri = db_path
+            .to_str()
+            .ok_or_else(|| DenseError::Other("dense index path is not valid UTF-8".into()))?
+            .to_string();
+
+        let runtime = Runtime::new().map_err(|err| DenseError::Other(err.to_string()))?;
+        let connection = runtime.block_on(async {
+            connect(&db_uri).execute().await
+        })?;
+        runtime.block_on(ensure_table(&connection))?;
+
+        Ok(Self {
+            db_path,
+            connection,
+            runtime,
+        })
     }
 
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
 
-    pub fn upsert_batch(&mut self, records: &[EmbeddingRecord]) -> Result<(), DenseError> {
-        let tx = self.conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO chunk_embeddings (chunk_id, embedding)
-                 VALUES (?1, ?2)
-                 ON CONFLICT(chunk_id) DO UPDATE SET embedding = excluded.embedding",
-            )?;
+    pub fn count(&self) -> Result<u64, DenseError> {
+        self.block_on(async {
+            let table = open_table(&self.connection).await?;
+            let count = table.count_rows(None).await?;
+            Ok(count as u64)
+        })
+    }
 
-            for record in records {
-                if record.embedding.len() != EMBEDDING_DIM {
-                    return Err(DenseError::Other(format!(
-                        "embedding for chunk {} has dim {}, expected {}",
-                        record.chunk_id.0,
-                        record.embedding.len(),
-                        EMBEDDING_DIM
-                    )));
-                }
-                let blob = embedding_to_blob(&record.embedding);
-                stmt.execute(params![record.chunk_id.0, blob])?;
+    pub fn upsert_batch(&mut self, records: &[EmbeddingRecord]) -> Result<(), DenseError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        for record in records {
+            if record.embedding.len() != EMBEDDING_DIM {
+                return Err(DenseError::Other(format!(
+                    "embedding for chunk {} has dim {}, expected {}",
+                    record.chunk_id.0,
+                    record.embedding.len(),
+                    EMBEDDING_DIM
+                )));
             }
         }
-        tx.commit()?;
-        Ok(())
+
+        let batch = records_to_batch(records)?;
+        let schema = batch.schema();
+        let reader = RecordBatchIterator::new(std::iter::once(Ok(batch)), schema);
+
+        self.block_on(async {
+            let table = open_table(&self.connection).await?;
+            let mut merge = table.merge_insert(&["chunk_id"]);
+            merge.when_matched_update_all(None);
+            merge.when_not_matched_insert_all();
+            merge.execute(Box::new(reader)).await?;
+            Ok(())
+        })
     }
 
     pub fn search_knn(
@@ -87,23 +127,23 @@ impl DenseIndex {
             )));
         }
 
-        let mut stmt = self.conn.prepare("SELECT chunk_id, embedding FROM chunk_embeddings")?;
-        let rows = stmt.query_map([], |row| {
-            let chunk_id: i64 = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            Ok((chunk_id, blob))
-        })?;
+        let limit = limit.max(1);
+        let query = query_embedding.to_vec();
 
-        let mut hits = Vec::new();
-        for row in rows {
-            let (chunk_id, blob) = row?;
-            let embedding = blob_to_embedding(&blob)?;
-            let score = cosine_similarity(query_embedding, &embedding);
-            hits.push(DenseHit {
-                chunk_id: ChunkId(chunk_id),
-                score,
-            });
-        }
+        let mut hits = self.block_on(async {
+            let table = open_table(&self.connection).await?;
+            let batches = table
+                .query()
+                .nearest_to(query.as_slice())?
+                .column(VECTOR_COLUMN)
+                .distance_type(DistanceType::Cosine)
+                .limit(limit)
+                .execute()
+                .await?
+                .try_collect::<Vec<ArrowRecordBatch>>()
+                .await?;
+            hits_from_batches(&batches)
+        })?;
 
         hits.sort_by(|a, b| {
             b.score
@@ -111,7 +151,7 @@ impl DenseIndex {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.chunk_id.0.cmp(&b.chunk_id.0))
         });
-        hits.truncate(limit.max(1));
+        hits.truncate(limit);
         Ok(hits)
     }
 
@@ -119,79 +159,132 @@ impl DenseIndex {
         if chunk_ids.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.transaction()?;
-        {
-            let mut stmt = tx.prepare("DELETE FROM chunk_embeddings WHERE chunk_id = ?1")?;
-            for chunk_id in chunk_ids {
-                stmt.execute(params![chunk_id.0])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
+
+        let predicate = chunk_ids
+            .iter()
+            .map(|chunk_id| chunk_id.0.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        self.block_on(async {
+            let table = open_table(&self.connection).await?;
+            let filter = format!("chunk_id IN ({predicate})");
+            table.delete(filter.as_str()).await?;
+            Ok(())
+        })
     }
 
-    /// Removes all stored embeddings. Used when forcing a full search index rebuild.
     pub fn clear(&mut self) -> Result<(), DenseError> {
-        self.conn
-            .execute("DELETE FROM chunk_embeddings", [])?;
-        Ok(())
+        self.block_on(async {
+            let _ = self.connection.drop_table(TABLE_NAME, &[]).await;
+            ensure_table(&self.connection).await?;
+            Ok(())
+        })
+    }
+
+    fn block_on<F, T>(&self, future: F) -> Result<T, DenseError>
+    where
+        F: std::future::Future<Output = Result<T, DenseError>>,
+    {
+        self.runtime.block_on(future)
     }
 }
 
-fn init_schema(conn: &Connection) -> Result<(), DenseError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS chunk_embeddings (
-            chunk_id INTEGER PRIMARY KEY,
-            embedding BLOB NOT NULL
-        );",
-    )?;
-    Ok(())
+/// Returns the LanceDB storage directory for dense embeddings.
+pub fn dense_storage_path(workspace: &Path) -> PathBuf {
+    workspace.join(".ctx-codegraph/dense")
 }
 
-fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|value| value.to_le_bytes())
-        .collect()
+/// Returns the number of rows in the workspace dense embedding index.
+pub fn dense_embedding_count(workspace: &Path) -> u64 {
+    DenseIndex::open(workspace)
+        .ok()
+        .and_then(|index| index.count().ok())
+        .unwrap_or(0)
 }
 
-fn blob_to_embedding(blob: &[u8]) -> Result<Vec<f32>, DenseError> {
-    if !blob.len().is_multiple_of(4) {
-        return Err(DenseError::Other(format!(
-            "invalid embedding blob length: {}",
-            blob.len()
-        )));
-    }
-
-    let mut embedding = Vec::with_capacity(blob.len() / 4);
-    for chunk in blob.chunks_exact(4) {
-        let bytes: [u8; 4] = chunk.try_into().expect("chunk size checked");
-        embedding.push(f32::from_le_bytes(bytes));
-    }
-    Ok(embedding)
+fn embedding_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("chunk_id", DataType::Int64, false),
+        Field::new(
+            VECTOR_COLUMN,
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                EMBEDDING_DIM as i32,
+            ),
+            false,
+        ),
+    ]))
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
-        return 0.0;
+async fn ensure_table(connection: &Connection) -> Result<Table, DenseError> {
+    match connection.open_table(TABLE_NAME).execute().await {
+        Ok(table) => Ok(table),
+        Err(lancedb::Error::TableNotFound { .. }) => connection
+            .create_empty_table(TABLE_NAME, embedding_schema())
+            .execute()
+            .await
+            .map_err(DenseError::from),
+        Err(err) => Err(DenseError::from(err)),
+    }
+}
+
+async fn open_table(connection: &Connection) -> Result<Table, DenseError> {
+    connection
+        .open_table(TABLE_NAME)
+        .execute()
+        .await
+        .map_err(DenseError::from)
+}
+
+fn records_to_batch(records: &[EmbeddingRecord]) -> Result<ArrowRecordBatch, DenseError> {
+    let schema = embedding_schema();
+    let chunk_ids = Int64Array::from_iter_values(records.iter().map(|record| record.chunk_id.0));
+    let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+        records
+            .iter()
+            .map(|record| {
+                Some(
+                    record
+                        .embedding
+                        .iter()
+                        .map(|value| Some(*value))
+                        .collect::<Vec<_>>(),
+                )
+            }),
+        EMBEDDING_DIM as i32,
+    );
+
+    ArrowRecordBatch::try_new(
+        schema,
+        vec![Arc::new(chunk_ids), Arc::new(vectors)],
+    )
+    .map_err(DenseError::from)
+}
+
+fn hits_from_batches(batches: &[ArrowRecordBatch]) -> Result<Vec<DenseHit>, DenseError> {
+    let mut hits = Vec::new();
+
+    for batch in batches {
+        let chunk_ids = batch
+            .column_by_name("chunk_id")
+            .ok_or_else(|| DenseError::Other("missing chunk_id column".into()))?
+            .as_primitive::<Int64Type>();
+        let distances = batch
+            .column_by_name("_distance")
+            .ok_or_else(|| DenseError::Other("missing _distance column".into()))?
+            .as_primitive::<Float32Type>();
+
+        for row in 0..batch.num_rows() {
+            let distance = distances.value(row);
+            hits.push(DenseHit {
+                chunk_id: ChunkId(chunk_ids.value(row)),
+                score: 1.0 - distance,
+            });
+        }
     }
 
-    let mut dot = 0.0_f32;
-    let mut norm_a = 0.0_f32;
-    let mut norm_b = 0.0_f32;
-
-    for (left, right) in a.iter().zip(b.iter()) {
-        dot += left * right;
-        norm_a += left * left;
-        norm_b += right * right;
-    }
-
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom <= f32::EPSILON {
-        0.0
-    } else {
-        dot / denom
-    }
+    Ok(hits)
 }
 
 #[cfg(test)]
@@ -210,7 +303,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let index = DenseIndex::open(dir.path()).unwrap();
         assert!(index.db_path().exists());
-        assert!(index.db_path().ends_with("dense.sqlite"));
+        assert!(index.db_path().ends_with("dense"));
     }
 
     #[test]
@@ -346,6 +439,7 @@ mod tests {
             .unwrap();
 
         index.clear().unwrap();
+        assert_eq!(index.count().unwrap(), 0);
         let hits = index.search_knn(&sample_embedding(1.0), 5).unwrap();
         assert!(hits.is_empty());
     }
@@ -371,5 +465,21 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].chunk_id, ChunkId(1));
         assert!(hits[0].score > 0.99);
+    }
+
+    #[test]
+    fn dense_embedding_count_reports_rows() {
+        let dir = tempdir().unwrap();
+        assert_eq!(dense_embedding_count(dir.path()), 0);
+
+        let mut index = DenseIndex::open(dir.path()).unwrap();
+        index
+            .upsert_batch(&[EmbeddingRecord {
+                chunk_id: ChunkId(1),
+                embedding: sample_embedding(1.0),
+            }])
+            .unwrap();
+
+        assert_eq!(dense_embedding_count(dir.path()), 1);
     }
 }
