@@ -1,672 +1,342 @@
-# ctx
+# ctx 🌐
 
-> Fast, developer-friendly project context generator and interactive code explorer for LLMs.
+> **Fast, open-source project context generator, semantic code explorer, and Model Context Protocol (MCP) server for LLMs and AI Agents.**
 
-`ctx` is a modern command-line utility written in Rust that helps developers collect, analyze and export project context for Large Language Models (LLMs). It combines fast filesystem scanning, interactive file selection, configurable filtering, project statistics, and an experimental semantic code graph into a single tool.
-
-Whether you're preparing context for ChatGPT, Claude, Gemini, or simply exploring a large codebase, `ctx` provides a clean and efficient workflow.
+`ctx` is a modern, high-performance command-line utility written in Rust. It helps developers and AI agents bridge the gap between large, complex codebases and Large Language Models (LLMs) like Claude, Gemini, and ChatGPT. By combining fast filesystem traversal, an interactive Terminal UI (TUI), and an experimental semantic code graph with hybrid retrieval (lexical BM25 + dense embeddings), `ctx` generates compact, token-efficient codebase contexts.
 
 ---
 
-# Features
+## 📖 Table of Contents
 
-## Project Context Generation
-
-- **Smart Code Artifact Gathering**: Compile complete codebase structure and file contents into a single structured artifact.
-- **Smart Filtering**: Respects `.gitignore` and automatically ignores virtual environments (`venv`, `.venv`), dependency folders (`node_modules`), caches, and build folders (`target`).
-- **Token Tracking**: Real-time token estimation for LLM consumption.
-- **Visual Directory Tree**: Colored command-line representation of project structure.
-- **Multiple Formats**: Export code artifacts to Markdown, XML, or Plain Text.
-
-## Interactive Terminal UI
-
-- Keyboard-driven visual file and directory selector.
-- Live file preview panel.
-- Fast file search and clipboard integration.
-- Compile custom context artifacts on-the-fly.
-
-## Code Graph (Experimental)
-
-Build a local SQLite semantic index of your Rust and Python codebases.
-
-- **Multi-language AST Parsing**: Native support for Rust and Python symbols, imports, and calls.
-- **LSP Resolution**: Enriched call resolution using LSP clients (e.g. `rust-analyzer` or `pyright-langserver`) to resolve call targets.
-- **Graph Queries**: Subcommands for symbols, callers, callees, forward slice trees, and symbol context.
-- **Budget-Aware Context Extraction (`affect`)**: Rank and pack related code context within a specific LLM token budget.
-
-## Model Context Protocol (MCP) Server
-
-- **stdio MCP server**: Integrates with Cursor, Claude Desktop, and other MCP clients.
-- **Unified retrieval**: `retrieve_context` (hybrid BM25 + embeddings + graph traversal), plus project context, symbol listing, and index rebuild. See [docs/hybrid-search.md](docs/hybrid-search.md).
-- **Resources & prompts**: Index status, project tree summary, and guided symbol exploration.
-
-## Multiple Output Formats
-
-- Markdown
-- Plain text
-- XML
-
-Designed for direct consumption by:
-
-- ChatGPT
-- Claude
-- Gemini
-- Cursor
-- Copilot
-- Other LLM-powered tools
+- [Features](#-features)
+- [How to Use](#-how-to-use)
+  - [For Humans (CLI & Interactive TUI)](#1-for-humans-cli--interactive-tui)
+  - [For AI Agents & LLM Clients (MCP Server)](#2-for-ai-agents--llm-clients-mcp-server)
+- [Under the Hood: The Full Indexing Pipeline](#-under-the-hood-the-full-indexing-pipeline)
+- [Technology Stack](#-technology-stack)
+- [Crate Architecture](#-crate-architecture)
+- [Configuration (`.ctxconfig`)](#-configuration-ctxconfig)
+- [Contributing Guidelines](#-contributing-guidelines)
+- [License](#-license)
 
 ---
 
-# Installation
+## ✨ Features
 
-## From source
+- 📁 **Smart Context Gathering**: Compile your codebase structure and contents into a single structured artifact format (Markdown, XML, or Plain Text) optimized for LLMs.
+- 🔍 **Interactive Terminal UI**: Navigate, search, preview, and select files visually using a keyboard-driven TUI to customize context compilation on-the-fly.
+- 🧠 **CodeGraph (Semantic Indexing)**: Build a local SQLite semantic index of Rust and Python codebases using multi-language Tree-Sitter AST parsing.
+- 📡 **LSP Integration**: Enrich call target resolution using active language servers (such as `rust-analyzer` or `pyright-langserver`) to map exact references.
+- 🏎️ **Hybrid Search**: Combine BM25 lexical search (Tantivy) and dense vector embeddings (Snowflake Arctic ONNX models via `ort` ONNX Runtime) with Reciprocal Rank Fusion (RRF).
+- 🤖 **Model Context Protocol (MCP) Server**: A JSON-RPC stdio MCP server for direct integration with Cursor, Claude Desktop, Gemini, Claude Code, and other agentic environments.
+- 📊 **Token-Budget Packing (`affect`)**: Rank and pack semantic neighborhoods or slices within a specific LLM token budget to prevent context window exhaustion.
 
+---
+
+## 🛠️ How to Use
+
+`ctx` is designed with a dual-audience workflow in mind: optimized for manual human developer exploration, and structured for automated tool-calling by AI agents.
+
+### 1. For Humans: CLI & Interactive TUI
+
+#### Installation
 ```bash
-git clone https://github.com/<your-org>/ctx.git
+# Clone the repository
+git clone https://github.com/shizmag/ctx-rust.git
+cd ctx-rust
 
-cd ctx
-
+# Install the CLI binary locally
 cargo install --path crates/ctx-cli
 ```
-
-Or simply:
-
+*Alternatively, compile in release mode:*
 ```bash
 cargo build --release
+# Executable will be available at target/release/ctx
 ```
 
-The executable will be available as:
-
-```text
-target/release/ctx
-```
-
----
-
-# Quick Start
-
-Display project tree
-
-```bash
-ctx
-```
-
-Generate complete markdown context
-
-```bash
-ctx -C
-```
-
-Export context to a file
-
-```bash
-ctx -C -o context.md
-```
-
-Copy context directly to clipboard
-
-```bash
-ctx -C --clipboard
-```
-
-Open interactive mode
-
-```bash
-ctx --interactive
-```
-
-Start the Model Context Protocol (MCP) server
-
-```bash
-ctx mcp
-```
-
----
-
-# CLI Usage
-
-```
-ctx [OPTIONS] [PATH]
-```
-
-## Common Options
-
-| Option | Description |
-|---------|-------------|
-| `-C`, `--code` | Generate full project context |
-| `-i`, `--interactive` | Launch interactive TUI |
-| `-f`, `--format` | Output format |
-| `-m`, `--mode` | Scan mode |
-| `-o`, `--output` | Save output to file |
-| `--clipboard` | Copy output to clipboard |
-| `--max-depth` | Maximum traversal depth |
-| `--max-file-size` | Maximum included file size |
-| `--no-stats` | Disable project statistics |
-| `--list-hidden` | Show skipped files |
-
----
-
-# Scan Modes
-
-## Smart
-
-Default mode.
-
-- Respects `.gitignore`
-- Skips generated files
-- Ignores common build artifacts
-- Produces balanced LLM context
-
-## All
-
-Indexes every file.
-
-Useful for:
-
-- archives
-- research
-- debugging
-
-## Code
-
-Prioritizes source code while excluding unrelated documentation.
-
-## Docs
-
-Focuses on Markdown and documentation files.
-
-Useful for documentation generation.
-
-## LLM
-
-Optimized output structure for language models.
-
-Includes token statistics and improved formatting.
-
----
-
-# Output Formats
-
-## Markdown
-
-Recommended for ChatGPT and Claude.
-
-```bash
-ctx -C --format markdown
-```
-
----
-
-## Plain Text
-
-```bash
-ctx -C --format plain
-```
-
----
-
-## XML
-
-Suitable for custom parsers and tooling.
-
-```bash
-ctx -C --format xml
-```
-
----
-
-# Interactive Mode
-
-Launch with
-
-```bash
-ctx --interactive
-```
-
-Features include:
-
-- project browser
-- search
-- preview pane
-- file selection
-- clipboard export
-- keyboard shortcuts
-
----
-
-# Code Graph
-
-The CodeGraph subsystem builds a semantic index of Rust and Python projects in a local SQLite database (`.ctx-codegraph/codegraph.sqlite`).
-
-## Build index
-
-Build the semantic symbol and call graph. By default, it uses fast Tree-Sitter AST parsing.
-
-```bash
-ctx graph build
-```
-
-Options:
-- `--all`: Enables all build methods (LSP, dense embeddings, lexical search). Respects `--without-emb` / `--without-lex` and `--no-rust-analyzer` when set.
-- `--with-lsp`: Enables language server fallback (e.g., `rust-analyzer` or `pyright-langserver`) to enrich calls with precise `LspExact` resolution.
-- `--with-emb`, `--with-lex`: Force dense embedding and BM25 lexical indexes (auto-enabled when `embedding_model` is in `.ctxconfig`).
-- `--without-emb`, `--without-lex`: Skip search indexes even when configured or `--all` is set.
-- `--no-rust-analyzer`: Disables language server integration, forcing tree-sitter fallback only.
-- `--verbose`, `-v`: Displays detailed build statistics, parsed files, edge kinds, and timings.
-
-## List symbols
-
-List all indexed symbols grouped by file, or search for a specific symbol:
-
-```bash
-ctx graph symbols [query]
-```
-
-## Show callees
-
-List direct callees (called symbols/functions) of a symbol:
-
-```bash
-ctx graph callees run_pipeline
-```
-*(Also available via `ctx graph calls <symbol>`)*
-
-## Show callers
-
-List direct callers of a symbol:
-
-```bash
-ctx graph callers load
-```
-
-## Generate forward slice tree
-
-Compute and print the hierarchical forward call slice tree starting from a target symbol:
-
-```bash
-ctx graph slice run_pipeline
-```
-
-## Extract graph context
-
-Retrieve semantic neighborhood context around a target symbol:
-
-```bash
-ctx graph context auth_service --mode callers --depth 2 --max-nodes 50
-```
-
-Available modes:
-- `callers` / `callees`
-- `dependencies` / `dependents`
-- `neighborhood` (default)
-- `forward-slice` / `reverse-slice`
-
-## Retrieve ranked context under token budget (`affect`)
-
-Retrieve a ranked, token-budgeted semantic context containing code snippets around a symbol (e.g., `auth_service`), optimized for LLM prompting:
-
-```bash
-ctx graph affect auth_service --depth auto --token-budget 12000
-```
-
-Options:
-- `--mode <mode>`: Traversal mode (`callers`, `callees`, `dependencies`, `dependents`, `forward`, `reverse`, `neighborhood`, `impact`).
-- `--packing <packing>`: Snippet packing strategy (`sandwich`, `frontloaded`, `balanced`).
-- `--ranking <ranking>`: Symbol ranking strategy (`hybrid`, `graph`, `lexical`).
-- `--format <format>`: Output format (`text`, `json`).
-- `--no-snippets`: Disable inline code snippets and retrieve names only.
-
----
-
-# Model Context Protocol (MCP) Server
-
-`ctx` embeds a **Model Context Protocol (MCP)** server over standard input/output (stdio), allowing LLM agents (Cursor, Claude Desktop, Gemini, Claude Code, etc.) to interact with your codebase context dynamically.
-
-## Prerequisites
-
-Build the codegraph index **before** first use:
-
-```bash
-ctx graph build --with-lsp
-```
-
-The MCP server opens an existing index on `initialize` but does **not** auto-build. If the index is missing, initialization fails with a message pointing to the command above. Agents can also call the `rebuild_index` tool when a rebuild is needed.
-
-## Run MCP Server
-
-```bash
-ctx mcp
-```
-
-This starts a JSON-RPC 2.0 stdio server (protocol version `2024-11-05`). Progress and status messages are logged to **stderr** (e.g. `Index loaded`, `Index not found — run ctx graph build --with-lsp`).
-
-## Client Configuration
-
-Example configs are in `examples/mcp/`. Replace `/path/to/ctx` with the absolute path to your `ctx` binary, or ensure `ctx` is on `PATH` and use `"command": "ctx"`.
-
-### Cursor
-
-Copy or merge into `.cursor/mcp.json` (see `examples/mcp/cursor-mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "ctx": {
-      "command": "/path/to/ctx",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-Add to Claude Desktop MCP config (see `examples/mcp/claude-desktop-config.json`):
-
-```json
-{
-  "mcpServers": {
-    "ctx": {
-      "command": "/path/to/ctx",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `retrieve_context` | **Primary LLM tool.** Hybrid/graph/lexical/dense retrieval with token-budget packing. |
-| `list_symbols` | List or search indexed symbols. |
-| `read_file` | Read workspace file contents (works without index). |
-| `rebuild_index` | Rebuild codegraph and optional search indexes. |
-| `get_project_context` | Full project context (same as `ctx -C`). |
-
-See [docs/hybrid-search.md](docs/hybrid-search.md) for hybrid search setup, models, and index layout.
-
-### `retrieve_context`
-
-- `query` (required): Symbol name, qualified path, or free-text search string.
-- `strategy` (optional): `graph`, `hybrid`, `lexical`, `dense`. Default: `hybrid` (falls back to `graph` when search is not configured).
-- `graph_mode` (optional): `neighborhood`, `callers`, `callees`, `dependencies`, `dependents`, `impact`, etc. Default: `neighborhood`.
-- `depth` (optional): Integer or `"auto"`. Default: `auto`.
-- `max_nodes`, `max_files` (optional): Graph limits. Defaults: `200`, `50`.
-- `token_budget` (optional): Default `12000`.
-- `packing` (optional): `sandwich`, `frontloaded`, `balanced`. Default: `sandwich`.
-- `format` (optional): `yaml`, `json`, `text`. Default: `yaml`.
-
-### `get_project_context`
-
-- `format` (optional): `markdown`, `xml`, `plain`. Default: `markdown`.
-- `mode` (optional): `smart`, `code`, `docs`, `llm`, `all`. Default: `smart`.
-- `max_depth`, `max_file_size` (optional).
-- `include_stats` (optional): Default `true`.
-
-### `list_symbols`
-
-- `query` (optional): Filter symbols; omit to list.
-- `limit` (optional): Default `50`.
-
-### `rebuild_index`
-
-- `with_all` (optional): Enable all build methods (LSP, dense embeddings, lexical search). Default: `false`.
-- `use_lsp` (optional): Use LSP resolution. Default: `true` (or from `.ctxconfig`); with `with_all`, defaults to `true` unless explicitly `false`.
-- `with_emb`, `with_lex` (optional): Build dense/lexical search indexes (requires `embedding_model` in `.ctxconfig`).
-- `without_emb`, `without_lex` (optional): Skip search indexes (overrides `with_all`).
-
-When symbol resolution is ambiguous, tools return structured text listing candidate symbols so the agent can refine `query` and retry.
-
-## Resources
-
-| URI | Description |
-|-----|-------------|
-| `ctx://index/status` | Index build status and metadata (files, symbols, edges). |
-| `ctx://project/tree` | Brief project tree summary. |
-
-## Prompts
-
-| Prompt | Arguments | Description |
-|--------|-----------|-------------|
-| `explore-symbol` | `symbol` (required) | Guided workflow for exploring a symbol with ctx tools. |
-
-## Protocol Methods
-
-- `initialize`, `notifications/initialized`
-- `ping`
-- `tools/list`, `tools/call`
-- `resources/list`, `resources/read`
-- `prompts/list`, `prompts/get`
-
-## Operational Notes
-
-- **Pre-build required**: Run `ctx graph build --with-lsp` before connecting an MCP client.
-- **No mid-session workspace switch**: The workspace is fixed at `initialize`; re-connect to change projects.
-- **stderr logging**: Status messages go to stderr; JSON-RPC responses go to stdout.
-- **Disambiguation**: Ambiguous symbols return candidate lists instead of errors — this is the intended MCP-interactive pattern.
-
----
-
-# Collecting Code Artifacts
-
-One of the core features of `ctx` is compiling codebase context into a clean, unified **Code Artifact** that can be directly fed into LLMs.
-
-## CLI Artifact Generation
-
-To generate a full code artifact containing the file tree structure and the file contents:
-
-```bash
-ctx -C
-```
-
-### Saving & Copying Artifacts
-
-- **Write to a file**:
+#### Quick Start Commands
+- **Show Directory Tree**:
+  ```bash
+  ctx
+  ```
+- **Generate Full Project Context (Markdown)**:
+  ```bash
+  ctx -C
+  ```
+- **Save Context to File**:
   ```bash
   ctx -C -o context.md
   ```
-- **Copy to Clipboard**:
+- **Copy Context directly to System Clipboard**:
   ```bash
   ctx -C --clipboard
   ```
+- **Launch Interactive TUI Mode**:
+  ```bash
+  ctx --interactive  # or ctx -i
+  ```
+  *TUI Hotkeys: `Space` to select/deselect files, `c` to clear configuration/selections, `h`/`l` or arrow keys to navigate and adjust settings, and `Enter` to copy the selected file context.*
 
-### Formats
-Specify output formats using `-f` or `--format`:
-- `markdown` (or `md`): Formatted with markdown headers and fenced code blocks. (Recommended for Claude/ChatGPT).
-- `xml`: Structures context using XML tags, ideal for Claude's XML parsing behavior.
-- `plain` (or `text`/`txt`): Standard text export.
+- **Build Semantic CodeGraph**:
+  ```bash
+  # Fast Tree-Sitter AST build only
+  ctx graph build
+  
+  # Full Build: Tree-Sitter + LSP definition lookup + lexical index + dense embeddings
+  ctx graph build --all
+  ```
 
-### Smart Exclusions & Filtering
-By default, `ctx` filters files carefully to keep context sizes within LLM token budgets:
-- Respects project `.gitignore` files.
-- Automatically excludes virtual environments (`venv`, `.venv`), package folders (`node_modules`), cache directories (`.git`, `.ctx-codegraph`), and build artifacts (`target`).
-- Configurable maximum depth (`--max-depth`) and file size limits (`--max-file-size`).
-- Custom skip rules can be specified in `.ctx.toml` configuration.
+---
 
-## Interactive TUI Artifacts
+### 2. For AI Agents & LLM Clients: MCP Server
 
-Launch the interactive terminal:
+`ctx` embeds a standard Model Context Protocol (MCP) server over standard I/O (`stdio`). This allows AI agents to dynamically fetch workspace tree structures, read files, query symbols, traverse call graphs, or perform hybrid searches on your codebase.
 
-```bash
-ctx --interactive
+#### Configuring MCP Clients
+
+Add the following configuration block to your client. Replace `/path/to/ctx` with the absolute path to your compiled `ctx` binary (or just `"ctx"` if the binary is on your `PATH`).
+
+##### Cursor Configuration (`.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "ctx": {
+      "command": "/path/to/ctx",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-- Navigate the project structure visually.
-- Select/deselect specific files and directories using spacebar/keys.
-- Compile and copy the custom-tailored code artifact immediately onto the system clipboard.
+##### Claude Desktop Configuration
+On macOS, add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "ctx": {
+      "command": "/path/to/ctx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+#### Exposed MCP Tools
+
+The MCP server exposes five primary tools:
+
+1. **`retrieve_context`** (Primary LLM retrieval tool):
+   - **Arguments**:
+     - `query` (string, required): A symbol name, path, or free-text query.
+     - `strategy` (enum, optional): `hybrid` | `graph` | `lexical` | `dense`. Defaults to `hybrid` (falls back to `graph` if embeddings are unconfigured).
+     - `graph_mode` (enum, optional): `neighborhood` | `callers` | `callees` | `dependencies` | `dependents` | `impact`.
+     - `depth` (int or `"auto"`, optional): Traversal depth.
+     - `token_budget` (int, optional): Token packing budget (default: `12000`).
+     - `format` (enum, optional): `yaml` | `json` | `text`. Defaults to `yaml`.
+2. **`list_symbols`**:
+   - **Arguments**: `query` (optional filter), `limit` (default: `50`).
+3. **`read_file`**:
+   - **Arguments**: `path` (required absolute or relative workspace path), `start_line` / `end_line` (optional).
+4. **`rebuild_index`**:
+   - **Arguments**: `with_all` (boolean), `use_lsp` (boolean), `with_emb` (boolean), `with_lex` (boolean).
+5. **`get_project_context`**:
+   - **Arguments**: `mode` (smart, code, docs, llm, all), `format` (markdown, xml, plain), `include_stats` (boolean).
+
+#### Exposed Resources & Prompts
+- **Resources**:
+  - `ctx://index/status` – View indexing statistics, file counts, and build metadata.
+  - `ctx://project/tree` – Retrieve a brief directory tree layout of the current workspace.
+- **Prompts**:
+  - `explore-symbol` – Guided workflow for finding and analyzing code references.
 
 ---
 
-# Under the Hood
+## ⚙️ Under the Hood: The Full Indexing Pipeline
 
-### Incremental Updates
-The CodeGraph index is backed by a local SQLite database (`.ctx-codegraph/codegraph.sqlite`).
-`ctx` checks file modification times (`mtime`) and file sizes (`size`) to identify modified, added, or deleted files. The CLI updates the index **incrementally** in milliseconds when loading graph commands. The MCP server opens the existing index without auto-building; use `ctx graph build` or the `rebuild_index` MCP tool to refresh.
+`ctx` generates semantic indexes and call graphs incrementally. Here is the step-by-step pipeline:
 
-### Dual Resolution Strategies
-- **Tree-Sitter Parsing**: High-speed local AST parsing of symbols, functions, and import/calls for Rust and Python.
-- **Language Server (LSP) Fallback**: Connects to active LSPs (like `rust-analyzer` or `pyright-langserver`) to resolve call targets with absolute semantic accuracy, marking resolved edges as `LspExact`.
+```
+[ Filesystem ]
+      │
+      ▼
+1. Scan & Filter ────────► Respects .gitignore, skips caches (node_modules, target, etc.)
+      │
+      ▼
+2. AST TS Parsing ───────► Treesitter extracts Rust/Python symbols, calls, scopes
+      │
+      ▼
+3. LSP Resolution ───────► Queries active LSPs (rust-analyzer/pyright) for exact defs
+      │
+      ▼
+4. Chunking ─────────────► Breaks source code into hierarchical AST-aware chunks
+      │
+      ├───────────────────────────────┐
+      ▼                               ▼
+5. BM25 Lexical Indexing       6. Dense Vector Embeddings
+   (Tantivy index builder)        (Snowflake ONNX runtime via `ort`)
+      │                               │
+      ▼                               ▼
+ [ Tantivy Store ]              [ dense.sqlite ]
+      │                               │
+      └───────────────┬───────────────┘
+                      ▼
+             7. RRF Query Fusion (Lexical + Dense Ranker)
+                      │
+                      ▼
+             8. Token-Budget Packing (ContextPack outputs Markdown/YAML)
+```
+
+1. **Scan & Filter**: The traversal engine scans directories, respects `.gitignore` rules, and applies smart filters to ignore large build directories (`target/`, `node_modules/`, `.git/`, virtual environments).
+2. **AST Parsing**: Supported files (Rust and Python) are parsed locally with Tree-Sitter. This generates AST-level definitions (structs, classes, functions, traits) and records scopes and unresolved symbol occurrences.
+3. **LSP Definition Resolution (Optional)**: If `--with-lsp` (or `--all`) is passed, `ctx` communicates with language servers (like `rust-analyzer` or `pyright-langserver`) to resolve ambiguous references to their precise definition source. This resolves calls to `LspExact` edges.
+4. **Semantic Chunking**: The graph compiler slices files into logical chunks based on symbol bounds and AST definitions. Parent-child relationships are mapped to write `Contains` edges.
+5. **Lexical Indexing**: Chunk texts are compiled into a local Tantivy full-text index using BM25 token weighting.
+6. **Dense Vector Embeddings (Optional)**: If `embedding_model` is configured, chunk contents are run through a local ONNX embedding model (default: `snowflake-arctic-embed-m-v2.0` with 768 dimensions) using the `ort` crate. The resulting vector coordinates are written to a SQLite table (`dense.sqlite`).
+7. **Query-Time Retrieval (RRF)**: At query time, dense and lexical candidate lists are merged using Reciprocal Rank Fusion (RRF):
+   $$\text{score} = \sum_{m \in M} \frac{1}{k + \text{rank}_m}$$
+8. **Token-Budget Packing (`affect`)**: Candidates are expanded into their semantic graph neighborhoods (callers, callees, dependencies). Slices are ranked and loaded into a `ContextPack`, which fills the specified LLM token budget (e.g., 12k tokens) by discarding lower-ranking chunks and returning the rest in a structured layout (YAML/JSON/Markdown).
 
 ---
 
-# Configuration
+## 💻 Technology Stack
 
-`ctx` automatically loads a project configuration file when available.
+`ctx` is engineered in Rust for low memory overhead and high speed:
+- **Rust**: Language Core.
+- **Clap**: CLI argument parsing.
+- **Ratatui & Crossterm**: Terminal User Interface renderer.
+- **Tree-Sitter**: Parser generation and syntax node queries.
+- **Tantivy**: Local, high-performance search index engine (BM25).
+- **SQLite & Rusqlite**: Relational storage for codegraph structure and vector embeddings metadata.
+- **ort (ONNX Runtime)**: Local inference for Snowflake-Arctic embeddings and Jina rerankers.
+- **LSP JSON-RPC**: Subprocess transport to language servers.
 
-Example:
+---
 
-```toml
+## 🏗️ Crate Architecture
+
+To maintain high compile-time speeds and clean structural boundaries, the codebase is modularized:
+
+```mermaid
+graph TD
+    subgraph consumers [Consumers]
+        CLI[ctx-cli]
+        MCP[ctx-mcp]
+        CG[ctx-codegraph]
+    end
+
+    subgraph facade [Composition]
+        StorageFacade[ctx-codegraph-storage]
+    end
+
+    subgraph libs [Libraries]
+        Lang[ctx-codegraph-lang]
+        Resolver[ctx-codegraph-resolver]
+        Store[ctx-codegraph-store]
+        Rust[ctx-lang-rust]
+        Python[ctx-lang-python]
+        Search[ctx-codegraph-search]
+    end
+
+    CLI --> CG
+    MCP --> CG
+    CG --> StorageFacade
+    StorageFacade --> Lang
+    StorageFacade --> Resolver
+    StorageFacade --> Store
+    StorageFacade --> Rust
+    StorageFacade --> Python
+    Search -.-> Lang
+    Store --> Lang
+    Resolver --> Lang
+    Rust --> Lang
+    Rust --> Resolver
+    Python --> Lang
+    Python --> Resolver
+```
+
+### Key Workspace Members
+- **`crates/ctx-cli`**: CLI entry point and settings commands.
+- **`crates/ctx-tui`**: Terminal browser UI and user configuration view.
+- **`crates/ctx-mcp`**: stdio Model Context Protocol layer.
+- **`crates/ctx-core`**: Filesystem crawling, statistics compilation, and file filters.
+- **`crates/ctx-codegraph`**: Context budgeting, graph slicing, and packing engine.
+- **`crates/ctx-codegraph-store`**: SQLite database schemas and persistence operations.
+- **`crates/ctx-codegraph-resolver`**: LSP transportation client.
+- **`crates/ctx-lang-rust` / `ctx-lang-python`**: Language-specific Tree-Sitter parsers.
+- **`crates/ctx-codegraph-search`**: Search coordinator (BM25 & Vector).
+
+---
+
+## 🔧 Configuration (`.ctxconfig`)
+
+Configuration files are placed in the project root as `.ctxconfig` or `.ctx.toml`.
+
+```ini
+# --- Scan Settings ---
 mode = "smart"
-
 max_depth = 6
-
 max_file_size = 524288
-
 exclude = [
     "target",
     "node_modules",
     "*.log"
 ]
-```
 
-CLI arguments always override configuration values.
+# --- Model & Hybrid Search Settings ---
+# Enable hybrid search indexing and query-time embeddings:
+embedding_model = /path/to/snowflake-arctic-embed-m-v2.0/model.onnx
 
----
-
-# Project Structure
-
-```
-ctx/
-├── ctx-cli
-├── ctx-core
-├── ctx-render
-├── ctx-filter
-├── ctx-config
-├── ctx-models
-├── ctx-codegraph
-├── ctx-tui
-├── ctx-stats
-├── ctx-llm
-└── ctx-test
-```
-
-Each crate is focused on a single responsibility to keep the architecture modular and easy to extend.
-
----
-
-# Architecture
-
-```
-Filesystem
-      │
-      ▼
-ctx-core
-      │
-      ▼
-Filtering
-      │
-      ▼
-Statistics
-      │
-      ▼
-Rendering
-      │
-      ├────────► Markdown
-      ├────────► XML
-      └────────► Plain Text
-
-             ▲
-
-Interactive TUI
-
-             ▲
-
-CodeGraph
+# Optional settings
+reranker_model = /path/to/jina-reranker-v2-base-multilingual/model.onnx
+tokenizer_dir = /path/to/tokenizer_files
+rrf_k = 60
+bm25_top_k = 50
+dense_top_k = 50
+enable_rerank = false
+default_retrieval_strategy = hybrid
 ```
 
 ---
 
-# Technologies
+## 🤝 Contributing Guidelines
 
-The project is built using:
+We welcome contributions to `ctx`! Whether you are fixing bugs, writing tests, improving documentation, or adding support for new languages, your help is highly appreciated.
 
-- Rust
-- Clap
-- Ratatui
-- Crossterm
-- Tree-sitter
-- rust-analyzer (optional)
-- SQLite
-- Rusqlite
-- Walkdir
-- Arboard
-- ThisError
+### Rules of Engagement
 
----
+1. **Communication**: All discussions, issues, PR descriptions, and comments must be in **English**.
+2. **Regression Safety**: Do not introduce breaking API changes without an open issue discussion. Keep all changes focused and minimal.
+3. **Quality Bar**:
+   - Ensure your code adheres to standard Rust formatting (`cargo fmt`).
+   - Run Clippy and resolve any warnings before submitting (`cargo clippy`).
+   - Every feature or bug fix must be covered by unit/integration tests (`cargo test`).
 
-# Performance
+### Code Verification Pipeline
 
-Designed for:
-
-- very large repositories
-- low memory overhead
-- incremental indexing
-- fast filesystem traversal
-- efficient rendering
-
----
-
-# Supported Platforms
-
-- Linux
-- macOS
-- Windows
-
----
-
-# Roadmap
-
-Planned features include:
-
-- Additional language support (Go, TypeScript, C++)
-- Workspace/multi-project support
-- Global symbol references cross-referencing
-- Dependency graphs visualizer
-- Semantic search & embeddings
-- Local LSP improvements
-- Plugin system
-
----
-
-# Contributing
-
-Contributions are welcome.
-
-Feel free to open:
-
-- Issues
-- Feature Requests
-- Pull Requests
-
-Before submitting a PR, please ensure:
-
-- tests pass
-- formatting is correct
-- clippy reports no warnings
+Before committing your changes or opening a pull request, run the verification suite:
 
 ```bash
-cargo fmt
+# Format check
+cargo fmt --all -- --check
 
-cargo clippy
+# Lints and checks
+cargo clippy --all-targets --all-features -- -D warnings
 
-cargo test
+# Execute test suite
+cargo test --all-targets --all-features
 ```
+
+### Adding a New Language Backend
+
+To add parsing support for a new language (e.g., Go or TypeScript):
+1. Create a new crate: `crates/ctx-lang-<lang>`.
+2. Implement the parser using Tree-Sitter and wire it with a `LanguageBackend` trait interface.
+3. If an LSP server is available, configure `LspDefinitionResolver` options in `crates/ctx-codegraph-resolver`.
+4. Register the new language backend in `crates/ctx-codegraph-storage/src/registry.rs`.
+5. Add parser tests under `crates/ctx-lang-<lang>/tests/` and verify the compilation.
 
 ---
 
-# License
+## 📄 License
 
-Licensed under the MIT License.
-
-See the LICENSE file for details.
+`ctx` is open-source software licensed under the [MIT License](LICENSE).
