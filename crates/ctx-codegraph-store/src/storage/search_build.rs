@@ -206,7 +206,6 @@ pub fn build_search_indexes_impl(
         None
     };
     let mut next_chunk_id = 0i64;
-    let mut embedding_ctx: Option<EmbeddingBuildContext> = None;
     let mut embed_buffer: Vec<EmbeddableChunk> = Vec::new();
     let total_files = file_ids.len();
     let mut files_processed = 0usize;
@@ -232,27 +231,6 @@ pub fn build_search_indexes_impl(
                     embed_buffer.push(EmbeddableChunk::from_chunk(chunk));
                 }
             }
-            if !embed_buffer.is_empty() && embedding_ctx.is_none() {
-                options.report_progress("Loading embedding model...");
-                embedding_ctx = Some(open_embedding_build_context(
-                    workspace_root,
-                    options,
-                    config,
-                    full_rebuild,
-                )?);
-            }
-            if let Some(ctx) = embedding_ctx.as_mut() {
-                while embed_buffer.len() >= embed_batch_size {
-                    let batch: Vec<EmbeddableChunk> =
-                        embed_buffer.drain(..embed_batch_size).collect();
-                    report.embeddings_written +=
-                        embed_and_store_chunks(ctx, &batch, embed_batch_size, &mut profile)?;
-                    options.report_progress(&format!(
-                        "Embedding chunks ({} / {} embedded)...",
-                        report.embeddings_written, profile.embeddable_chunks
-                    ));
-                }
-            }
         }
 
         if let Some(chunks) = lexical_chunks.as_mut() {
@@ -262,19 +240,31 @@ pub fn build_search_indexes_impl(
     tx.commit()?;
     profile.chunk_build_ms = chunk_build_started.elapsed().as_millis() as u64;
 
-    if let Some(ctx) = embedding_ctx.as_mut() {
-        if !embed_buffer.is_empty() {
-            let remainder = std::mem::take(&mut embed_buffer);
+    if needs_embeddings && !embed_buffer.is_empty() {
+        options.report_progress("Loading embedding model...");
+        let mut ctx = open_embedding_build_context(
+            workspace_root,
+            options,
+            config,
+            full_rebuild,
+        )?;
+
+        for range in batch_ranges(embed_buffer.len(), embed_batch_size) {
+            let batch = &embed_buffer[range];
             report.embeddings_written +=
-                embed_and_store_chunks(ctx, &remainder, embed_batch_size, &mut profile)?;
+                embed_and_store_chunks(&mut ctx, batch, embed_batch_size, &mut profile)?;
+            options.report_progress(&format!(
+                "Embedding chunks ({} / {} embedded)...",
+                report.embeddings_written, profile.embeddable_chunks
+            ));
         }
+
         options.report_progress(&format!(
             "Flushing embeddings ({} total)...",
             report.embeddings_written
         ));
         ctx.flush_pending(&mut profile)?;
-        finalize_embedding_metadata(conn, ctx)?;
-        drop(embedding_ctx);
+        finalize_embedding_metadata(conn, &ctx)?;
     }
 
     if defer_lexical {
