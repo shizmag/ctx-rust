@@ -763,8 +763,9 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), std::io::E
     if let Some(t) = &config.extraction_tier {
         lines.push(format!("extraction_tier = {}", t));
     }
-    if let Some(v) = config.parallel_threads {
-        lines.push(format!("parallel_threads = {}", v));
+    match config.parallel_threads {
+        Some(v) => lines.push(format!("parallel_threads = {}", v)),
+        None => lines.push("# parallel_threads =     # number of Rayon threads for parsing; default = 0 (auto)".to_string()),
     }
     if let Some(m) = &config.lsp_mode {
         lines.push(format!("lsp_mode = {}", m));
