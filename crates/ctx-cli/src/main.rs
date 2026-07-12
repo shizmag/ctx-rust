@@ -1161,7 +1161,7 @@ enum GraphSubcommand {
     Affect {
         /// The query to resolve (symbol name, qualified name, file path, etc.)
         query: String,
-        /// Traversal mode (callers, callees, dependencies, dependents, forward, reverse, neighborhood, impact)
+        /// Traversal mode (callers, callees, dependencies, dependents, forward, reverse, forward-slice, reverse-slice, neighborhood, impact)
         #[arg(long, default_value = "neighborhood")]
         mode: String,
         /// Traversal depth (e.g. 2 or auto)
@@ -1182,7 +1182,7 @@ enum GraphSubcommand {
         /// Include unresolved edges
         #[arg(long, default_value_t = false)]
         include_unresolved: bool,
-        /// Output format (text, json)
+        /// Output format (text, json, yaml)
         #[arg(long, default_value = "text")]
         format: String,
         /// Include snippets (default)
@@ -1203,7 +1203,7 @@ enum GraphSubcommand {
         /// Packing strategy (balanced, frontloaded, sandwich)
         #[arg(long, default_value = "sandwich")]
         packing: String,
-        /// Ranking strategy (graph, lexical, hybrid)
+        /// Ranking strategy (graph, lexical, hybrid, dense)
         #[arg(long, default_value = "hybrid")]
         ranking: String,
         /// Explain ranking
@@ -1682,9 +1682,9 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 .into());
             }
 
-            if format != "json" && format != "text" {
+            if format != "json" && format != "text" && format != "yaml" {
                 return Err(format!(
-                    "Invalid format '{}'. Supported formats are 'text' and 'json'.",
+                    "Invalid format '{}'. Supported formats are 'text', 'json', and 'yaml'.",
                     format
                 )
                 .into());
