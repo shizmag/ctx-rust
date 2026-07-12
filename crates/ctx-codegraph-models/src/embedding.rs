@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::u16;
 
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
@@ -10,6 +11,7 @@ use crate::tokenizer::CodeTokenizer;
 
 pub const EMBEDDING_DIM: usize = 768;
 pub const DEFAULT_EMBED_BATCH_SIZE: usize = 16;
+const MAX_NON_CPU_MODEL_SIZE: u64 = 650;
 
 /// Yields half-open index ranges `[start, end)` covering `0..len` in batches of `batch_size`.
 pub fn batch_ranges(len: usize, batch_size: usize) -> impl Iterator<Item = std::ops::Range<usize>> {
@@ -159,7 +161,7 @@ fn build_session(model_path: &Path, provider: EmbeddingExecutionProvider) -> Res
     if matches!(provider, EmbeddingExecutionProvider::Auto | EmbeddingExecutionProvider::CoreMl) {
         if let Ok(metadata) = std::fs::metadata(model_path) {
             let size = metadata.len();
-            if size > 350 * 1024 * 1024 {
+            if size > MAX_NON_CPU_MODEL_SIZE * 1024 * 1024 {
                 eprintln!(
                     "Warning: Model file size is {} MB (exceeds 250 MB limit for CoreML). Falling back to CPU provider to prevent compilation OOM.",
                     size / (1024 * 1024)
@@ -544,8 +546,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let large_model_path = dir.path().join("large_dummy_model.onnx");
 
-        // Create a dummy file that is slightly larger than 350 MB
-        let size = 351 * 1024 * 1024;
+        // Create a dummy file that is slightly larger than in MAX_NON_CPU_MODEL_SIZE MB
+        let size = MAX_NON_CPU_MODEL_SIZE * 1024 * 1024;
         let file = std::fs::File::create(&large_model_path).unwrap();
         file.set_len(size as u64).unwrap();
 
