@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use ort::session::builder::SessionBuilder;
+use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
 
@@ -159,7 +159,7 @@ fn build_session(model_path: &Path, provider: EmbeddingExecutionProvider) -> Res
     if matches!(provider, EmbeddingExecutionProvider::Auto | EmbeddingExecutionProvider::CoreMl) {
         if let Ok(metadata) = std::fs::metadata(model_path) {
             let size = metadata.len();
-            if size > 250 * 1024 * 1024 {
+            if size > 350 * 1024 * 1024 {
                 eprintln!(
                     "Warning: Model file size is {} MB (exceeds 250 MB limit for CoreML). Falling back to CPU provider to prevent compilation OOM.",
                     size / (1024 * 1024)
@@ -175,29 +175,73 @@ fn build_session(model_path: &Path, provider: EmbeddingExecutionProvider) -> Res
         .min(4)
         .max(1);
 
-    let make_builder = || -> Result<SessionBuilder, ModelError> {
-        Session::builder()
-            .map_err(ModelError::Onnx)?
-            .with_intra_threads(intra_threads)
-            .map_err(|e| ModelError::Inference(e.to_string()))
+    let configs = if provider != EmbeddingExecutionProvider::Cpu {
+        vec![
+            (provider, None),
+            (EmbeddingExecutionProvider::Cpu, None),
+            (provider, Some(GraphOptimizationLevel::Level1)),
+            (EmbeddingExecutionProvider::Cpu, Some(GraphOptimizationLevel::Level1)),
+            (provider, Some(GraphOptimizationLevel::Disable)),
+            (EmbeddingExecutionProvider::Cpu, Some(GraphOptimizationLevel::Disable)),
+        ]
+    } else {
+        vec![
+            (EmbeddingExecutionProvider::Cpu, None),
+            (EmbeddingExecutionProvider::Cpu, Some(GraphOptimizationLevel::Level1)),
+            (EmbeddingExecutionProvider::Cpu, Some(GraphOptimizationLevel::Disable)),
+        ]
     };
 
-    match make_builder()
-        .and_then(|b| configure_session_builder(b, provider))
-        .and_then(|mut b| b.commit_from_file(model_path).map_err(ModelError::Onnx))
-    {
-        Ok(session) => Ok(session),
-        Err(err) if provider != EmbeddingExecutionProvider::Cpu => {
-            eprintln!(
-                "Warning: ONNX session with {} provider failed ({err}); retrying with CPU",
-                provider.as_str()
-            );
-            make_builder()?
-                .commit_from_file(model_path)
-                .map_err(ModelError::Onnx)
+    let mut last_err = None;
+
+    for (prov, opt_level) in configs {
+        let mut builder = match Session::builder()
+            .map_err(ModelError::Onnx)
+            .and_then(|b| b.with_intra_threads(intra_threads).map_err(|e| ModelError::Inference(e.to_string())))
+        {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+
+        if let Some(level) = opt_level {
+            builder = match builder.with_optimization_level(level).map_err(|e| ModelError::Inference(e.to_string())) {
+                Ok(b) => b,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
         }
-        Err(err) => Err(err),
+
+        builder = match configure_session_builder(builder, prov) {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+
+        match builder.commit_from_file(model_path).map_err(ModelError::Onnx) {
+            Ok(session) => return Ok(session),
+            Err(err) => {
+                let opt_str = opt_level.map(|l| format!("{:?}", l)).unwrap_or_else(|| "Default".to_string());
+                eprintln!(
+                    "Warning: ONNX session creation failed for provider {} with optimization level {} ({}); retrying next fallback...",
+                    prov.as_str(),
+                    opt_str,
+                    err
+                );
+                last_err = Some(err);
+            }
+        }
     }
+
+    Err(last_err.unwrap_or_else(|| {
+        ModelError::Inference("Failed to load ONNX session with all fallback configurations".into())
+    }))
 }
 
 fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelError> {
@@ -500,8 +544,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let large_model_path = dir.path().join("large_dummy_model.onnx");
 
-        // Create a dummy file that is slightly larger than 250 MB
-        let size = 251 * 1024 * 1024;
+        // Create a dummy file that is slightly larger than 350 MB
+        let size = 351 * 1024 * 1024;
         let file = std::fs::File::create(&large_model_path).unwrap();
         file.set_len(size as u64).unwrap();
 

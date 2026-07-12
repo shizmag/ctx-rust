@@ -19,9 +19,7 @@ impl RerankerModel {
             return Err(ModelError::ModelNotFound(model_path.to_path_buf()));
         }
 
-        let session = Session::builder()?
-            .commit_from_file(model_path)
-            .map_err(ModelError::Onnx)?;
+        let session = build_session(model_path)?;
 
         let (input_ids_name, attention_mask_name) = discover_text_inputs(&session)?;
 
@@ -100,6 +98,64 @@ impl RerankerModel {
 
         Ok(scores)
     }
+}
+
+fn build_session(model_path: &Path) -> Result<Session, ModelError> {
+    use ort::session::builder::GraphOptimizationLevel;
+
+    let intra_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(4)
+        .max(1);
+
+    let opt_levels = [
+        None,
+        Some(GraphOptimizationLevel::Level1),
+        Some(GraphOptimizationLevel::Disable),
+    ];
+
+    let mut last_err = None;
+
+    for opt_level in opt_levels {
+        let mut builder = match Session::builder()
+            .map_err(ModelError::Onnx)
+            .and_then(|b| b.with_intra_threads(intra_threads).map_err(|e| ModelError::Inference(e.to_string())))
+        {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+
+        if let Some(level) = opt_level {
+            builder = match builder.with_optimization_level(level).map_err(|e| ModelError::Inference(e.to_string())) {
+                Ok(b) => b,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+        }
+
+        match builder.commit_from_file(model_path).map_err(ModelError::Onnx) {
+            Ok(session) => return Ok(session),
+            Err(err) => {
+                let opt_str = opt_level.map(|l| format!("{:?}", l)).unwrap_or_else(|| "Default".to_string());
+                eprintln!(
+                    "Warning: Reranker ONNX session creation failed with optimization level {} ({}); retrying next fallback...",
+                    opt_str,
+                    err
+                );
+                last_err = Some(err);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        ModelError::Inference("Failed to load reranker ONNX session with all fallback configurations".into())
+    }))
 }
 
 fn discover_text_inputs(session: &Session) -> Result<(String, String), ModelError> {
