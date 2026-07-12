@@ -152,7 +152,7 @@ impl Config {
             parallel_threads: None,
             lsp_mode: Some("off".into()),
             incremental_indexing: Some(true),
-            embedding_execution_provider: Some("auto".into()),
+            embedding_execution_provider: Some("cpu".into()),
         }
     }
 

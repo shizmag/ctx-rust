@@ -155,6 +155,20 @@ impl EmbeddingModel {
 }
 
 fn build_session(model_path: &Path, provider: EmbeddingExecutionProvider) -> Result<Session, ModelError> {
+    let mut provider = provider;
+    if matches!(provider, EmbeddingExecutionProvider::Auto | EmbeddingExecutionProvider::CoreMl) {
+        if let Ok(metadata) = std::fs::metadata(model_path) {
+            let size = metadata.len();
+            if size > 250 * 1024 * 1024 {
+                eprintln!(
+                    "Warning: Model file size is {} MB (exceeds 250 MB limit for CoreML). Falling back to CPU provider to prevent compilation OOM.",
+                    size / (1024 * 1024)
+                );
+                provider = EmbeddingExecutionProvider::Cpu;
+            }
+        }
+    }
+
     let intra_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -479,5 +493,22 @@ mod tests {
             assert_eq!(vector.len(), EMBEDDING_DIM);
             assert_unit_length(vector);
         }
+    }
+
+    #[test]
+    fn build_session_falls_back_to_cpu_if_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let large_model_path = dir.path().join("large_dummy_model.onnx");
+
+        // Create a dummy file that is slightly larger than 250 MB
+        let size = 251 * 1024 * 1024;
+        let file = std::fs::File::create(&large_model_path).unwrap();
+        file.set_len(size as u64).unwrap();
+
+        // If we call build_session with CoreMl provider, it should fallback to Cpu.
+        // Since it's a dummy file, it will fail with an ONNX format error.
+        let res = build_session(&large_model_path, EmbeddingExecutionProvider::CoreMl);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), ModelError::Onnx(_)));
     }
 }
