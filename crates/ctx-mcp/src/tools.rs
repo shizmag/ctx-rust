@@ -403,6 +403,19 @@ fn handle_retrieve_context(
         .or(config.default_format.as_deref())
         .unwrap_or("yaml");
 
+    let include_unresolved = get_bool_arg(args, "include_unresolved", false);
+    let explain_ranking = get_bool_arg(args, "explain_ranking", false);
+    let mut edge_kinds = Vec::new();
+    if let Some(arr) = args.get("edge_kinds").or_else(|| args.get("edge_kind")).and_then(|v| v.as_array()) {
+        for val in arr {
+            if let Some(s) = val.as_str() {
+                if let Some(kind) = ctx_codegraph::model::EdgeKind::from_str(s) {
+                    edge_kinds.push(kind);
+                }
+            }
+        }
+    }
+
     if !matches!(format, "text" | "json" | "yaml") {
         return Ok(ToolCallOutcome::err(
             "format must be 'text', 'json' or 'yaml'",
@@ -426,6 +439,9 @@ fn handle_retrieve_context(
     hybrid_options.graph_options.with_snippets = !no_snippets;
     hybrid_options.graph_options.context_lines = context_lines;
     hybrid_options.graph_options.include_tests = include_tests;
+    hybrid_options.graph_options.edge_kinds = edge_kinds;
+    hybrid_options.graph_options.include_unresolved = include_unresolved;
+    hybrid_options.graph_options.explain_ranking = explain_ranking;
 
     let pack = retrieve_context_for_service(service, query, &budget, &hybrid_options, &config)
         .map_err(|e| format!("Failed to retrieve context: {}", e))?;
@@ -654,7 +670,20 @@ fn retrieve_context_schema() -> serde_json::Value {
                 "enum": ["text", "json", "yaml"],
                 "description": "Output format. Default: yaml."
             },
-            "no_snippets": { "type": "boolean", "description": "Omit code snippets. Default: false." }
+            "no_snippets": { "type": "boolean", "description": "Omit code snippets. Default: false." },
+            "edge_kinds": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Specific edge kinds to traverse (e.g. syntax, heuristic, unresolved, lsp-exact)."
+            },
+            "include_unresolved": {
+                "type": "boolean",
+                "description": "Include unresolved edges. Default: false."
+            },
+            "explain_ranking": {
+                "type": "boolean",
+                "description": "Provide a detailed textual explanation of ranking scores. Default: false."
+            }
         },
         "required": ["query"]
     })

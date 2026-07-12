@@ -1606,9 +1606,9 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         } => {
             // Call get_ (unified to smart check via get_index_state + cond rebuild) so
             // --with-lsp flag is respected for this query, messages emitted only on actual work.
-            let _conn =
+            let conn =
                 get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
-            let service = ctx_codegraph::GraphContextService::load_or_build(&graph_args.path)?;
+            let service = ctx_codegraph::GraphContextService::new(&graph_args.path, conn);
 
             match service.resolve_symbol(&symbol)? {
                 ctx_codegraph::SymbolResolution::Unique(obj) => {
@@ -1672,76 +1672,15 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
         } => {
             let conn =
                 get_connection_or_rebuild(&graph_args.path, cli_lsp, graph_args.verbose)?;
+            let service = ctx_codegraph::GraphContextService::new(&graph_args.path, conn);
 
-            let ctx_mode = match mode.as_str() {
-                "callers" => ctx_codegraph::GraphContextMode::Callers,
-                "callees" => ctx_codegraph::GraphContextMode::Callees,
-                "dependencies" => ctx_codegraph::GraphContextMode::Dependencies,
-                "dependents" => ctx_codegraph::GraphContextMode::Dependents,
-                "forward" => ctx_codegraph::GraphContextMode::Forward,
-                "reverse" => ctx_codegraph::GraphContextMode::Reverse,
-                "neighborhood" => ctx_codegraph::GraphContextMode::Neighborhood,
-                "impact" => ctx_codegraph::GraphContextMode::Impact,
-                _ => ctx_codegraph::GraphContextMode::Neighborhood,
-            };
-
-            let depth_limit = if depth == "auto" {
-                ctx_codegraph::DepthLimit::Auto
-            } else if let Ok(d) = depth.parse::<usize>() {
-                ctx_codegraph::DepthLimit::Fixed(d)
-            } else {
+            if depth != "auto" && depth.parse::<usize>().is_err() {
                 return Err(format!(
                     "Invalid depth '{}'. Depth must be a non-negative integer or 'auto'.",
                     depth
                 )
                 .into());
-            };
-
-            let ranking_mode = match ranking.as_str() {
-                "graph" => ctx_codegraph::RankingMode::Graph,
-                "lexical" => ctx_codegraph::RankingMode::Lexical,
-                "hybrid" => ctx_codegraph::RankingMode::Hybrid,
-                _ => ctx_codegraph::RankingMode::Hybrid,
-            };
-
-            let packing_mode = match packing.as_str() {
-                "frontloaded" => ctx_codegraph::ContextPackingMode::Frontloaded,
-                "sandwich" => ctx_codegraph::ContextPackingMode::Sandwich,
-                "balanced" => ctx_codegraph::ContextPackingMode::Balanced,
-                _ => ctx_codegraph::ContextPackingMode::Sandwich,
-            };
-
-            let use_snippets = !no_snippets;
-
-            let budget = ctx_codegraph::ContextBudget {
-                token_budget,
-                model_context_window: Some(model_context_window),
-                reserve_output_tokens: 1000,
-                reserve_instruction_tokens: 1000,
-            };
-
-            let parsed_edge_kinds: Vec<ctx_codegraph::EdgeKind> = edge_kind
-                .iter()
-                .filter_map(|k| ctx_codegraph::EdgeKind::from_str(k))
-                .collect();
-
-            let result = ctx_codegraph::retrieve_graph_context(
-                &conn,
-                &query,
-                ctx_mode,
-                depth_limit,
-                max_nodes,
-                max_files,
-                ranking_mode,
-                packing_mode,
-                use_snippets,
-                context_lines,
-                &budget,
-                include_tests,
-                &parsed_edge_kinds,
-                include_unresolved,
-                explain_ranking,
-            )?;
+            }
 
             if format != "json" && format != "text" {
                 return Err(format!(
@@ -1751,13 +1690,53 @@ fn handle_graph_command(graph_args: GraphCommand) -> Result<(), Box<dyn std::err
                 .into());
             }
 
-            if format == "json" {
-                let json_str = serde_json::to_string_pretty(&result)?;
-                println!("{}", json_str);
+            let args_json = serde_json::json!({
+                "query": query,
+                "strategy": ranking,
+                "graph_mode": mode,
+                "depth": depth,
+                "max_nodes": max_nodes,
+                "max_files": max_files,
+                "token_budget": token_budget,
+                "model_context_window": model_context_window,
+                "packing": packing,
+                "include_tests": include_tests,
+                "no_snippets": no_snippets,
+                "context_lines": context_lines,
+                "format": format,
+                "include_unresolved": include_unresolved,
+                "explain_ranking": explain_ranking,
+                "edge_kinds": edge_kind,
+            });
+
+            let outcome = ctx_mcp::handle_tool_call(
+                Some(&service),
+                &graph_args.path,
+                "retrieve_context",
+                &args_json,
+            )
+            .map_err(|e| format!("Context retrieval failed: {}", e))?;
+
+            let is_error = outcome
+                .result
+                .get("isError")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let text = outcome
+                .result
+                .get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|f| f.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            if is_error {
+                eprintln!("{}", text);
+                std::process::exit(1);
             } else {
-                for s in &result.sections {
-                    print!("{}", s.text);
-                }
+                print!("{}", text);
             }
         }
     }
